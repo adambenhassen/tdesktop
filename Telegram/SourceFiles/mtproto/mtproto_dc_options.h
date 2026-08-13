@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 
 #include <QtCore/QReadWriteLock>
+#include <QtCore/QString>
 #include <string>
 #include <vector>
 #include <map>
@@ -31,6 +32,10 @@ enum class Environment : uchar {
 	Production,
 	Test,
 };
+
+[[nodiscard]] QString CustomDcAddress();
+[[nodiscard]] QString CustomDcRSAKeyFile();
+[[nodiscard]] int CustomDcId();
 
 class DcOptions {
 public:

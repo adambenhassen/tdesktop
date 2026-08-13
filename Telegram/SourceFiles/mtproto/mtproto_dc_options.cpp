@@ -77,7 +77,51 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
+struct CustomDc {
+	int id = 0;
+	std::string host;
+	int port = 0;
+};
+
+[[nodiscard]] std::optional<CustomDc> ParseCustomDc() {
+	const auto address = CustomDcAddress();
+	if (address.isEmpty()) {
+		return std::nullopt;
+	}
+	const auto colon = address.lastIndexOf(':');
+	if (colon <= 0 || colon + 1 >= address.size()) {
+		LOG(("MTP Error: TDESKTOP_CUSTOM_DC_ADDRESS is not host:port: %1"
+			).arg(address));
+		return std::nullopt;
+	}
+	auto ok = false;
+	const auto port = address.mid(colon + 1).toInt(&ok);
+	if (!ok || port < 1 || port > 65535) {
+		LOG(("MTP Error: TDESKTOP_CUSTOM_DC_ADDRESS has a bad port: %1"
+			).arg(address));
+		return std::nullopt;
+	}
+	return CustomDc{
+		CustomDcId(),
+		address.left(colon).toStdString(),
+		port,
+	};
+}
+
 } // namespace
+
+QString CustomDcAddress() {
+	return qEnvironmentVariable("TDESKTOP_CUSTOM_DC_ADDRESS");
+}
+
+QString CustomDcRSAKeyFile() {
+	return qEnvironmentVariable("TDESKTOP_CUSTOM_DC_RSA_KEY_FILE");
+}
+
+int CustomDcId() {
+	const auto id = qEnvironmentVariableIntValue("TDESKTOP_CUSTOM_DC_ID");
+	return id ? id : 2;
+}
 
 class DcOptions::WriteLocker {
 public:
@@ -140,6 +184,30 @@ bool DcOptions::ValidateSecret(bytes::const_span secret) {
 }
 
 void DcOptions::readBuiltInPublicKeys() {
+	const auto customPath = CustomDcRSAKeyFile();
+	if (!customPath.isEmpty()) {
+		auto file = QFile(customPath);
+		if (!file.open(QIODevice::ReadOnly)) {
+			LOG(("MTP Error: could not open TDESKTOP_CUSTOM_DC_RSA_KEY_FILE: "
+				"%1").arg(customPath));
+			return;
+		}
+		const auto content = file.readAll();
+		auto parsed = RSAPublicKey(
+			bytes::make_span(content.constData(), content.size()));
+		if (!parsed.valid()) {
+			LOG(("MTP Error: could not read this public RSA key: %1"
+				).arg(customPath));
+			return;
+		}
+		const auto fingerprint = parsed.fingerprint();
+		_publicKeys.emplace(fingerprint, std::move(parsed));
+		LOG(("MTP Info: using custom public RSA key %1, fingerprint %2"
+			).arg(customPath
+			).arg(fingerprint));
+		return;
+	}
+
 	const auto builtin = (_environment == Environment::Test)
 		? gsl::make_span(kTestPublicRSAKeys)
 		: gsl::make_span(kPublicRSAKeys);
@@ -168,6 +236,20 @@ void DcOptions::constructFromBuiltIn() {
 	_data.clear();
 
 	readBuiltInPublicKeys();
+
+	if (const auto custom = ParseCustomDc()) {
+		applyOneGuarded(
+			custom->id,
+			Flag::f_static | 0,
+			custom->host,
+			custom->port,
+			{});
+		LOG(("MTP Info: using custom DC %1 connect option: %2:%3"
+			).arg(custom->id
+			).arg(QString::fromStdString(custom->host)
+			).arg(custom->port));
+		return;
+	}
 
 	const auto list = isTestMode()
 		? gsl::make_span(kBuiltInDcsTest)

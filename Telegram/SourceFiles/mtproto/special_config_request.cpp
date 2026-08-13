@@ -234,6 +234,16 @@ SpecialConfigRequest::SpecialConfigRequest(
 	}
 	ranges::reverse(_attempts); // We go from last to first.
 
+	// A custom DC is the only endpoint there is, so a failed connect to it
+	// must not send the client resolving Telegram's production addresses
+	// out of DNS and Firebase and then talking to whatever comes back.
+	if (!CustomDcAddress().isEmpty()) {
+		_attempts.clear();
+		DEBUG_LOG(("MTP Info: skipping special config request, "
+			"TDESKTOP_CUSTOM_DC_ADDRESS is set."));
+		return;
+	}
+
 	sendNextRequest();
 }
 
