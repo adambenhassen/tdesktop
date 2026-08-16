@@ -77,10 +77,28 @@ std::unique_ptr<MTP::Config> Account::prepareToStart(
 
 void Account::start(std::unique_ptr<MTP::Config> config) {
 	_appConfig = std::make_unique<AppConfig>(this);
-	startMtp(config
-		? std::move(config)
-		: std::make_unique<MTP::Config>(
-			Core::App().fallbackProductionConfig()));
+	if (!config) {
+		// A stored custom server means this account is pinned to a
+		// user-entered endpoint and RSA key. The marker lives in the
+		// same blob as the key, so a missing or unreadable config here
+		// means the pin cannot be trusted. Falling through to the
+		// production fallback config would show a normal login screen
+		// talking to Telegram's servers, so fail closed instead.
+		if (_local->hasStoredCustomServer()) {
+			LOG(("MTP Error: stored custom server config could not be "
+				"loaded, refusing to fall back to production."));
+			Ui::show(Ui::MakeInformBox(
+				u"Could not load the saved server settings for this "
+				"account.\n\n"
+				"The account is pinned to a custom server and will not "
+				"connect to Telegram's servers instead.\n\n"
+				"Check 'log.txt' for details."_q));
+			return;
+		}
+		config = std::make_unique<MTP::Config>(
+			Core::App().fallbackProductionConfig());
+	}
+	startMtp(std::move(config));
 	_appConfig->start();
 	watchProxyChanges();
 	watchSessionChanges();

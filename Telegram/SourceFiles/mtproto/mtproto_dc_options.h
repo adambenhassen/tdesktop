@@ -14,11 +14,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
 
 namespace MTP {
 namespace details {
 class RSAPublicKey;
 } // namespace details
+
+// A server endpoint and its RSA key, entered by the user, that this
+// account must use. While pinned, the built-in DC table and keys are
+// not used and a failed config load must not fall back to production.
+struct CustomServer {
+	int dcId = 0;
+	std::string ip;
+	int port = 0;
+	std::shared_ptr<details::RSAPublicKey> key;
+
+	[[nodiscard]] bool empty() const {
+		return !key;
+	}
+};
 
 enum class DcType {
 	Regular,
@@ -111,11 +126,29 @@ public:
 		DcId dcId,
 		const QVector<MTPlong> &fingerprints) const;
 
+	// Pin the user-entered endpoint and RSA key: they replace the
+	// built-in table and keys for this account.
+	void setCustomServer(const CustomServer &server);
+	[[nodiscard]] const CustomServer &customServer() const {
+		return _customServer;
+	}
+	[[nodiscard]] bool hasCustomServer() const {
+		return !_customServer.empty();
+	}
+	// True when the custom server is pinned and its key is the only
+	// RSA key the account may use for the pinned DC id.
+	[[nodiscard]] bool isCustomServerPinned() const;
+	[[nodiscard]] bool isCustomServerPinned(DcId dcId) const;
+
 	// Debug feature for now.
 	bool loadFromFile(const QString &path);
 	bool writeToFile(const QString &path) const;
 
 private:
+	// True when the built-in table is replaced by the pinned custom
+	// server, so the built-in keys are not loaded into _publicKeys.
+	[[nodiscard]] bool customServerReplacesBuiltIn() const;
+
 	bool applyOneGuarded(
 		DcId dcId,
 		Flags flags,
@@ -154,6 +187,7 @@ private:
 	base::flat_map<
 		DcId,
 		base::flat_map<uint64, details::RSAPublicKey>> _cdnPublicKeys;
+	CustomServer _customServer;
 	mutable QReadWriteLock _useThroughLockers;
 
 	rpl::event_stream<DcId> _changed;

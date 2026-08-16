@@ -66,6 +66,17 @@ public:
 	[[nodiscard]] const DcOptions &dcOptions() const {
 		return _dcOptions;
 	}
+
+	// Pin the user-entered server endpoint and RSA key for this
+	// account. While pinned, the account must never fall back to the
+	// built-in Telegram production DC table and keys.
+	void setCustomServer(const DcOptions::CustomServer &server);
+	[[nodiscard]] const DcOptions::CustomServer &customServer() const {
+		return _dcOptions.customServer();
+	}
+	[[nodiscard]] bool hasCustomServer() const {
+		return _dcOptions.hasCustomServer();
+	}
 	[[nodiscard]] MTP::Environment environment() const {
 		return _dcOptions.environment();
 	}

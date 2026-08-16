@@ -33,6 +33,11 @@ public:
 		bool isTestMode,
 		const QString &domainString);
 
+	// When true, no fallback request is sent at all: the account is
+	// pinned to a custom server and must not resolve Telegram's
+	// production DCs over DNS or Firebase.
+	[[nodiscard]] bool skipRequests() const;
+
 private:
 	enum class Type {
 		Mozilla,
@@ -58,6 +63,7 @@ private:
 		const QString &domainString,
 		const QString &phone);
 
+	void startRequests();
 	void sendNextRequest();
 	void performRequest(const Attempt &attempt);
 	void requestFinished(Type type, not_null<QNetworkReply*> reply);

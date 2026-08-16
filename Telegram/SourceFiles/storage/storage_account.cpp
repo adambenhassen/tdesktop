@@ -1188,13 +1188,19 @@ void Account::readMtpData() {
 void Account::writeMtpConfig() {
 	Expects(_localKey != nullptr);
 
-	const auto serialized = _owner->mtp().config().serialize();
+	const auto &config = _owner->mtp().config();
+	const auto serialized = config.serialize();
 	const auto size = Serialize::bytearraySize(serialized);
 
 	FileWriteDescriptor file(u"config"_q, _basePath);
 	EncryptedDescriptor data(size);
 	data.stream << serialized;
 	file.writeEncrypted(data, _localKey);
+
+	// The pin marker is written alongside the key so that a failed
+	// config load on a pinned account fails closed instead of
+	// silently falling back to Telegram production.
+	_hasStoredCustomServer = config.hasCustomServer();
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
@@ -1211,7 +1217,10 @@ std::unique_ptr<MTP::Config> Account::readMtpConfig() {
 	if (!CheckStreamStatus(file.stream)) {
 		return nullptr;
 	}
-	return MTP::Config::FromSerialized(serialized);
+	auto result = MTP::Config::FromSerialized(serialized);
+	_hasStoredCustomServer = (result != nullptr)
+		&& result->hasCustomServer();
+	return result;
 }
 
 template <typename Callback>

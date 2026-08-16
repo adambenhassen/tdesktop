@@ -83,6 +83,12 @@ public:
 		return _localKey;
 	}
 
+	// True when this account has a stored custom server pin, so a
+	// failed config load must not fall back to production.
+	[[nodiscard]] bool hasStoredCustomServer() const {
+		return _hasStoredCustomServer;
+	}
+
 	void writeSessionSettings();
 	void writeMtpData();
 	void writeMtpConfig();
@@ -317,6 +323,7 @@ private:
 	const QString _databasePath;
 
 	MTP::AuthKeyPtr _localKey;
+	bool _hasStoredCustomServer = false;
 
 	base::flat_map<PeerId, FileKey> _draftsMap;
 	base::flat_map<PeerId, FileKey> _draftCursorsMap;
