@@ -127,13 +127,17 @@ public:
 		const QVector<MTPlong> &fingerprints) const;
 
 	// Pin the user-entered endpoint and RSA key: they replace the
-	// built-in table and keys for this account.
-	void setCustomServer(const CustomServer &server);
-	[[nodiscard]] const CustomServer &customServer() const {
+	// built-in table and keys for this account. Returns false when the
+	// server carries no key, so a caller with an endpoint but no key
+	// can report the failure instead of silently pinning nothing.
+	[[nodiscard]] bool setCustomServer(const CustomServer &server);
+	[[nodiscard]] CustomServer customServer() const {
+		ReadLocker lock(this);
 		return _customServer;
 	}
 	[[nodiscard]] bool hasCustomServer() const {
-		return !_customServer.empty();
+		ReadLocker lock(this);
+		return hasCustomServerUnlocked();
 	}
 	// True when the custom server is pinned and its key is the only
 	// RSA key the account may use for the pinned DC id.
@@ -145,6 +149,11 @@ public:
 	bool writeToFile(const QString &path) const;
 
 private:
+	// Callers must hold the write lock.
+	void applyCustomServerUnlocked(const CustomServer &server);
+	[[nodiscard]] bool hasCustomServerUnlocked() const;
+	[[nodiscard]] bool isCustomServerPinnedUnlocked(DcId dcId) const;
+
 	// True when the built-in table is replaced by the pinned custom
 	// server, so the built-in keys are not loaded into _publicKeys.
 	[[nodiscard]] bool customServerReplacesBuiltIn() const;

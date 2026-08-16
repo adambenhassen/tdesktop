@@ -51,9 +51,9 @@ QString ApiDomain(const QString &service) {
 
 // The account is pinned to a custom server when its DC options hold a
 // user-entered RSA key. Such an account must never be sent resolving
-// Telegram's production DCs over DNS or Firebase. The stored marker is
-// consulted because it is available even when the account has not
-// finished starting yet.
+// Telegram's production DCs over DNS or Firebase. The marker is
+// persisted in a tdata pref and read before readMtpConfig(), so it is
+// available even when the account has not finished starting yet.
 [[nodiscard]] bool IsCustomServerPinned() {
 	const auto &app = Core::App();
 	const auto &domain = app.domain();

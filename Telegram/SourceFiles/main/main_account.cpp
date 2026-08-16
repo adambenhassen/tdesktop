@@ -23,6 +23,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "api/api_updates.h"
 #include "ui/ui_utility.h"
+#include "boxes/abstract_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "main/main_domain.h"

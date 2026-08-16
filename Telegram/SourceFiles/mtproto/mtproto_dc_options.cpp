@@ -140,11 +140,19 @@ bool DcOptions::ValidateSecret(bytes::const_span secret) {
 		|| secret.empty();
 }
 
+bool DcOptions::hasCustomServerUnlocked() const {
+	return !_customServer.empty();
+}
+
+bool DcOptions::isCustomServerPinnedUnlocked(DcId dcId) const {
+	return hasCustomServerUnlocked() && (dcId == _customServer.dcId);
+}
+
 bool DcOptions::customServerReplacesBuiltIn() const {
 	// The pinned custom server is the only endpoint there is, so the
 	// built-in table and keys must not be present at all: a later
 	// fallback to them would be a silent switch to Telegram production.
-	return hasCustomServer();
+	return hasCustomServerUnlocked();
 }
 
 void DcOptions::readBuiltInPublicKeys() {
@@ -184,19 +192,10 @@ void DcOptions::constructFromBuiltIn() {
 	WriteLocker lock(this);
 	_data.clear();
 
+	// The pinned custom server replaces the built-in table and keys;
+	// setCustomServer() is the only path that installs it, and it is
+	// always called after construction, so _customServer is empty here.
 	readBuiltInPublicKeys();
-
-	if (const auto &server = _customServer;
-		!server.empty() && !server.ip.empty()) {
-		const auto flags = Flag::f_static | 0;
-		applyOneGuarded(server.dcId, flags, server.ip, server.port, {});
-		DEBUG_LOG(("MTP Info: adding pinned custom DC %1 connect option: "
-			"%2:%3"
-		).arg(server.dcId
-		).arg(QString::fromStdString(server.ip)
-		).arg(server.port));
-		return;
-	}
 
 	const auto list = isTestMode()
 		? gsl::make_span(kBuiltInDcsTest)
@@ -313,7 +312,7 @@ void DcOptions::addFromOther(DcOptions &&options) {
 			for (auto &item : options._cdnPublicKeys) {
 				// A CDN key for the pinned custom DC id would shadow the
 				// user-verified key in getDcRSAKey().
-				if (isCustomServerPinned(item.first)) {
+				if (isCustomServerPinnedUnlocked(item.first)) {
 					continue;
 				}
 				for (auto &entry : item.second) {
@@ -472,20 +471,32 @@ QByteArray DcOptions::serialize() const {
 		}
 	}
 
-	// Pinned custom server key (v3). Only the key bytes are persisted,
-	// the fingerprint is recomputed on load.
-	bool hasCustomKey = false;
-	bytes::vector customKeyN, customKeyE;
+	// Pinned custom server (v3). The endpoint identity (dcId, ip,
+	// port) and the key bytes are persisted; the fingerprint is
+	// recomputed on load. Without dcId the CDN-shadowing control
+	// cannot match and the pin is silently ineffective.
+	bool hasCustomServer = false;
+	qint32 customDcId = 0, customPort = 0;
+	qint32 customIpSize = 0;
+	bytes::vector customKeyN, customKeyE, customIp;
 	if (_customServer.key) {
-		hasCustomKey = true;
+		hasCustomServer = true;
+		customDcId = _customServer.dcId;
+		customPort = _customServer.port;
+		customIp.assign(_customServer.ip.begin(), _customServer.ip.end());
+		customIpSize = qint32(customIp.size());
 		customKeyN = _customServer.key->getN();
 		customKeyE = _customServer.key->getE();
 	}
-	size += sizeof(qint32) // hasCustomKey
-		+ (hasCustomKey
-		? sizeof(qint32)
+	size += sizeof(qint32) // hasCustomServer
+		+ (hasCustomServer
+		? sizeof(qint32) // dcId
+			+ sizeof(qint32) // port
+			+ sizeof(qint32) // ip size
+			+ customIp.size()
 			+ sizeof(qint32)
 			+ Serialize::bytesSize(customKeyN)
+			+ sizeof(qint32)
 			+ Serialize::bytesSize(customKeyE)
 		: 0);
 
@@ -523,10 +534,17 @@ QByteArray DcOptions::serialize() const {
 				<< Serialize::bytes(key.e);
 		}
 
-		// Pinned custom server key (v3).
+		// Pinned custom server (v3).
 		if (kVersion > 2) {
-			stream << qint32(hasCustomKey ? 1 : 0);
-			if (hasCustomKey) {
+			stream << qint32(hasCustomServer ? 1 : 0);
+			if (hasCustomServer) {
+				stream
+					<< customDcId
+					<< customPort
+					<< customIpSize;
+				stream.writeRawData(
+					reinterpret_cast<const char*>(customIp.data()),
+					customIp.size());
 				stream
 					<< Serialize::bytes(customKeyN)
 					<< Serialize::bytes(customKeyE);
@@ -622,7 +640,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 			if (key.valid()) {
 				// A CDN key for the pinned custom DC id would shadow the
 				// user-verified key in getDcRSAKey().
-				if (!isCustomServerPinned(dcId)) {
+				if (!isCustomServerPinnedUnlocked(dcId)) {
 					_cdnPublicKeys[dcId].emplace(
 						key.fingerprint(),
 						std::move(key));
@@ -634,20 +652,40 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		}
 	}
 
-	// Read pinned custom server key (v3). The key bytes are the only
-	// thing persisted, the fingerprint is recomputed from them.
-	if (!stream.atEnd() && version > 2) {
-		auto hasCustomKey = qint32(0);
-		stream >> hasCustomKey;
+	// Read pinned custom server (v3). The endpoint identity and the
+	// key bytes are persisted; the fingerprint is recomputed from the
+	// key bytes on load. A truncated v3 blob must fail the whole load,
+	// not silently revert to the built-in keys.
+	if (version > 2) {
+		auto hasCustomServer = qint32(0);
+		stream >> hasCustomServer;
 		if (stream.status() != QDataStream::Ok) {
-			LOG(("MTP Error: Bad data for custom server key in DcOptions::constructFromSerialized()"));
+			LOG(("MTP Error: Bad data for custom server in DcOptions::constructFromSerialized()"));
 			return false;
 		}
-		if (hasCustomKey) {
+		if (hasCustomServer) {
+			auto dcId = qint32(0), port = qint32(0), ipSize = qint32(0);
+			stream >> dcId >> port >> ipSize;
+			if (stream.status() != QDataStream::Ok) {
+				LOG(("MTP Error: Bad data for custom server in DcOptions::constructFromSerialized()"));
+				return false;
+			}
+			// Same bounds check as the endpoint table above.
+			constexpr auto kMaxCustomIpSize = 45;
+			if (ipSize < 0 || ipSize > kMaxCustomIpSize) {
+				LOG(("MTP Error: Bad data for custom server in DcOptions::constructFromSerialized()"));
+				return false;
+			}
+			auto ip = std::string(ipSize, ' ');
+			stream.readRawData(ip.data(), ipSize);
+			if (stream.status() != QDataStream::Ok) {
+				LOG(("MTP Error: Bad data for custom server in DcOptions::constructFromSerialized()"));
+				return false;
+			}
 			bytes::vector n, e;
 			stream >> Serialize::bytes(n) >> Serialize::bytes(e);
 			if (stream.status() != QDataStream::Ok) {
-				LOG(("MTP Error: Bad data for custom server key inside DcOptions::constructFromSerialized()"));
+				LOG(("MTP Error: Bad data for custom server key in DcOptions::constructFromSerialized()"));
 				return false;
 			}
 			auto key = RSAPublicKey(n, e);
@@ -655,8 +693,16 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 				LOG(("MTP Error: Could not read valid custom server key."));
 				return false;
 			}
-			_customServer.key = std::make_shared<RSAPublicKey>(
-				std::move(key));
+			// Restore the full pinned state, not just the key: the
+			// endpoint identity is what the CDN-shadowing control
+			// matches against, and the key must replace the built-in
+			// table that the DcOptions(Environment) ctor already filled.
+			applyCustomServerUnlocked(CustomServer{
+				.dcId = dcId,
+				.ip = std::move(ip),
+				.port = port,
+				.key = std::make_shared<RSAPublicKey>(std::move(key))
+			});
 		}
 	}
 	return true;
@@ -712,7 +758,7 @@ void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 			// its RSA key is the only one the account may use. A CDN
 			// config answer from any reached server must not be able to
 			// replace the user-verified key for the pinned DC id.
-			if (isCustomServerPinned(data.vdc_id().v)) {
+			if (isCustomServerPinnedUnlocked(data.vdc_id().v)) {
 				LOG(("MTP Error: refusing CDN public key for pinned "
 					"custom DC %1.").arg(data.vdc_id().v));
 				return;
@@ -734,11 +780,9 @@ void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 	_cdnConfigChanged.fire({});
 }
 
-void DcOptions::setCustomServer(const CustomServer &server) {
-	WriteLocker lock(this);
-	if (server.empty()) {
-		return;
-	}
+void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
+	Expects(server.key != nullptr);
+
 	_customServer = server;
 	// The pinned key replaces the built-in key table for this account,
 	// it is not merged into it.
@@ -759,14 +803,26 @@ void DcOptions::setCustomServer(const CustomServer &server) {
 	}
 }
 
+bool DcOptions::setCustomServer(const CustomServer &server) {
+	if (server.empty()) {
+		// An endpoint without a key pins nothing: the account would
+		// have no verifiable server identity, so report the failure.
+		LOG(("MTP Error: setCustomServer called without an RSA key."));
+		return false;
+	}
+	WriteLocker lock(this);
+	applyCustomServerUnlocked(server);
+	return true;
+}
+
 bool DcOptions::isCustomServerPinned() const {
 	ReadLocker lock(this);
-	return hasCustomServer();
+	return hasCustomServerUnlocked();
 }
 
 bool DcOptions::isCustomServerPinned(DcId dcId) const {
 	ReadLocker lock(this);
-	return hasCustomServer() && (dcId == _customServer.dcId);
+	return isCustomServerPinnedUnlocked(dcId);
 }
 
 bool DcOptions::hasCDNKeysForDc(DcId dcId) const {

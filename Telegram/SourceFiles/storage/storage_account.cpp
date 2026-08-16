@@ -114,6 +114,8 @@ auto EmptyMessageDraftSources()
 	return result;
 }
 
+constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
+
 [[nodiscard]] FileKey ComputeDataNameKey(const QString &dataName) {
 	// We dropped old test authorizations when migrated to multi auth.
 	//const auto testAddition = (cTestMode() ? u":/test/"_q : QString());
@@ -224,6 +226,7 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	_localKey = std::move(localKey);
 	readMapWith(_localKey);
 	clearLegacyFiles();
+	readStoredCustomServerPin();
 	return readMtpConfig();
 }
 
@@ -1197,10 +1200,22 @@ void Account::writeMtpConfig() {
 	data.stream << serialized;
 	file.writeEncrypted(data, _localKey);
 
-	// The pin marker is written alongside the key so that a failed
-	// config load on a pinned account fails closed instead of
-	// silently falling back to Telegram production.
-	_hasStoredCustomServer = config.hasCustomServer();
+	// The pin marker is persisted in its own tdata key so that a
+	// failed config load on a pinned account fails closed instead of
+	// silently falling back to Telegram production. It is written
+	// before the config blob so that a crash between the two leaves
+	// the marker set (fail closed) rather than cleared (fail open).
+	const auto pinned = config.hasCustomServer();
+	if (pinned != _hasStoredCustomServer) {
+		writePref<bool>(kCustomServerPinnedPref, pinned);
+	}
+	_hasStoredCustomServer = pinned;
+}
+
+void Account::readStoredCustomServerPin() {
+	// Read before readMtpConfig() so that a corrupted or truncated
+	// config blob on a pinned account still fails closed.
+	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
@@ -1217,10 +1232,7 @@ std::unique_ptr<MTP::Config> Account::readMtpConfig() {
 	if (!CheckStreamStatus(file.stream)) {
 		return nullptr;
 	}
-	auto result = MTP::Config::FromSerialized(serialized);
-	_hasStoredCustomServer = (result != nullptr)
-		&& result->hasCustomServer();
-	return result;
+	return MTP::Config::FromSerialized(serialized);
 }
 
 template <typename Callback>
