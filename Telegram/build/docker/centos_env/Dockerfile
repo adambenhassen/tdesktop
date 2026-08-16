@@ -433,6 +433,11 @@ FROM builder AS rnnoise
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
 git clone -b v0.2 --depth=1 https://github.com/xiph/rnnoise.git
 cd rnnoise
+# rnnoise v0.2 only ever compiles its AVX/SSE2 path, so the NEON and generic
+# paths of vec.h still include opus' os_support.h, which rnnoise does not
+# vendor, and call OPUS_CLEAR, which it does not define. Point them at the
+# equivalent rnnoise header and macro.
+sed -i 's|#include "os_support.h"|#include "common.h"\n#ifndef OPUS_CLEAR\n#define OPUS_CLEAR RNN_CLEAR\n#endif|' src/vec.h src/vec_neon.h
 ./autogen.sh
 ./configure --enable-static --disable-shared
 make -j$(nproc)
