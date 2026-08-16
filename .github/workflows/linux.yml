@@ -40,6 +40,13 @@ on:
       - 'Telegram/configure.bat'
       - 'Telegram/Telegram.plist'
 
+concurrency:
+  # One live build per branch (and one per pull request): a second push
+  # supersedes the run from the first. The default branch is exempt so a
+  # cache-refreshing build always finishes.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'dev' }}
+
 jobs:
 
   linux:
