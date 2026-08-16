@@ -39,6 +39,11 @@ on:
       - 'Telegram/Telegram/**'
       - 'Telegram/configure.bat'
       - 'Telegram/Telegram.plist'
+  # Keeps the default branch holding a current ccache for feature branches to
+  # restore from, instead of leaving it to whenever someone last pushed to dev.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
 
 concurrency:
   # One live build per branch (and one per pull request): a second push
