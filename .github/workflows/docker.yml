@@ -6,6 +6,15 @@ on:
       - '.github/workflows/docker.yml'
       - 'Telegram/build/docker/centos_env/**'
 
+concurrency:
+  # This group serialises, it does not cancel. The job below runs only on the
+  # default branch and its last step pushes centos_env:latest unconditionally,
+  # so two rapid pushes would otherwise race for that tag and the older build
+  # could win it. cancel-in-progress stays false on the default branch for
+  # exactly that reason: the second run pends until the first has published.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
 jobs:
   docker:
     name: Ubuntu
