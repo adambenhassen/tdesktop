@@ -15,7 +15,9 @@ jobs:
 
   macos:
     name: MacOS
-    runs-on: ${{ (github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/nightly') && 'depot-macos-latest' || 'macos-latest' }}
+    # Tags deliberately fall through to the hosted runner: this fork cannot
+    # schedule a depot label, and a tag build that queues forever is not a build.
+    runs-on: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/nightly') && 'depot-macos-latest' || 'macos-latest' }}
 
     strategy:
       matrix:

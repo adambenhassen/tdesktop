@@ -39,8 +39,10 @@ on:
       - 'Telegram/Telegram/**'
       - 'Telegram/configure.bat'
       - 'Telegram/Telegram.plist'
-  # Keeps the default branch holding a current ccache for feature branches to
-  # restore from, instead of leaving it to whenever someone last pushed to dev.
+  # Keeps the default branch holding a live ccache for feature branches to restore
+  # from, instead of leaving it to whenever someone last pushed to it. The restore
+  # refreshes the entry's 7-day expiry; the save below only fires when the build
+  # actually missed, so a quiet day costs nothing.
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -50,7 +52,7 @@ concurrency:
   # supersedes the run from the first. The default branch is exempt so a
   # cache-refreshing build always finishes.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref_name != 'dev' }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
 
 jobs:
 
