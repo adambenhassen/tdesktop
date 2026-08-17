@@ -43,3 +43,10 @@ PRIVATE
     desktop-app::external_zlib
 )
 
+# Put it beside Telegram in out/<config>/ instead of the target's own
+# binary dir, so one documented path finds it. The generator appends the
+# config, as it does for the application.
+set_target_properties(test_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
