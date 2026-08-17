@@ -23,6 +23,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "api/api_updates.h"
 #include "ui/ui_utility.h"
+#include "boxes/abstract_box.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/labels.h"
+#include "styles/style_layers.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "main/main_domain.h"
@@ -32,6 +36,78 @@ namespace Main {
 namespace {
 
 constexpr auto kWideIdsTag = ~uint64(0);
+
+// Why an account that must be pinned to a custom server could not
+// start on it. All three end in the same blocked state — no endpoint,
+// no key, no connection — and differ only in what the user is told.
+enum class PinFailure {
+	None,
+	ConfigUnreadable, // Marker set, config blob missing or corrupt.
+	PinMissing,       // Marker set, config parses but carries no pin.
+	MarkerUnreadable, // Prefs unreadable, so pinned-unknown.
+};
+
+[[nodiscard]] const char *PinFailureLog(PinFailure failure) {
+	switch (failure) {
+	case PinFailure::ConfigUnreadable: return "config could not be read";
+	case PinFailure::PinMissing: return "config carries no pin";
+	case PinFailure::MarkerUnreadable: return "prefs could not be read";
+	case PinFailure::None: break;
+	}
+	Unexpected("PinFailure value in PinFailureLog.");
+}
+
+[[nodiscard]] QString PinFailureText(PinFailure failure) {
+	// A user who never pinned a server must not be told they did, so
+	// the unreadable-prefs case gets its own cause. Not knowing which
+	// server this account uses is the state that case is reporting, so
+	// the rest of the text must not imply the app knows either.
+	const auto cause = (failure == PinFailure::MarkerUnreadable)
+		? u"This account's local data could not be read, so there is "
+			u"no way to tell which server it belongs to."_q
+		: u"The saved server settings for this account could not be "
+			u"loaded. The account is pinned to a custom server, so it "
+			u"will not connect to Telegram's servers instead."_q;
+	return cause + u"\n\n"
+		u"Until you decide, it connects to nothing.\n\n"
+		u"Forgetting the server clears that setting on this device and "
+		u"restarts the app. Nothing else is removed — your messages and "
+		u"local data stay. If this account used a private server, its "
+		u"address and key have to be entered again; until they are, "
+		u"this app connects to Telegram's servers.\n\n"
+		u"See 'log.txt' for details."_q;
+}
+
+[[nodiscard]] object_ptr<Ui::GenericBox> MakePinFailureBox(
+		PinFailure failure,
+		Fn<void()> forget) {
+	// Deliberately not MakeConfirmBox. That binds Enter and Return to
+	// the confirm button unconditionally, and this modal appears
+	// unbidden at startup, where Enter is the ordinary reflex for
+	// dismissing one — on a genuinely pinned account that reflex would
+	// forget the server and land on a Telegram login screen with
+	// nothing saying what changed.
+	//
+	// So every reflex dismissal leaves the account blocked: no key is
+	// bound, and Escape, clicking outside and the close button all
+	// just close. Forgetting the server has to be aimed at, and it is
+	// the left attention button rather than the primary one.
+	return Box([=](not_null<Ui::GenericBox*> box) {
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				PinFailureText(failure),
+				st::boxLabel),
+			st::boxPadding);
+		box->addButton(
+			rpl::single(u"Keep it blocked"_q),
+			[=] { box->closeBox(); });
+		box->addLeftButton(
+			rpl::single(u"Forget server"_q),
+			forget,
+			st::attentionBoxButton);
+	});
+}
 
 [[nodiscard]] QString ComposeDataString(const QString &dataName, int index) {
 	auto result = dataName;
@@ -77,10 +153,58 @@ std::unique_ptr<MTP::Config> Account::prepareToStart(
 
 void Account::start(std::unique_ptr<MTP::Config> config) {
 	_appConfig = std::make_unique<AppConfig>(this);
-	startMtp(config
-		? std::move(config)
-		: std::make_unique<MTP::Config>(
-			Core::App().fallbackProductionConfig()));
+
+	// An account pinned to a user-entered endpoint and RSA key must
+	// never fall through to Telegram's built-in table and keys, which
+	// would put a normal login screen in front of the user with
+	// Telegram's own servers behind it. A config that holds the pin
+	// settles it whatever the marker says; otherwise the marker
+	// decides, and an unreadable marker counts as pinned.
+	const auto failure = [&] {
+		if (config && config->hasCustomServer()) {
+			return PinFailure::None;
+		} else if (_local->customServerPinUnknown()) {
+			return PinFailure::MarkerUnreadable;
+		} else if (!_local->hasStoredCustomServer()) {
+			return PinFailure::None;
+		} else if (!config) {
+			return PinFailure::ConfigUnreadable;
+		}
+		// The blob parsed and carries no pin: the crash window between
+		// the marker flush and the config write leaves exactly this on
+		// disk, as does a rollback to a binary that drops the block.
+		return PinFailure::PinMissing;
+	}();
+	if (failure != PinFailure::None) {
+		LOG(("MTP Error: custom server pin could not be honoured (%1), "
+			"refusing to fall back to production."
+			).arg(QString::fromUtf8(PinFailureLog(failure))));
+		config = std::make_unique<MTP::Config>(MTP::Environment::Production);
+		config->dcOptions().constructBlocked();
+		// Nothing else records this. The blocked config is never
+		// written back, and unreadable prefs are deleted by the read
+		// that failed, so the next start would find no marker and go
+		// to production.
+		_local->writeCustomServerBlocked(
+			failure == PinFailure::MarkerUnreadable);
+		// Only a config write clears the markers, and a blocked account
+		// never performs one, so without a way out the block is
+		// terminal — including for an account that never had a custom
+		// server and whose config reads perfectly. The box is that way
+		// out; see MakePinFailureBox() for why it is built by hand.
+		crl::on_main(this, [=] {
+			Ui::show(MakePinFailureBox(failure, crl::guard(this, [=] {
+				LOG(("MTP Info: forgetting the custom server pin for "
+					"this account on the user's request."));
+				_local->clearCustomServerBlocked();
+				Core::Restart();
+			})));
+		});
+	} else if (!config) {
+		config = std::make_unique<MTP::Config>(
+			Core::App().fallbackProductionConfig());
+	}
+	startMtp(std::move(config));
 	_appConfig->start();
 	watchProxyChanges();
 	watchSessionChanges();

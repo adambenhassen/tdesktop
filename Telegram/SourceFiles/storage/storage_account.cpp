@@ -114,6 +114,9 @@ auto EmptyMessageDraftSources()
 	return result;
 }
 
+constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
+constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
+
 [[nodiscard]] FileKey ComputeDataNameKey(const QString &dataName) {
 	// We dropped old test authorizations when migrated to multi auth.
 	//const auto testAddition = (cTestMode() ? u":/test/"_q : QString());
@@ -224,6 +227,7 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	_localKey = std::move(localKey);
 	readMapWith(_localKey);
 	clearLegacyFiles();
+	readStoredCustomServerPin();
 	return readMtpConfig();
 }
 
@@ -1188,13 +1192,90 @@ void Account::readMtpData() {
 void Account::writeMtpConfig() {
 	Expects(_localKey != nullptr);
 
-	const auto serialized = _owner->mtp().config().serialize();
+	const auto &config = _owner->mtp().config();
+	if (config.blocked()) {
+		// This account is pinned to a custom server whose stored
+		// settings could not be read back. Writing an empty config over
+		// them would destroy the pinned key for good, and there is
+		// nothing here worth keeping anyway.
+		return;
+	}
+
+	// The pin marker lives in its own tdata key so that a config blob
+	// that fails to load still fails closed. It is flushed before the
+	// config blob is written, so a crash between the two leaves the
+	// marker set (fail closed) rather than cleared (fail open).
+	const auto pinned = config.hasCustomServer();
+	if (pinned != _hasStoredCustomServer) {
+		writePref<bool>(kCustomServerPinnedPref, pinned);
+		writePrefs();
+		_hasStoredCustomServer = pinned;
+	}
+
+	const auto serialized = config.serialize();
 	const auto size = Serialize::bytearraySize(serialized);
 
 	FileWriteDescriptor file(u"config"_q, _basePath);
 	EncryptedDescriptor data(size);
 	data.stream << serialized;
 	file.writeEncrypted(data, _localKey);
+
+	if (_customServerPinUnknown) {
+		// A config was read and written this session, so whether this
+		// account is pinned is no longer unknown. Left behind, it would
+		// describe a later unreadable config as damaged local data.
+		_customServerPinUnknown = false;
+		clearPref(kCustomServerPinUnknownPref);
+		writePrefs();
+	}
+}
+
+void Account::readStoredCustomServerPin() {
+	// Read before readMtpConfig() so that a corrupted or truncated
+	// config blob on a pinned account still fails closed. When the
+	// prefs themselves could not be read the marker is unknown, not
+	// absent: defaulting it to false would send a pinned account to
+	// production on one damaged tdata event.
+	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
+	_customServerPinUnknown = _prefsReadFailed
+		|| readPref<bool>(kCustomServerPinUnknownPref);
+}
+
+void Account::writeCustomServerBlocked(bool pinUnknown) {
+	Expects(_localKey != nullptr);
+
+	// The block has to outlive this launch on its own. The blocked
+	// config is never written back, and readPrefs() deletes the prefs
+	// file it failed to read, so without this the next start finds no
+	// marker at all and takes the production fallback — the login
+	// screen the marker exists to prevent.
+	//
+	// Which of the two is recorded decides what the user is told next
+	// time. Collapsing "we could not tell" into "pinned" would tell
+	// someone whose local data was damaged to re-enter a server they
+	// may never have had.
+	if (pinUnknown) {
+		_customServerPinUnknown = true;
+		writePref<bool>(kCustomServerPinUnknownPref, true);
+	} else {
+		_hasStoredCustomServer = true;
+		writePref<bool>(kCustomServerPinnedPref, true);
+	}
+	writePrefs();
+}
+
+void Account::clearCustomServerBlocked() {
+	Expects(_localKey != nullptr);
+
+	// The user chose to forget which server this account uses. Only the
+	// two markers go: the account, its keys and its local history stay
+	// exactly as they are, because what failed here is a settings read,
+	// not anything the data itself did wrong.
+	_hasStoredCustomServer = false;
+	_customServerPinUnknown = false;
+	clearPref(kCustomServerPinnedPref);
+	clearPref(kCustomServerPinUnknownPref);
+	writePrefs();
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
@@ -3801,6 +3882,7 @@ void Account::writePrefs() {
 void Account::readPrefs() {
 	FileReadDescriptor prefs;
 	if (!ReadEncryptedFile(prefs, _prefsKey, _basePath, _localKey)) {
+		_prefsReadFailed = true;
 		ClearKey(_prefsKey, _basePath);
 		_prefsKey = 0;
 		writeMapDelayed();
@@ -3810,6 +3892,7 @@ void Account::readPrefs() {
 	auto count = quint32();
 	prefs.stream >> count;
 	if (prefs.stream.status() != QDataStream::Ok) {
+		_prefsReadFailed = true;
 		return;
 	}
 	auto map = base::flat_map<QByteArray, QByteArray>();
@@ -3822,6 +3905,7 @@ void Account::readPrefs() {
 		prefs.stream.readRawData(key.data(), keySize);
 		prefs.stream.readRawData(value.data(), valueSize);
 		if (prefs.stream.status() != QDataStream::Ok) {
+			_prefsReadFailed = true;
 			return;
 		}
 		map.emplace(std::move(key), std::move(value));

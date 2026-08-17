@@ -44,7 +44,11 @@ void ConfigLoader::load() {
 		_enumDCTimer.callOnce(kEnumerateDcTimeout);
 	} else {
 		auto ids = _instance->dcOptions().configEnumDcIds();
-		Assert(!ids.empty());
+		if (ids.empty()) {
+			// Keys to destroy are copied onto a clone of the account's
+			// config, so a blocked one reaches here with no endpoint.
+			return;
+		}
 		_enumCurrent = ids.front();
 		enumerate();
 	}
@@ -100,7 +104,14 @@ void ConfigLoader::enumerate() {
 		_enumCurrent = _instance->mainDcId();
 	}
 	auto ids = _instance->dcOptions().configEnumDcIds();
-	Assert(!ids.empty());
+	if (ids.empty()) {
+		// A blocked config holds no endpoint at all, so there is
+		// nothing to enumerate. Keep the timer running instead of
+		// asserting: re-entering the pinned server puts an endpoint
+		// back, and this is what picks it up.
+		_enumDCTimer.callOnce(kEnumerateDcTimeout);
+		return;
+	}
 
 	auto i = std::find(ids.cbegin(), ids.cend(), _enumCurrent);
 	if (i == ids.cend() || (++i) == ids.cend()) {
@@ -116,7 +127,13 @@ void ConfigLoader::enumerate() {
 }
 
 void ConfigLoader::refreshSpecialLoader() {
-	if (_proxyEnabled || _instance->isKeysDestroyer()) {
+	if (_proxyEnabled
+		|| _instance->isKeysDestroyer()
+		// The special loader resolves Telegram's production DCs out of
+		// DNS and Firebase. An account pinned to a user-entered server
+		// has exactly one endpoint, and a failed connect to it must not
+		// send the client hunting for Telegram's own.
+		|| _instance->dcOptions().refusesProductionFallback()) {
 		_specialLoader.reset();
 		return;
 	}

@@ -543,6 +543,10 @@ void Instance::Private::badConfigurationError() {
 void Instance::Private::syncHttpUnixtime() {
 	if (base::unixtime::http_valid() || _httpUnixtimeLoader) {
 		return;
+	} else if (dcOptions().refusesProductionFallback()) {
+		// This loader takes the same DNS and Firebase route as the
+		// special config request, so a pinned account must not run it.
+		return;
 	}
 	_httpUnixtimeLoader = std::make_unique<SpecialConfigRequest>([=] {
 		InvokeQueued(_instance, [=] {

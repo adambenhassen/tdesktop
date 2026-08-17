@@ -83,6 +83,28 @@ public:
 		return _localKey;
 	}
 
+	// True when this account has a stored custom server pin, so a
+	// failed config load must not fall back to production.
+	[[nodiscard]] bool hasStoredCustomServer() const {
+		return _hasStoredCustomServer;
+	}
+	// True when the prefs holding the marker could not be read, so
+	// whether this account is pinned is unknown. Pinned-unknown is
+	// treated as pinned; it needs its own message, because a user who
+	// never pinned a server must not be told to re-enter one.
+	[[nodiscard]] bool customServerPinUnknown() const {
+		return _customServerPinUnknown;
+	}
+	// Persist the reason an account had to be blocked, so the block
+	// survives a restart on its own: the blocked config is never
+	// written back, and the prefs that failed to read are deleted.
+	void writeCustomServerBlocked(bool pinUnknown);
+	// Forget which server this account uses, on the user's explicit
+	// choice. Clears the two markers and nothing else — the block is
+	// otherwise terminal, since only a config write clears them and a
+	// blocked account never performs one.
+	void clearCustomServerBlocked();
+
 	void writeSessionSettings();
 	void writeMtpData();
 	void writeMtpConfig();
@@ -260,6 +282,10 @@ private:
 
 	std::unique_ptr<MTP::Config> readMtpConfig();
 	void readMtpData();
+	// Read the persisted pin marker before readMtpConfig(), so that a
+	// corrupted or truncated config blob on a pinned account still
+	// fails closed.
+	void readStoredCustomServerPin();
 	std::unique_ptr<Main::SessionSettings> applyReadContext(
 		details::ReadSettingsContext &&context);
 
@@ -317,6 +343,9 @@ private:
 	const QString _databasePath;
 
 	MTP::AuthKeyPtr _localKey;
+	bool _prefsReadFailed = false;
+	bool _hasStoredCustomServer = false;
+	bool _customServerPinUnknown = false;
 
 	base::flat_map<PeerId, FileKey> _draftsMap;
 	base::flat_map<PeerId, FileKey> _draftCursorsMap;
