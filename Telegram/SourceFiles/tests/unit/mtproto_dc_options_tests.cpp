@@ -35,9 +35,7 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 constexpr auto kProductionKeyFingerprint = qint64(-3414540481677951611LL);
 
 [[nodiscard]] bytes::const_span KeyBytes() {
-	return bytes::make_span(
-		reinterpret_cast<const gsl::byte*>(kProductionKey),
-		sizeof(kProductionKey) - 1);
+	return bytes::make_span(kProductionKey, sizeof(kProductionKey) - 1);
 }
 
 [[nodiscard]] std::shared_ptr<details::RSAPublicKey> MakeKey() {

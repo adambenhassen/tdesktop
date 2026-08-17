@@ -29,8 +29,8 @@ std::vector<Case> &Cases() {
 	return result;
 }
 
-int CurrentFailures/* = 0*/;
-int TotalFailures/* = 0*/;
+int CurrentFailures = 0;
+int TotalFailures = 0;
 
 // The code under test logs through base::Integration, and lib_base's
 // LogWriteDebug asserts when it is missing. Swallow the output: a
