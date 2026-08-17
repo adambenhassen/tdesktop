@@ -228,6 +228,20 @@ jobs:
             exit 1
           fi
 
+      # Runs in the same image the client was built in, so the test binary
+      # links against the libraries it was compiled against. The build above
+      # already produced it, so this only executes it: seconds, not a second
+      # compile. Placed before the artifact steps so a red test stops the
+      # upload rather than shipping a binary nothing checked.
+      - name: Unit tests.
+        if: env.ONLY_CACHE == 'false'
+        run: |
+          docker run --rm \
+          -u $(id -u) \
+          -v $PWD:/usr/src/tdesktop \
+          $IMAGE_TAG \
+          /usr/src/tdesktop/out/Debug/test_unit
+
       - name: Move artifact.
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |

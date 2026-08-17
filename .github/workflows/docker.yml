@@ -5,6 +5,11 @@ on:
     paths:
       - '.github/workflows/docker.yml'
       - 'Telegram/build/docker/centos_env/**'
+      # Runs inside the image, is not baked into it, and is bind-mounted from
+      # the checkout at run time. Rebuilding the toolchain from source and
+      # republishing centos_env:latest for it would hand every lane that pulls
+      # that tag a differently-built image for a change it cannot observe.
+      - '!Telegram/build/docker/centos_env/build_tests.sh'
 
 concurrency:
   # This group serialises, it does not cancel. The job below runs only on the
