@@ -145,6 +145,12 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 			).arg(QString::fromUtf8(PinFailureLog(failure))));
 		config = std::make_unique<MTP::Config>(MTP::Environment::Production);
 		config->dcOptions().constructBlocked();
+		// Nothing else records this. The blocked config is never
+		// written back, and unreadable prefs are deleted by the read
+		// that failed, so the next start would find no marker and go
+		// to production.
+		_local->writeCustomServerBlocked(
+			failure == PinFailure::MarkerUnreadable);
 		crl::on_main(this, [text = PinFailureText(failure)] {
 			Ui::show(Ui::MakeInformBox(text));
 		});

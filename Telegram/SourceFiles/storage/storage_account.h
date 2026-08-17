@@ -95,6 +95,10 @@ public:
 	[[nodiscard]] bool customServerPinUnknown() const {
 		return _customServerPinUnknown;
 	}
+	// Persist the reason an account had to be blocked, so the block
+	// survives a restart on its own: the blocked config is never
+	// written back, and the prefs that failed to read are deleted.
+	void writeCustomServerBlocked(bool pinUnknown);
 
 	void writeSessionSettings();
 	void writeMtpData();

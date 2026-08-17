@@ -115,6 +115,7 @@ auto EmptyMessageDraftSources()
 }
 
 constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
+constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
 
 [[nodiscard]] FileKey ComputeDataNameKey(const QString &dataName) {
 	// We dropped old test authorizations when migrated to multi auth.
@@ -1218,6 +1219,15 @@ void Account::writeMtpConfig() {
 	EncryptedDescriptor data(size);
 	data.stream << serialized;
 	file.writeEncrypted(data, _localKey);
+
+	if (_customServerPinUnknown) {
+		// A config was read and written this session, so whether this
+		// account is pinned is no longer unknown. Left behind, it would
+		// describe a later unreadable config as damaged local data.
+		_customServerPinUnknown = false;
+		clearPref(kCustomServerPinUnknownPref);
+		writePrefs();
+	}
 }
 
 void Account::readStoredCustomServerPin() {
@@ -1227,7 +1237,31 @@ void Account::readStoredCustomServerPin() {
 	// absent: defaulting it to false would send a pinned account to
 	// production on one damaged tdata event.
 	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
-	_customServerPinUnknown = _prefsReadFailed;
+	_customServerPinUnknown = _prefsReadFailed
+		|| readPref<bool>(kCustomServerPinUnknownPref);
+}
+
+void Account::writeCustomServerBlocked(bool pinUnknown) {
+	Expects(_localKey != nullptr);
+
+	// The block has to outlive this launch on its own. The blocked
+	// config is never written back, and readPrefs() deletes the prefs
+	// file it failed to read, so without this the next start finds no
+	// marker at all and takes the production fallback — the login
+	// screen the marker exists to prevent.
+	//
+	// Which of the two is recorded decides what the user is told next
+	// time. Collapsing "we could not tell" into "pinned" would tell
+	// someone whose local data was damaged to re-enter a server they
+	// may never have had.
+	if (pinUnknown) {
+		_customServerPinUnknown = true;
+		writePref<bool>(kCustomServerPinUnknownPref, true);
+	} else {
+		_hasStoredCustomServer = true;
+		writePref<bool>(kCustomServerPinnedPref, true);
+	}
+	writePrefs();
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {

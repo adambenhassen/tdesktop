@@ -276,6 +276,14 @@ void DcOptions::processFromList(
 				++i;
 			}
 		}
+		if (data.empty()) {
+			// Everything was refused — the server advertised its DC
+			// under an id the user did not pin, or this config is
+			// blocked. Assigning an empty table here would drop the
+			// pinned endpoint, and nothing could put it back, since
+			// only the pinned dc id is accepted afterwards.
+			return std::vector<DcId>();
+		}
 		auto result = CountOptionsDifference(_data, data);
 		if (!result.empty()) {
 			_data = std::move(data);
