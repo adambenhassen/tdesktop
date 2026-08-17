@@ -24,7 +24,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_updates.h"
 #include "ui/ui_utility.h"
 #include "boxes/abstract_box.h"
-#include "ui/boxes/confirm_box.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/labels.h"
+#include "styles/style_layers.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "main/main_domain.h"
@@ -74,6 +76,37 @@ enum class PinFailure {
 		u"address and key have to be entered again; until they are, "
 		u"this app connects to Telegram's servers.\n\n"
 		u"See 'log.txt' for details."_q;
+}
+
+[[nodiscard]] object_ptr<Ui::GenericBox> MakePinFailureBox(
+		PinFailure failure,
+		Fn<void()> forget) {
+	// Deliberately not MakeConfirmBox. That binds Enter and Return to
+	// the confirm button unconditionally, and this modal appears
+	// unbidden at startup, where Enter is the ordinary reflex for
+	// dismissing one — on a genuinely pinned account that reflex would
+	// forget the server and land on a Telegram login screen with
+	// nothing saying what changed.
+	//
+	// So every reflex dismissal leaves the account blocked: no key is
+	// bound, and Escape, clicking outside and the close button all
+	// just close. Forgetting the server has to be aimed at, and it is
+	// the left attention button rather than the primary one.
+	return Box([=](not_null<Ui::GenericBox*> box) {
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				PinFailureText(failure),
+				st::boxLabel),
+			st::boxPadding);
+		box->addButton(
+			rpl::single(u"Keep it blocked"_q),
+			[=] { box->closeBox(); });
+		box->addLeftButton(
+			rpl::single(u"Forget server"_q),
+			forget,
+			st::attentionBoxButton);
+	});
 }
 
 [[nodiscard]] QString ComposeDataString(const QString &dataName, int index) {
@@ -157,21 +190,15 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		// Only a config write clears the markers, and a blocked account
 		// never performs one, so without a way out the block is
 		// terminal — including for an account that never had a custom
-		// server and whose config reads perfectly. This is that way
-		// out: a confirm the user has to choose, never the default
-		// action of a box they are dismissing.
-		crl::on_main(this, [=, text = PinFailureText(failure)] {
-			Ui::show(Ui::MakeConfirmBox({
-				.text = text,
-				.confirmed = crl::guard(this, [=](Fn<void()> close) {
-					LOG(("MTP Info: forgetting the custom server pin for "
-						"this account on the user's request."));
-					_local->clearCustomServerBlocked();
-					close();
-					Core::Restart();
-				}),
-				.confirmText = u"Forget server"_q,
-			}));
+		// server and whose config reads perfectly. The box is that way
+		// out; see MakePinFailureBox() for why it is built by hand.
+		crl::on_main(this, [=] {
+			Ui::show(MakePinFailureBox(failure, crl::guard(this, [=] {
+				LOG(("MTP Info: forgetting the custom server pin for "
+					"this account on the user's request."));
+				_local->clearCustomServerBlocked();
+				Core::Restart();
+			})));
 		});
 	} else if (!config) {
 		config = std::make_unique<MTP::Config>(
