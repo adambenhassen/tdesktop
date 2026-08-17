@@ -77,6 +77,25 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
+// A pin is all-or-nothing. Every one of these leaves an account that
+// looks pinned but is not: an invalid key trips the fingerprint
+// assertions, and a zero dc id matches no real DC, so the CDN refusal
+// silently stops applying and the pinned key can be shadowed again.
+[[nodiscard]] const char *CustomServerProblem(const CustomServer &server) {
+	if (!server.key) {
+		return "no RSA key";
+	} else if (!server.key->valid()) {
+		return "an invalid RSA key";
+	} else if (!server.dcId) {
+		return "no dc id";
+	} else if (server.ip.empty()) {
+		return "no address";
+	} else if (server.port <= 0) {
+		return "no port";
+	}
+	return nullptr;
+}
+
 } // namespace
 
 class DcOptions::WriteLocker {
@@ -121,14 +140,19 @@ DcOptions::DcOptions(Environment environment)
 }
 
 DcOptions::DcOptions(const DcOptions &other)
-: _environment(other._environment)
-, _data(other._data)
-, _cdnDcIds(other._cdnDcIds)
-, _publicKeys(other._publicKeys)
-, _cdnPublicKeys(other._cdnPublicKeys)
-, _customServer(other._customServer)
-, _immutable(other._immutable)
-, _blocked(other._blocked) {
+: _environment(other._environment) {
+	// Upstream copied these unlocked, which was safe only while
+	// _publicKeys was immutable after construction. Pinning a custom
+	// server rewrites it at runtime, and copying a config between
+	// accounts is a live path, so the read is guarded now.
+	ReadLocker lock(&other);
+	_data = other._data;
+	_cdnDcIds = other._cdnDcIds;
+	_publicKeys = other._publicKeys;
+	_cdnPublicKeys = other._cdnPublicKeys;
+	_customServer = other._customServer;
+	_immutable = other._immutable;
+	_blocked = other._blocked;
 }
 
 DcOptions::~DcOptions() = default;
@@ -147,6 +171,11 @@ bool DcOptions::hasCustomServerUnlocked() const {
 
 bool DcOptions::isCustomServerPinnedUnlocked(DcId dcId) const {
 	return hasCustomServerUnlocked() && (dcId == _customServer.dcId);
+}
+
+bool DcOptions::refusesEndpointUnlocked(DcId dcId) const {
+	return _blocked
+		|| (hasCustomServerUnlocked() && (dcId != _customServer.dcId));
 }
 
 void DcOptions::readBuiltInPublicKeys() {
@@ -239,9 +268,13 @@ void DcOptions::processFromList(
 	const auto difference = [&] {
 		WriteLocker lock(this);
 		// This is the one endpoint write that does not go through
-		// applyOneGuarded(), so the blocked refusal has to be here too.
-		if (_blocked) {
-			return std::vector<DcId>();
+		// applyOneGuarded(), so it applies the same refusal itself.
+		for (auto i = begin(data); i != end(data);) {
+			if (refusesEndpointUnlocked(i->first)) {
+				i = data.erase(i);
+			} else {
+				++i;
+			}
 		}
 		auto result = CountOptionsDifference(_data, data);
 		if (!result.empty()) {
@@ -330,7 +363,7 @@ bool DcOptions::applyOneGuarded(
 		const std::string &ip,
 		int port,
 		const bytes::vector &secret) {
-	if (_blocked) {
+	if (refusesEndpointUnlocked(dcId)) {
 		return false;
 	}
 	return ApplyOneOption(_data, dcId, flags, ip, port, secret);
@@ -556,6 +589,12 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 	}
 
 	WriteLocker lock(this);
+	if (_blocked) {
+		// A blocked config takes no endpoint and no key from storage;
+		// only an explicit re-pin lifts it.
+		LOG(("MTP Error: refusing to deserialize into a blocked config."));
+		return false;
+	}
 	_data.clear();
 	for (auto i = 0; i != count; ++i) {
 		qint32 id = 0, flags = 0, port = 0, ipSize = 0;
@@ -669,21 +708,26 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 				LOG(("MTP Error: Bad data for custom server key in DcOptions::constructFromSerialized()"));
 				return false;
 			}
-			auto key = RSAPublicKey(n, e);
-			if (!key.valid()) {
-				LOG(("MTP Error: Could not read valid custom server key."));
-				return false;
-			}
 			// Restore the full pinned state, not just the key: the
 			// endpoint identity is what the CDN-shadowing control
 			// matches against, and the key must replace the built-in
 			// table that the DcOptions(Environment) ctor already filled.
-			applyCustomServerUnlocked(CustomServer{
+			auto restored = CustomServer{
 				.dcId = dcId,
 				.ip = std::move(ip),
 				.port = port,
-				.key = std::make_shared<RSAPublicKey>(std::move(key))
-			});
+				.key = std::make_shared<RSAPublicKey>(RSAPublicKey(n, e))
+			};
+			// A blob that claims a pin but carries a partial one must
+			// fail the load rather than install it: the account then
+			// takes the fail-closed path instead of running with a pin
+			// whose controls do not apply.
+			if (const auto problem = CustomServerProblem(restored)) {
+				LOG(("MTP Error: Stored custom server has %1."
+					).arg(QString::fromUtf8(problem)));
+				return false;
+			}
+			applyCustomServerUnlocked(restored);
 		}
 	}
 	return true;
@@ -765,7 +809,7 @@ void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 }
 
 void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
-	Expects(server.key != nullptr);
+	Expects(CustomServerProblem(server) == nullptr);
 
 	// A blocked config is one whose pinned server could not be read
 	// back, and this is the user handing that server over again. Lift
@@ -773,8 +817,12 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	// again; the caller is supplying the key the block existed for.
 	_blocked = false;
 	_customServer = server;
-	// The pinned key replaces the built-in key table for this account,
-	// it is not merged into it.
+	// The pinned server replaces the built-in table and key for this
+	// account, it is not merged into them. Leaving the built-in
+	// endpoints in place would keep a pinned client scheduling
+	// connections to Telegram production; refusesEndpointUnlocked()
+	// is what keeps them out afterwards.
+	_data.clear();
 	_publicKeys.clear();
 	_publicKeys.emplace(
 		_customServer.key->fingerprint(),
@@ -783,21 +831,24 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	// getDcRSAKey(), and telegramd advertises no CDN at all, so a
 	// pinned account keeps no CDN keys.
 	_cdnPublicKeys.clear();
-	if (!server.ip.empty()) {
-		applyOneGuarded(
-			server.dcId,
-			Flag::f_static | 0,
-			server.ip,
-			server.port,
-			{});
-	}
+	applyOneGuarded(
+		server.dcId,
+		Flag::f_static | 0,
+		server.ip,
+		server.port,
+		{});
 }
 
 bool DcOptions::setCustomServer(const CustomServer &server) {
-	if (server.empty()) {
-		// An endpoint without a key pins nothing: the account would
-		// have no verifiable server identity, so report the failure.
-		LOG(("MTP Error: setCustomServer called without an RSA key."));
+	if (const auto problem = CustomServerProblem(server)) {
+		LOG(("MTP Error: setCustomServer called with %1."
+			).arg(QString::fromUtf8(problem)));
+		return false;
+	}
+	if (_immutable) {
+		// serialize() emits a fresh pin-less blob while _immutable is
+		// set, which would drop the key from tdata on the next write.
+		LOG(("MTP Error: setCustomServer called with overriden endpoints."));
 		return false;
 	}
 	{
@@ -962,6 +1013,15 @@ void DcOptions::computeCdnDcIds() {
 }
 
 bool DcOptions::loadFromFile(const QString &path) {
+	if (hasCustomServer() || blocked()) {
+		// Loading endpoints sets _immutable, and serialize() then emits
+		// a fresh pin-less blob, so the next write would drop the
+		// pinned key from tdata for good while this object still
+		// reports hasCustomServer().
+		LOG(("MTP Error: refusing to load '%1' over a pinned custom "
+			"server.").arg(path));
+		return false;
+	}
 	QVector<MTPDcOption> options;
 
 	QFile f(path);

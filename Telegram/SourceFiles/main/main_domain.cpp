@@ -279,12 +279,22 @@ not_null<Main::Account*> Domain::add(MTP::Environment environment) {
 		mainDcId = account->mtp().mainDcId();
 		return cloneConfig(account->mtp().config());
 	};
+	// A new account never inherits another one's pinned custom server:
+	// the endpoint and key are per-account state the user has to enter
+	// and verify, and copying them would silently point an account the
+	// user meant for Telegram at a private server.
+	const auto usable = [&](not_null<Account*> account) {
+		const auto &config = account->mtp().config();
+		return (account->mtp().environment() == environment)
+			&& !config.hasCustomServer()
+			&& !config.blocked();
+	};
 	auto config = [&] {
-		if (_active.current()->mtp().environment() == environment) {
+		if (usable(_active.current())) {
 			return accountConfig(_active.current());
 		}
 		for (const auto &[index, account] : _accounts) {
-			if (account->mtp().environment() == environment) {
+			if (usable(account.get())) {
 				return accountConfig(account.get());
 			}
 		}
@@ -434,6 +444,12 @@ void Domain::checkForLastProductionConfig(
 		not_null<Main::Account*> account) {
 	const auto mtp = &account->mtp();
 	if (mtp->environment() != MTP::Environment::Production) {
+		return;
+	} else if (mtp->config().hasCustomServer() || mtp->config().blocked()) {
+		// A pinned account is still Environment::Production, but making
+		// its config the app-global fallback would hand the private
+		// endpoint and key to the next account the user adds, which
+		// would then silently authenticate against that server.
 		return;
 	}
 	for (const auto &[index, other] : _accounts) {

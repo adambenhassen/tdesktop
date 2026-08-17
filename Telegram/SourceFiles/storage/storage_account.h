@@ -88,6 +88,13 @@ public:
 	[[nodiscard]] bool hasStoredCustomServer() const {
 		return _hasStoredCustomServer;
 	}
+	// True when the prefs holding the marker could not be read, so
+	// whether this account is pinned is unknown. Pinned-unknown is
+	// treated as pinned; it needs its own message, because a user who
+	// never pinned a server must not be told to re-enter one.
+	[[nodiscard]] bool customServerPinUnknown() const {
+		return _customServerPinUnknown;
+	}
 
 	void writeSessionSettings();
 	void writeMtpData();
@@ -327,7 +334,9 @@ private:
 	const QString _databasePath;
 
 	MTP::AuthKeyPtr _localKey;
+	bool _prefsReadFailed = false;
 	bool _hasStoredCustomServer = false;
+	bool _customServerPinUnknown = false;
 
 	base::flat_map<PeerId, FileKey> _draftsMap;
 	base::flat_map<PeerId, FileKey> _draftCursorsMap;

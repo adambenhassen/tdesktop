@@ -105,9 +105,14 @@ bool CheckStreamStatus(QDataStream &stream) {
 	static const auto lookupConfig = [](not_null<Main::Account*> account) {
 		const auto mtp = &account->mtp();
 		const auto production = MTP::Environment::Production;
-		return (mtp->environment() == production)
-			? &mtp->config()
-			: nullptr;
+		// A pinned account is still Environment::Production, but its
+		// config carries a private endpoint and key. This one is
+		// written into the global settings file, so it must never be
+		// the fallback the next account starts from.
+		const auto usable = (mtp->environment() == production)
+			&& !mtp->config().hasCustomServer()
+			&& !mtp->config().blocked();
+		return usable ? &mtp->config() : nullptr;
 	};
 	const auto &app = Core::App();
 	const auto &domain = app.domain();

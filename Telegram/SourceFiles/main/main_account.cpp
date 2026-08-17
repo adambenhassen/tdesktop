@@ -35,6 +35,44 @@ namespace {
 
 constexpr auto kWideIdsTag = ~uint64(0);
 
+// Why an account that must be pinned to a custom server could not
+// start on it. All three end in the same blocked state — no endpoint,
+// no key, no connection — and differ only in what the user is told.
+enum class PinFailure {
+	None,
+	ConfigUnreadable, // Marker set, config blob missing or corrupt.
+	PinMissing,       // Marker set, config parses but carries no pin.
+	MarkerUnreadable, // Prefs unreadable, so pinned-unknown.
+};
+
+[[nodiscard]] const char *PinFailureLog(PinFailure failure) {
+	switch (failure) {
+	case PinFailure::ConfigUnreadable: return "config could not be read";
+	case PinFailure::PinMissing: return "config carries no pin";
+	case PinFailure::MarkerUnreadable: return "prefs could not be read";
+	case PinFailure::None: break;
+	}
+	Unexpected("PinFailure value in PinFailureLog.");
+}
+
+[[nodiscard]] QString PinFailureText(PinFailure failure) {
+	// A user who never pinned a server must not be told to re-enter
+	// one, so the unreadable-prefs case gets its own wording.
+	return (failure == PinFailure::MarkerUnreadable)
+		? u"This account's local data could not be read, so there is no "
+			u"way to tell which server it belongs to.\n\n"
+			u"It will not connect to anything until that is resolved, "
+			u"rather than risk signing in to the wrong one. Add the "
+			u"account again to start over.\n\n"
+			u"See 'log.txt' for details."_q
+		: u"Could not load the saved server settings for this "
+			u"account.\n\n"
+			u"The account is pinned to a custom server, so it will not "
+			u"connect to Telegram's servers instead. Add the account "
+			u"again to re-enter the server address and its key.\n\n"
+			u"See 'log.txt' for details."_q;
+}
+
 [[nodiscard]] QString ComposeDataString(const QString &dataName, int index) {
 	auto result = dataName;
 	result.replace('#', QString());
@@ -79,34 +117,40 @@ std::unique_ptr<MTP::Config> Account::prepareToStart(
 
 void Account::start(std::unique_ptr<MTP::Config> config) {
 	_appConfig = std::make_unique<AppConfig>(this);
-	if (!config) {
-		// A stored custom server means this account is pinned to a
-		// user-entered endpoint and RSA key. The marker is read before
-		// the config blob, so it survives a missing, truncated or
-		// corrupted one. Falling through to the production fallback
-		// config would put a normal login screen in front of the user
-		// with Telegram's own servers behind it, so the account starts
-		// with no endpoint and no key instead and reaches nothing.
-		if (_local->hasStoredCustomServer()) {
-			LOG(("MTP Error: stored custom server settings could not be "
-				"loaded, refusing to fall back to production."));
-			config = std::make_unique<MTP::Config>(
-				MTP::Environment::Production);
-			config->dcOptions().constructBlocked();
-			crl::on_main(this, [] {
-				Ui::show(Ui::MakeInformBox(
-					u"Could not load the saved server settings for this "
-					u"account.\n\n"
-					u"The account is pinned to a custom server, so it will "
-					u"not connect to Telegram's servers instead. Add the "
-					u"account again to re-enter the server address and its "
-					u"key.\n\n"
-					u"See 'log.txt' for details."_q));
-			});
-		} else {
-			config = std::make_unique<MTP::Config>(
-				Core::App().fallbackProductionConfig());
+
+	// An account pinned to a user-entered endpoint and RSA key must
+	// never fall through to Telegram's built-in table and keys, which
+	// would put a normal login screen in front of the user with
+	// Telegram's own servers behind it. A config that holds the pin
+	// settles it whatever the marker says; otherwise the marker
+	// decides, and an unreadable marker counts as pinned.
+	const auto failure = [&] {
+		if (config && config->hasCustomServer()) {
+			return PinFailure::None;
+		} else if (_local->customServerPinUnknown()) {
+			return PinFailure::MarkerUnreadable;
+		} else if (!_local->hasStoredCustomServer()) {
+			return PinFailure::None;
+		} else if (!config) {
+			return PinFailure::ConfigUnreadable;
 		}
+		// The blob parsed and carries no pin: the crash window between
+		// the marker flush and the config write leaves exactly this on
+		// disk, as does a rollback to a binary that drops the block.
+		return PinFailure::PinMissing;
+	}();
+	if (failure != PinFailure::None) {
+		LOG(("MTP Error: custom server pin could not be honoured (%1), "
+			"refusing to fall back to production."
+			).arg(QString::fromUtf8(PinFailureLog(failure))));
+		config = std::make_unique<MTP::Config>(MTP::Environment::Production);
+		config->dcOptions().constructBlocked();
+		crl::on_main(this, [text = PinFailureText(failure)] {
+			Ui::show(Ui::MakeInformBox(text));
+		});
+	} else if (!config) {
+		config = std::make_unique<MTP::Config>(
+			Core::App().fallbackProductionConfig());
 	}
 	startMtp(std::move(config));
 	_appConfig->start();

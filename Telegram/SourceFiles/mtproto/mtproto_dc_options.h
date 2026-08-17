@@ -159,6 +159,11 @@ private:
 	void applyCustomServerUnlocked(const CustomServer &server);
 	[[nodiscard]] bool hasCustomServerUnlocked() const;
 	[[nodiscard]] bool isCustomServerPinnedUnlocked(DcId dcId) const;
+	// While a custom server is pinned it is the only endpoint this
+	// account may use, so no other DC's addresses may enter the table
+	// — least of all the built-in Telegram ones, which a pinned client
+	// would otherwise keep scheduling connections to.
+	[[nodiscard]] bool refusesEndpointUnlocked(DcId dcId) const;
 
 	bool applyOneGuarded(
 		DcId dcId,

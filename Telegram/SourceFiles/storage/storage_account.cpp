@@ -1222,8 +1222,12 @@ void Account::writeMtpConfig() {
 
 void Account::readStoredCustomServerPin() {
 	// Read before readMtpConfig() so that a corrupted or truncated
-	// config blob on a pinned account still fails closed.
+	// config blob on a pinned account still fails closed. When the
+	// prefs themselves could not be read the marker is unknown, not
+	// absent: defaulting it to false would send a pinned account to
+	// production on one damaged tdata event.
 	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
+	_customServerPinUnknown = _prefsReadFailed;
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
@@ -3830,6 +3834,7 @@ void Account::writePrefs() {
 void Account::readPrefs() {
 	FileReadDescriptor prefs;
 	if (!ReadEncryptedFile(prefs, _prefsKey, _basePath, _localKey)) {
+		_prefsReadFailed = true;
 		ClearKey(_prefsKey, _basePath);
 		_prefsKey = 0;
 		writeMapDelayed();
@@ -3839,6 +3844,7 @@ void Account::readPrefs() {
 	auto count = quint32();
 	prefs.stream >> count;
 	if (prefs.stream.status() != QDataStream::Ok) {
+		_prefsReadFailed = true;
 		return;
 	}
 	auto map = base::flat_map<QByteArray, QByteArray>();
@@ -3851,6 +3857,7 @@ void Account::readPrefs() {
 		prefs.stream.readRawData(key.data(), keySize);
 		prefs.stream.readRawData(value.data(), valueSize);
 		if (prefs.stream.status() != QDataStream::Ok) {
+			_prefsReadFailed = true;
 			return;
 		}
 		map.emplace(std::move(key), std::move(value));
