@@ -26,36 +26,38 @@ struct PkeyDeleter {
 	}
 };
 
-// The names a private key frame may carry. "RSA PRIVATE KEY" is the
-// PKCS#1 name; the names without RSA in them are PKCS#8 or an
-// algorithm we cannot use either way, so the user is told the same
-// thing for all of them.
-constexpr const char *const kPrivateNames[] = {
-	"RSA PRIVATE KEY",
-	"PRIVATE KEY",
-	"EC PRIVATE KEY",
-	"ENCRYPTED PRIVATE KEY",
-};
-
-// A private key frame: a "-----BEGIN <label>-----" line with its
-// matching "-----END <label>-----". The check is a frame check, not a
-// parse: the validator must not decode private key material, so it
-// never touches the base64, and a mangled body still says what the
-// user pasted. A paste containing the frame is refused, even if a
-// public key also parses out of the same text.
+// A private key frame: a "-----BEGIN <label>-----" line whose label
+// contains "PRIVATE KEY", with its matching "-----END <label>-----".
+// The check is a frame check, not a parse: the validator must not
+// decode private key material, so it never touches the base64, and a
+// mangled body still says what the user pasted. A paste containing the
+// frame is refused, even if a public key also parses out of the same
+// text. One scan over the BEGIN lines covers every label OpenSSL or
+// another tool may use, so the cost does not grow with the number of
+// known names.
 [[nodiscard]] bool HasPrivateFrame(const QByteArray &text) {
-	for (const auto name : kPrivateNames) {
-		const auto begin = text.indexOf(
-			QByteArray("-----BEGIN ").append(name).append("-----"));
-		if (begin < 0) {
-			continue;
+	const auto kBegin = QByteArray("-----BEGIN ");
+	const auto kEnd = QByteArray("-----END ");
+	const auto kPrivate = QByteArray("PRIVATE KEY");
+	const auto kDashes = QByteArray("-----");
+
+	auto pos = 0;
+	while ((pos = text.indexOf(kBegin, pos)) >= 0) {
+		const auto labelStart = pos + kBegin.size();
+		const auto labelEnd = text.indexOf(kDashes, labelStart);
+		if (labelEnd < 0) {
+			break;
 		}
-		const auto end = text.indexOf(
-			QByteArray("-----END ").append(name).append("-----"),
-			begin);
-		if (end > begin) {
-			return true;
+		const auto label = text.mid(labelStart, labelEnd - labelStart);
+		if (label.contains(kPrivate)) {
+			const auto end = text.indexOf(
+				kEnd + label + kDashes,
+				labelEnd);
+			if (end > pos) {
+				return true;
+			}
 		}
+		pos = labelEnd + kDashes.size();
 	}
 	return false;
 }
@@ -171,19 +173,20 @@ ServerKeyCheck CheckServerKey(const QString &pem) {
 	if (utf8.isEmpty()) {
 		return { .status = ServerKeyStatus::Empty };
 	}
-	if (utf8.size() > kMaxKeySize) {
-		return { .status = ServerKeyStatus::Unreadable };
-	}
 	const auto text = QByteArray::fromRawData(
 		reinterpret_cast<const char *>(utf8.data()),
 		utf8.size());
-	// The private frame is checked first, and it refuses on its own:
-	// a paste that carries somebody's private key is not a usable
-	// public key, even if one also parses out of the same text. The
-	// check reads the frame, not the key, so nothing of the secret is
-	// decoded, logged, stored or returned.
+	// The private frame is checked before anything else, and it refuses
+	// on its own: a paste that carries somebody's private key is not a
+	// usable public key, even if one also parses out of the same text.
+	// The check reads the frame, not the key, so nothing of the secret
+	// is decoded, logged, stored or returned, and it is not parsing, so
+	// it belongs ahead of the size bound that gates the parse path.
 	if (HasPrivateFrame(text)) {
 		return { .status = ServerKeyStatus::PrivateKey };
+	}
+	if (utf8.size() > kMaxKeySize) {
+		return { .status = ServerKeyStatus::Unreadable };
 	}
 	auto key = details::RSAPublicKey(bytes::make_span(utf8));
 	if (!key.valid()) {
