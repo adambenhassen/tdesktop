@@ -131,32 +131,34 @@ public:
 	// server carries no key, so a caller with an endpoint but no key
 	// can report the failure instead of silently pinning nothing.
 	[[nodiscard]] bool setCustomServer(const CustomServer &server);
-	[[nodiscard]] CustomServer customServer() const {
-		ReadLocker lock(this);
-		return _customServer;
-	}
-	[[nodiscard]] bool hasCustomServer() const {
-		ReadLocker lock(this);
-		return hasCustomServerUnlocked();
-	}
-	// True when the custom server is pinned and its key is the only
-	// RSA key the account may use for the pinned DC id.
-	[[nodiscard]] bool isCustomServerPinned() const;
+	[[nodiscard]] CustomServer customServer() const;
+	[[nodiscard]] bool hasCustomServer() const;
+	// True when the pinned key is the only RSA key this account may
+	// use for that DC id, so a CDN key for it must be refused.
 	[[nodiscard]] bool isCustomServerPinned(DcId dcId) const;
+
+	// Hold no endpoint and no RSA key at all, and accept none from
+	// anywhere. Used for an account pinned to a custom server whose
+	// stored settings could not be read back: it must be unable to
+	// reach any server rather than fall back to the built-in table.
+	void constructBlocked();
+	[[nodiscard]] bool blocked() const;
+
+	// True when this account must never go looking for Telegram's own
+	// servers: it is pinned to a user-entered endpoint, or blocked
+	// because that endpoint could not be restored. The DNS and Firebase
+	// resolvers exist only to find production DCs, so they must not run.
+	[[nodiscard]] bool refusesProductionFallback() const;
 
 	// Debug feature for now.
 	bool loadFromFile(const QString &path);
 	bool writeToFile(const QString &path) const;
 
 private:
-	// Callers must hold the write lock.
+	// Callers must hold one of the lockers.
 	void applyCustomServerUnlocked(const CustomServer &server);
 	[[nodiscard]] bool hasCustomServerUnlocked() const;
 	[[nodiscard]] bool isCustomServerPinnedUnlocked(DcId dcId) const;
-
-	// True when the built-in table is replaced by the pinned custom
-	// server, so the built-in keys are not loaded into _publicKeys.
-	[[nodiscard]] bool customServerReplacesBuiltIn() const;
 
 	bool applyOneGuarded(
 		DcId dcId,
@@ -204,6 +206,10 @@ private:
 
 	// True when we have overriden options from a .tdesktop-endpoints file.
 	bool _immutable = false;
+
+	// True when a pinned custom server could not be restored, so this
+	// account must hold no endpoint and no key at all.
+	bool _blocked = false;
 
 };
 

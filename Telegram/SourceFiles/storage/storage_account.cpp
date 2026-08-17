@@ -1192,6 +1192,25 @@ void Account::writeMtpConfig() {
 	Expects(_localKey != nullptr);
 
 	const auto &config = _owner->mtp().config();
+	if (config.blocked()) {
+		// This account is pinned to a custom server whose stored
+		// settings could not be read back. Writing an empty config over
+		// them would destroy the pinned key for good, and there is
+		// nothing here worth keeping anyway.
+		return;
+	}
+
+	// The pin marker lives in its own tdata key so that a config blob
+	// that fails to load still fails closed. It is flushed before the
+	// config blob is written, so a crash between the two leaves the
+	// marker set (fail closed) rather than cleared (fail open).
+	const auto pinned = config.hasCustomServer();
+	if (pinned != _hasStoredCustomServer) {
+		writePref<bool>(kCustomServerPinnedPref, pinned);
+		writePrefs();
+		_hasStoredCustomServer = pinned;
+	}
+
 	const auto serialized = config.serialize();
 	const auto size = Serialize::bytearraySize(serialized);
 
@@ -1199,17 +1218,6 @@ void Account::writeMtpConfig() {
 	EncryptedDescriptor data(size);
 	data.stream << serialized;
 	file.writeEncrypted(data, _localKey);
-
-	// The pin marker is persisted in its own tdata key so that a
-	// failed config load on a pinned account fails closed instead of
-	// silently falling back to Telegram production. It is written
-	// before the config blob so that a crash between the two leaves
-	// the marker set (fail closed) rather than cleared (fail open).
-	const auto pinned = config.hasCustomServer();
-	if (pinned != _hasStoredCustomServer) {
-		writePref<bool>(kCustomServerPinnedPref, pinned);
-	}
-	_hasStoredCustomServer = pinned;
 }
 
 void Account::readStoredCustomServerPin() {

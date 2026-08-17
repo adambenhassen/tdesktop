@@ -7,12 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/special_config_request.h"
 
-#include "core/application.h"
-#include "main/main_domain.h"
-#include "main/main_account.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
-#include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "base/unixtime.h"
 #include "base/openssl_help.h"
@@ -47,28 +43,6 @@ const auto kAppId = "1:560508485281:web:4ee13a6af4e84d49e67ae0";
 
 QString ApiDomain(const QString &service) {
 	return service + ".googleapis.com";
-}
-
-// The account is pinned to a custom server when its DC options hold a
-// user-entered RSA key. Such an account must never be sent resolving
-// Telegram's production DCs over DNS or Firebase. The marker is
-// persisted in a tdata pref and read before readMtpConfig(), so it is
-// available even when the account has not finished starting yet.
-[[nodiscard]] bool IsCustomServerPinned() {
-	const auto &app = Core::App();
-	const auto &domain = app.domain();
-	if (!domain.started()) {
-		return false;
-	}
-	const auto check = [&](const Main::Account &account) {
-		return account.local().hasStoredCustomServer();
-	};
-	return (check(domain.activeAccount())
-		|| ranges::any_of(
-			domain.accounts(),
-			[&](const Main::Domain::AccountWithIndex &item) {
-				return check(*item.account);
-			}));
 }
 
 QString GenerateInstanceId() {
@@ -260,26 +234,6 @@ SpecialConfigRequest::SpecialConfigRequest(
 	}
 	ranges::reverse(_attempts); // We go from last to first.
 
-	startRequests();
-}
-
-bool SpecialConfigRequest::skipRequests() const {
-	return IsCustomServerPinned();
-}
-
-void SpecialConfigRequest::startRequests() {
-	if (skipRequests()) {
-		// A pinned custom server is the only endpoint there is, so a
-		// failed connect to it must not send the client resolving
-		// Telegram's production addresses out of DNS and Firebase.
-		DEBUG_LOG(("MTP Info: skipping special config request, "
-			"custom server is pinned."));
-		// The time-only loader still needs its callback to complete.
-		if (_timeDoneCallback) {
-			_timeDoneCallback();
-		}
-		return;
-	}
 	sendNextRequest();
 }
 

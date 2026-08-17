@@ -81,24 +81,32 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 	_appConfig = std::make_unique<AppConfig>(this);
 	if (!config) {
 		// A stored custom server means this account is pinned to a
-		// user-entered endpoint and RSA key. The marker lives in the
-		// same blob as the key, so a missing or unreadable config here
-		// means the pin cannot be trusted. Falling through to the
-		// production fallback config would show a normal login screen
-		// talking to Telegram's servers, so fail closed instead.
+		// user-entered endpoint and RSA key. The marker is read before
+		// the config blob, so it survives a missing, truncated or
+		// corrupted one. Falling through to the production fallback
+		// config would put a normal login screen in front of the user
+		// with Telegram's own servers behind it, so the account starts
+		// with no endpoint and no key instead and reaches nothing.
 		if (_local->hasStoredCustomServer()) {
-			LOG(("MTP Error: stored custom server config could not be "
+			LOG(("MTP Error: stored custom server settings could not be "
 				"loaded, refusing to fall back to production."));
-			Ui::show(Ui::MakeInformBox(
-				u"Could not load the saved server settings for this "
-				"account.\n\n"
-				"The account is pinned to a custom server and will not "
-				"connect to Telegram's servers instead.\n\n"
-				"Check 'log.txt' for details."_q));
-			return;
+			config = std::make_unique<MTP::Config>(
+				MTP::Environment::Production);
+			config->dcOptions().constructBlocked();
+			crl::on_main(this, [] {
+				Ui::show(Ui::MakeInformBox(
+					u"Could not load the saved server settings for this "
+					u"account.\n\n"
+					u"The account is pinned to a custom server, so it will "
+					u"not connect to Telegram's servers instead. Add the "
+					u"account again to re-enter the server address and its "
+					u"key.\n\n"
+					u"See 'log.txt' for details."_q));
+			});
+		} else {
+			config = std::make_unique<MTP::Config>(
+				Core::App().fallbackProductionConfig());
 		}
-		config = std::make_unique<MTP::Config>(
-			Core::App().fallbackProductionConfig());
 	}
 	startMtp(std::move(config));
 	_appConfig->start();

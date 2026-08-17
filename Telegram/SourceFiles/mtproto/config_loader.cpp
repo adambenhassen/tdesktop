@@ -39,6 +39,10 @@ ConfigLoader::ConfigLoader(
 }
 
 void ConfigLoader::load() {
+	if (_instance->dcOptions().blocked()) {
+		// No endpoint to ask and no key to ask it with.
+		return;
+	}
 	if (!_instance->isKeysDestroyer()) {
 		sendRequest(_instance->mainDcId());
 		_enumDCTimer.callOnce(kEnumerateDcTimeout);
@@ -116,7 +120,13 @@ void ConfigLoader::enumerate() {
 }
 
 void ConfigLoader::refreshSpecialLoader() {
-	if (_proxyEnabled || _instance->isKeysDestroyer()) {
+	if (_proxyEnabled
+		|| _instance->isKeysDestroyer()
+		// The special loader resolves Telegram's production DCs out of
+		// DNS and Firebase. An account pinned to a user-entered server
+		// has exactly one endpoint, and a failed connect to it must not
+		// send the client hunting for Telegram's own.
+		|| _instance->dcOptions().refusesProductionFallback()) {
 		_specialLoader.reset();
 		return;
 	}

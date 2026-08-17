@@ -127,7 +127,8 @@ DcOptions::DcOptions(const DcOptions &other)
 , _publicKeys(other._publicKeys)
 , _cdnPublicKeys(other._cdnPublicKeys)
 , _customServer(other._customServer)
-, _immutable(other._immutable) {
+, _immutable(other._immutable)
+, _blocked(other._blocked) {
 }
 
 DcOptions::~DcOptions() = default;
@@ -148,23 +149,7 @@ bool DcOptions::isCustomServerPinnedUnlocked(DcId dcId) const {
 	return hasCustomServerUnlocked() && (dcId == _customServer.dcId);
 }
 
-bool DcOptions::customServerReplacesBuiltIn() const {
-	// The pinned custom server is the only endpoint there is, so the
-	// built-in table and keys must not be present at all: a later
-	// fallback to them would be a silent switch to Telegram production.
-	return hasCustomServerUnlocked();
-}
-
 void DcOptions::readBuiltInPublicKeys() {
-	if (customServerReplacesBuiltIn()) {
-		// Only the pinned key goes into _publicKeys.
-		if (_customServer.key) {
-			_publicKeys.emplace(
-				_customServer.key->fingerprint(),
-				*_customServer.key);
-		}
-		return;
-	}
 	const auto builtin = (_environment == Environment::Test)
 		? gsl::make_span(kTestPublicRSAKeys)
 		: gsl::make_span(kPublicRSAKeys);
@@ -192,9 +177,6 @@ void DcOptions::constructFromBuiltIn() {
 	WriteLocker lock(this);
 	_data.clear();
 
-	// The pinned custom server replaces the built-in table and keys;
-	// setCustomServer() is the only path that installs it, and it is
-	// always called after construction, so _customServer is empty here.
 	readBuiltInPublicKeys();
 
 	const auto list = isTestMode()
@@ -342,6 +324,9 @@ bool DcOptions::applyOneGuarded(
 		const std::string &ip,
 		int port,
 		const bytes::vector &secret) {
+	if (_blocked) {
+		return false;
+	}
 	return ApplyOneOption(_data, dcId, flags, ip, port, secret);
 }
 
@@ -475,12 +460,12 @@ QByteArray DcOptions::serialize() const {
 	// port) and the key bytes are persisted; the fingerprint is
 	// recomputed on load. Without dcId the CDN-shadowing control
 	// cannot match and the pin is silently ineffective.
-	bool hasCustomServer = false;
+	bool pinned = false;
 	qint32 customDcId = 0, customPort = 0;
 	qint32 customIpSize = 0;
 	bytes::vector customKeyN, customKeyE, customIp;
 	if (_customServer.key) {
-		hasCustomServer = true;
+		pinned = true;
 		customDcId = _customServer.dcId;
 		customPort = _customServer.port;
 		customIp.assign(_customServer.ip.begin(), _customServer.ip.end());
@@ -488,17 +473,14 @@ QByteArray DcOptions::serialize() const {
 		customKeyN = _customServer.key->getN();
 		customKeyE = _customServer.key->getE();
 	}
-	size += sizeof(qint32) // hasCustomServer
-		+ (hasCustomServer
-		? sizeof(qint32) // dcId
-			+ sizeof(qint32) // port
-			+ sizeof(qint32) // ip size
-			+ customIp.size()
-			+ sizeof(qint32)
-			+ Serialize::bytesSize(customKeyN)
-			+ sizeof(qint32)
-			+ Serialize::bytesSize(customKeyE)
-		: 0);
+	size += sizeof(qint32); // pinned
+	if (pinned) {
+		// id + port + ip size
+		size += sizeof(qint32) + sizeof(qint32) + sizeof(qint32);
+		size += customIp.size();
+		size += Serialize::bytesSize(customKeyN)
+			+ Serialize::bytesSize(customKeyE);
+	}
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -535,20 +517,15 @@ QByteArray DcOptions::serialize() const {
 		}
 
 		// Pinned custom server (v3).
-		if (kVersion > 2) {
-			stream << qint32(hasCustomServer ? 1 : 0);
-			if (hasCustomServer) {
-				stream
-					<< customDcId
-					<< customPort
-					<< customIpSize;
-				stream.writeRawData(
-					reinterpret_cast<const char*>(customIp.data()),
-					customIp.size());
-				stream
-					<< Serialize::bytes(customKeyN)
-					<< Serialize::bytes(customKeyE);
-			}
+		stream << qint32(pinned ? 1 : 0);
+		if (pinned) {
+			stream << customDcId << customPort << customIpSize;
+			stream.writeRawData(
+				reinterpret_cast<const char*>(customIp.data()),
+				customIp.size());
+			stream
+				<< Serialize::bytes(customKeyN)
+				<< Serialize::bytes(customKeyE);
 		}
 	}
 	return result;
@@ -638,13 +615,12 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 
 			auto key = RSAPublicKey(n, e);
 			if (key.valid()) {
-				// A CDN key for the pinned custom DC id would shadow the
-				// user-verified key in getDcRSAKey().
-				if (!isCustomServerPinnedUnlocked(dcId)) {
-					_cdnPublicKeys[dcId].emplace(
-						key.fingerprint(),
-						std::move(key));
-				}
+				// The pinned custom server is read after this block and
+				// drops every persisted CDN key, so nothing read here can
+				// shadow the user-verified key in getDcRSAKey().
+				_cdnPublicKeys[dcId].emplace(
+					key.fingerprint(),
+					std::move(key));
 			} else {
 				LOG(("MTP Error: Could not read valid CDN public key."));
 				return false;
@@ -657,13 +633,13 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 	// key bytes on load. A truncated v3 blob must fail the whole load,
 	// not silently revert to the built-in keys.
 	if (version > 2) {
-		auto hasCustomServer = qint32(0);
-		stream >> hasCustomServer;
+		auto pinned = qint32(0);
+		stream >> pinned;
 		if (stream.status() != QDataStream::Ok) {
 			LOG(("MTP Error: Bad data for custom server in DcOptions::constructFromSerialized()"));
 			return false;
 		}
-		if (hasCustomServer) {
+		if (pinned) {
 			auto dcId = qint32(0), port = qint32(0), ipSize = qint32(0);
 			stream >> dcId >> port >> ipSize;
 			if (stream.status() != QDataStream::Ok) {
@@ -751,6 +727,9 @@ DcType DcOptions::dcType(ShiftedDcId shiftedDcId) const {
 
 void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 	WriteLocker lock(this);
+	if (_blocked) {
+		return;
+	}
 	_cdnPublicKeys.clear();
 	for (const auto &key : config.vpublic_keys().v) {
 		key.match([&](const MTPDcdnPublicKey &data) {
@@ -791,8 +770,9 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 		_customServer.key->fingerprint(),
 		*_customServer.key);
 	// A CDN key for the pinned DC id would shadow the pinned key in
-	// getDcRSAKey(), so drop the persisted CDN keys for such accounts.
-	_cdnPublicKeys.erase(_customServer.dcId);
+	// getDcRSAKey(), and telegramd advertises no CDN at all, so a
+	// pinned account keeps no CDN keys.
+	_cdnPublicKeys.clear();
 	if (!server.ip.empty()) {
 		applyOneGuarded(
 			server.dcId,
@@ -810,12 +790,22 @@ bool DcOptions::setCustomServer(const CustomServer &server) {
 		LOG(("MTP Error: setCustomServer called without an RSA key."));
 		return false;
 	}
-	WriteLocker lock(this);
-	applyCustomServerUnlocked(server);
+	{
+		WriteLocker lock(this);
+		applyCustomServerUnlocked(server);
+	}
+	// Main::Account::startMtp() writes the config to tdata on this, and
+	// that write is what puts the pinned key in the kVersion 3 blob.
+	_changed.fire_copy(server.dcId);
 	return true;
 }
 
-bool DcOptions::isCustomServerPinned() const {
+CustomServer DcOptions::customServer() const {
+	ReadLocker lock(this);
+	return _customServer;
+}
+
+bool DcOptions::hasCustomServer() const {
 	ReadLocker lock(this);
 	return hasCustomServerUnlocked();
 }
@@ -823,6 +813,25 @@ bool DcOptions::isCustomServerPinned() const {
 bool DcOptions::isCustomServerPinned(DcId dcId) const {
 	ReadLocker lock(this);
 	return isCustomServerPinnedUnlocked(dcId);
+}
+
+void DcOptions::constructBlocked() {
+	WriteLocker lock(this);
+	_blocked = true;
+	_data.clear();
+	_publicKeys.clear();
+	_cdnPublicKeys.clear();
+	_customServer = CustomServer();
+}
+
+bool DcOptions::blocked() const {
+	ReadLocker lock(this);
+	return _blocked;
+}
+
+bool DcOptions::refusesProductionFallback() const {
+	ReadLocker lock(this);
+	return _blocked || hasCustomServerUnlocked();
 }
 
 bool DcOptions::hasCDNKeysForDc(DcId dcId) const {
@@ -843,14 +852,16 @@ RSAPublicKey DcOptions::getDcRSAKey(
 		}
 		return RSAPublicKey();
 	};
-	{
-		ReadLocker lock(this);
-		const auto it = _cdnPublicKeys.find(dcId);
-		if (it != _cdnPublicKeys.cend()) {
-			const auto key = findKey(it->second);
-			if (key.valid()) {
-				return key;
-			}
+	// _publicKeys stops being immutable after construction once a custom
+	// server is pinned into it, so both reads stay under the lock.
+	ReadLocker lock(this);
+	const auto it = _cdnPublicKeys.find(dcId);
+	if (it != _cdnPublicKeys.cend()) {
+		// A CDN key must not be able to shadow the pinned key, so a
+		// fingerprint miss here falls through instead of returning empty.
+		const auto key = findKey(it->second);
+		if (key.valid()) {
+			return key;
 		}
 	}
 	return findKey(_publicKeys);

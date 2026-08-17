@@ -298,7 +298,7 @@ rpl::producer<> Config::updates() const {
 	return _updates.events();
 }
 
-bool Config::setCustomServer(const DcOptions::CustomServer &server) {
+bool Config::setCustomServer(const CustomServer &server) {
 	return _dcOptions.setCustomServer(server);
 }
 

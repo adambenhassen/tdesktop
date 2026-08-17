@@ -88,10 +88,6 @@ public:
 	[[nodiscard]] bool hasStoredCustomServer() const {
 		return _hasStoredCustomServer;
 	}
-	// Read the persisted pin marker before readMtpConfig() so that a
-	// corrupted or truncated config blob on a pinned account still
-	// fails closed.
-	void readStoredCustomServerPin();
 
 	void writeSessionSettings();
 	void writeMtpData();
@@ -270,6 +266,10 @@ private:
 
 	std::unique_ptr<MTP::Config> readMtpConfig();
 	void readMtpData();
+	// Read the persisted pin marker before readMtpConfig(), so that a
+	// corrupted or truncated config blob on a pinned account still
+	// fails closed.
+	void readStoredCustomServerPin();
 	std::unique_ptr<Main::SessionSettings> applyReadContext(
 		details::ReadSettingsContext &&context);
 
