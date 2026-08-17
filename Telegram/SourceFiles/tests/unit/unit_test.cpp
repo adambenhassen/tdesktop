@@ -108,8 +108,26 @@ int main(int argc, char *argv[]) {
 
 	auto failed = 0;
 	auto &cases = Test::Unit::Cases();
+
+	// Registration is a side effect of a file being in the target's source
+	// list, so dropping that file — an edit, a bad conflict resolution —
+	// leaves a binary that builds, runs nothing and exits 0. That is a
+	// green tick with no coverage behind it, which is worse than no
+	// harness at all, so having no cases is itself a failure.
+	if (cases.empty()) {
+		std::fprintf(
+			stderr,
+			"No test cases registered. The binary built but covers "
+			"nothing — check the source list in tests_unit.cmake.\n");
+		return 1;
+	}
+
 	for (const auto &entry : cases) {
 		Test::Unit::CurrentFailures = 0;
+		// Named before it runs rather than after it returns: an Expects or
+		// Assert inside the code under test aborts the process, and that
+		// is precisely when the log has to say which case was in flight.
+		std::fprintf(stderr, "run  %s\n", entry.name);
 		entry.body();
 		if (Test::Unit::CurrentFailures) {
 			++failed;

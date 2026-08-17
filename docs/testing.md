@@ -27,9 +27,13 @@ client. On four arm64 cores that is about 13 minutes from cold and under a
 minute for a rebuild after touching one file — a loop you can actually use,
 which a full client build is not.
 
-The exit code is the result: `0` all cases passed, `1` at least one failed.
-Output is one line per case on stderr, plus a `file:line` and both sides of
-the comparison for every failed check.
+The exit code is the result: `0` all cases passed, `1` at least one failed —
+or no case ran at all, which is treated as a failure rather than a pass, since
+a binary that covers nothing would otherwise report success.
+
+Output goes to stderr: a `run` line before each case and a `ok` or `FAIL` line
+after it, so a case that aborts the process still names itself, plus a
+`file:line` and both sides of the comparison for every failed check.
 
 If the tree is already configured, the build and run alone are:
 
