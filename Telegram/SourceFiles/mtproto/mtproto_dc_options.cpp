@@ -268,20 +268,17 @@ void DcOptions::processFromList(
 	const auto difference = [&] {
 		WriteLocker lock(this);
 		// This is the one endpoint write that does not go through
-		// applyOneGuarded(), so it applies the same refusal itself.
-		for (auto i = begin(data); i != end(data);) {
-			if (refusesEndpointUnlocked(i->first)) {
-				i = data.erase(i);
-			} else {
-				++i;
-			}
-		}
-		if (data.empty()) {
-			// Everything was refused — the server advertised its DC
-			// under an id the user did not pin, or this config is
-			// blocked. Assigning an empty table here would drop the
-			// pinned endpoint, and nothing could put it back, since
-			// only the pinned dc id is accepted afterwards.
+		// applyOneGuarded(), so it carries its own refusal — checked
+		// here, at the write and under the lock, so a pin installed
+		// while this response was being parsed still wins.
+		//
+		// A pinned account keeps the address the user typed and
+		// verified for the session. Under overwrite this table is
+		// built from scratch, so a server advertising the pinned dc id
+		// at some other address it knows itself by — a LAN ip, a
+		// tunnel, a container address — would replace the endpoint it
+		// was actually reached on and strand the client.
+		if (_blocked || hasCustomServerUnlocked()) {
 			return std::vector<DcId>();
 		}
 		auto result = CountOptionsDifference(_data, data);
