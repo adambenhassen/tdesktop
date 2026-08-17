@@ -14,6 +14,53 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace {
 
+struct BIODeleter {
+	void operator()(BIO *value) {
+		BIO_free(value);
+	}
+};
+
+// The labels a PEM block may carry. A block that carries one of these is
+// a key the user can read; what kind it is decides the status.
+// "RSA PRIVATE KEY" is the PKCS#1 label; the labels without RSA in them
+// are PKCS#8 or an algorithm we cannot use either way, so the user is
+// told the same thing for all of them.
+constexpr const char *const kPrivateLabels[] = {
+	"BEGIN RSA PRIVATE KEY",
+	"BEGIN PRIVATE KEY",
+	"BEGIN EC PRIVATE KEY",
+	"BEGIN ENCRYPTED PRIVATE KEY",
+};
+
+// What kind of key the input is, or none at all.
+enum class KeyKind {
+	None,
+	Private,
+};
+
+[[nodiscard]] KeyKind ClassifyKey(bytes::const_span pem) {
+	const auto array = QByteArray::fromRawData(
+		reinterpret_cast<const char *>(pem.data()),
+		pem.size());
+	for (const auto label : kPrivateLabels) {
+		if (array.indexOf(label) < 0) {
+			continue;
+		}
+		// A label alone is not proof: a block that merely mentions one
+		// and then fails to parse is not a readable key, so it stays
+		// Unreadable. The label only decides the status once the block
+		// parses.
+		const auto bio = std::unique_ptr<BIO, BIODeleter>(
+			BIO_new_mem_buf(
+				const_cast<gsl::byte *>(pem.data()),
+				pem.size()));
+		if (PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr)) {
+			return KeyKind::Private;
+		}
+	}
+	return KeyKind::None;
+}
+
 // The exchange encrypts a fixed 256 byte block with RSA_NO_PADDING, so
 // a key of any other size cannot complete it: it would fail much later
 // and look like an unreachable server.
@@ -104,9 +151,18 @@ ServerKeyCheck CheckServerKey(const QString &pem) {
 	if (utf8.isEmpty()) {
 		return { .status = ServerKeyStatus::Empty };
 	}
+	// The kind is decided before the key is read, and only the kind is
+	// kept: a private key is reported as "a private key", and nothing
+	// about it is logged, stored or returned.
+	const auto kind = ClassifyKey(bytes::make_span(utf8));
 	auto key = details::RSAPublicKey(bytes::make_span(utf8));
 	if (!key.valid()) {
-		return { .status = ServerKeyStatus::Unreadable };
+		// An RSA public key parses through the RSAPublicKey reader, so
+		// the kind only decides between the refusals for everything
+		// else that is readable.
+		return (kind == KeyKind::Private)
+			? ServerKeyCheck{ .status = ServerKeyStatus::PrivateKey }
+			: ServerKeyCheck{ .status = ServerKeyStatus::Unreadable };
 	} else if (key.modulusBits() != kRequiredModulusBits) {
 		return { .status = ServerKeyStatus::BadModulusSize };
 	}
