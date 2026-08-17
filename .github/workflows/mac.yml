@@ -15,9 +15,9 @@ jobs:
 
   macos:
     name: MacOS
-    # Tags deliberately fall through to the hosted runner: this fork cannot
-    # schedule a depot label, and a tag build that queues forever is not a build.
-    runs-on: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/nightly') && 'depot-macos-latest' || 'macos-latest' }}
+    # This fork cannot schedule a depot label, and a build that queues forever
+    # is not a build. macos-latest is Apple Silicon, which is what we ship.
+    runs-on: macos-latest
 
     strategy:
       matrix:
@@ -31,6 +31,15 @@ jobs:
     steps:
       - name: Get repository name.
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Report runner architecture.
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "cpu: $(sysctl -n machdep.cpu.brand_string)"
+          test "$(uname -m)" = "arm64" || {
+            echo "::error::Runner is $(uname -m), not arm64; this lane only produces Apple Silicon builds."
+            exit 1
+          }
 
       - name: Clone.
         uses: actions/checkout@v7
@@ -55,7 +64,7 @@ jobs:
 
       - name: Libraries cache.
         id: cache-libs
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: |
             Libraries
@@ -64,11 +73,32 @@ jobs:
           restore-keys: ${{ runner.OS }}-libs-
 
       - name: Libraries.
+        id: libraries
         run: |
           ./$REPO_NAME/Telegram/build/prepare/mac.sh skip-release silent
 
       - name: Free up some disk space.
         run: find Libraries '(' '(' ! '(' -name '*.a' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -perm +111 ')' -type f ')' -o -empty ')' -delete
+
+      # Saved only from the default branch. Every other ref reads that entry
+      # instead of writing its own: the fork's Actions cache is already over
+      # its 10 GB budget and evicting, and any other copy of this tree would
+      # evict the entry the whole fork builds against. A tag ref would be the
+      # worst of those, since its cache is scoped to the tag and no branch,
+      # including dev, can ever restore it.
+      # Placed before the build step, so an hour of dependency work is not
+      # thrown away when the client code that follows fails to compile.
+      # !cancelled() rather than always(): under cancel-in-progress a
+      # cancellation can land mid-trim, and this key is immutable, so a
+      # half-trimmed tree would be the one every later run restores.
+      - name: Save libraries cache.
+        if: ${{ !cancelled() && steps.libraries.outcome == 'success' && steps.cache-libs.outputs.cache-hit != 'true' && github.ref == 'refs/heads/dev' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
 
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
@@ -79,12 +109,17 @@ jobs:
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
             echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Telegram ${{ matrix.defines }}" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Telegram-macOS-arm64 ${{ matrix.defines }}" >> $GITHUB_ENV
           else
-            echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Telegram-macOS-arm64" >> $GITHUB_ENV
           fi
 
+          # cmake/validate_special_target.cmake defaults this to "x86_64;arm64",
+          # so the inherited build spent half its compile time on a slice no one
+          # here can run. The prepared Libraries are universal, so linking an
+          # arm64-only client against them needs nothing else.
           ./configure.sh \
+          -D CMAKE_OSX_ARCHITECTURES=arm64 \
           -D CMAKE_CONFIGURATION_TYPES=Debug \
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
           -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
@@ -94,6 +129,21 @@ jobs:
           $DEFINE
 
           cmake --build ../out --config Debug --parallel
+
+      - name: Verify artifact architecture.
+        if: env.UPLOAD_ARTIFACT == 'true'
+        run: |
+          cd $REPO_NAME/out/Debug
+          for binary in Telegram.app/Contents/MacOS/Telegram Updater; do
+            echo "== $binary"
+            file "$binary"
+            archs=$(lipo -archs "$binary")
+            echo "lipo -archs: $archs"
+            test "$archs" = "arm64" || {
+              echo "::error::$binary is '$archs', expected arm64."
+              exit 1
+            }
+          done
 
       - name: Move artifact.
         if: env.UPLOAD_ARTIFACT == 'true'
