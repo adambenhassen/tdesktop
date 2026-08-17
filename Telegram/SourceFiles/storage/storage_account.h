@@ -99,6 +99,11 @@ public:
 	// survives a restart on its own: the blocked config is never
 	// written back, and the prefs that failed to read are deleted.
 	void writeCustomServerBlocked(bool pinUnknown);
+	// Forget which server this account uses, on the user's explicit
+	// choice. Clears the two markers and nothing else — the block is
+	// otherwise terminal, since only a config write clears them and a
+	// blocked account never performs one.
+	void clearCustomServerBlocked();
 
 	void writeSessionSettings();
 	void writeMtpData();

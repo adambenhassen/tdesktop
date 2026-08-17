@@ -1264,6 +1264,20 @@ void Account::writeCustomServerBlocked(bool pinUnknown) {
 	writePrefs();
 }
 
+void Account::clearCustomServerBlocked() {
+	Expects(_localKey != nullptr);
+
+	// The user chose to forget which server this account uses. Only the
+	// two markers go: the account, its keys and its local history stay
+	// exactly as they are, because what failed here is a settings read,
+	// not anything the data itself did wrong.
+	_hasStoredCustomServer = false;
+	_customServerPinUnknown = false;
+	clearPref(kCustomServerPinnedPref);
+	clearPref(kCustomServerPinUnknownPref);
+	writePrefs();
+}
+
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
 	Expects(_localKey != nullptr);
 

@@ -56,21 +56,24 @@ enum class PinFailure {
 }
 
 [[nodiscard]] QString PinFailureText(PinFailure failure) {
-	// A user who never pinned a server must not be told to re-enter
-	// one, so the unreadable-prefs case gets its own wording.
-	return (failure == PinFailure::MarkerUnreadable)
-		? u"This account's local data could not be read, so there is no "
-			u"way to tell which server it belongs to.\n\n"
-			u"It will not connect to anything until that is resolved, "
-			u"rather than risk signing in to the wrong one. Add the "
-			u"account again to start over.\n\n"
-			u"See 'log.txt' for details."_q
-		: u"Could not load the saved server settings for this "
-			u"account.\n\n"
-			u"The account is pinned to a custom server, so it will not "
-			u"connect to Telegram's servers instead. Add the account "
-			u"again to re-enter the server address and its key.\n\n"
-			u"See 'log.txt' for details."_q;
+	// A user who never pinned a server must not be told they did, so
+	// the unreadable-prefs case gets its own cause. Not knowing which
+	// server this account uses is the state that case is reporting, so
+	// the rest of the text must not imply the app knows either.
+	const auto cause = (failure == PinFailure::MarkerUnreadable)
+		? u"This account's local data could not be read, so there is "
+			u"no way to tell which server it belongs to."_q
+		: u"The saved server settings for this account could not be "
+			u"loaded. The account is pinned to a custom server, so it "
+			u"will not connect to Telegram's servers instead."_q;
+	return cause + u"\n\n"
+		u"Until you decide, it connects to nothing.\n\n"
+		u"Forgetting the server clears that setting on this device and "
+		u"restarts the app. Nothing else is removed — your messages and "
+		u"local data stay. If this account used a private server, its "
+		u"address and key have to be entered again; until they are, "
+		u"this app connects to Telegram's servers.\n\n"
+		u"See 'log.txt' for details."_q;
 }
 
 [[nodiscard]] QString ComposeDataString(const QString &dataName, int index) {
@@ -151,8 +154,24 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		// to production.
 		_local->writeCustomServerBlocked(
 			failure == PinFailure::MarkerUnreadable);
-		crl::on_main(this, [text = PinFailureText(failure)] {
-			Ui::show(Ui::MakeInformBox(text));
+		// Only a config write clears the markers, and a blocked account
+		// never performs one, so without a way out the block is
+		// terminal — including for an account that never had a custom
+		// server and whose config reads perfectly. This is that way
+		// out: a confirm the user has to choose, never the default
+		// action of a box they are dismissing.
+		crl::on_main(this, [=, text = PinFailureText(failure)] {
+			Ui::show(Ui::MakeConfirmBox({
+				.text = text,
+				.confirmed = crl::guard(this, [=](Fn<void()> close) {
+					LOG(("MTP Info: forgetting the custom server pin for "
+						"this account on the user's request."));
+					_local->clearCustomServerBlocked();
+					close();
+					Core::Restart();
+				}),
+				.confirmText = u"Forget server"_q,
+			}));
 		});
 	} else if (!config) {
 		config = std::make_unique<MTP::Config>(
