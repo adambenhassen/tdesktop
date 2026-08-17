@@ -6,11 +6,6 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      # TEMPORARY, removed in the next commit on this branch. Our token cannot
-      # create a workflow_dispatch event, and a v* tag would write a
-      # tag-scoped libraries cache no branch can ever read.
-      - 'ci/MAIN-345-macos-arm64'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
