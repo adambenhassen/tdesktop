@@ -48,6 +48,12 @@ RSA *CreateRaw(bytes::const_span key) {
 		return PEM_read_bio_RSAPublicKey(bio.get(), nullptr, nullptr, nullptr);
 	case Format::RSA_PUBKEY:
 		return PEM_read_bio_RSA_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
+	case Format::Unknown:
+		// Keys reach this from outside the process: a CDN config
+		// answer, and now a key the user pastes. A block we do not
+		// recognise is an invalid key to report, not an impossible
+		// state to abort on. valid() is false for the result.
+		return nullptr;
 	}
 	Unexpected("format in RSAPublicKey::Private::Create.");
 }
@@ -64,6 +70,8 @@ public:
 	[[nodiscard]] uint64 fingerprint() const;
 	[[nodiscard]] bytes::vector getN() const;
 	[[nodiscard]] bytes::vector getE() const;
+	[[nodiscard]] int modulusBits() const;
+	[[nodiscard]] bytes::vector getSubjectPublicKeyInfo() const;
 	[[nodiscard]] bytes::vector encrypt(bytes::const_span data) const;
 	[[nodiscard]] bytes::vector decrypt(bytes::const_span data) const;
 	[[nodiscard]] bytes::vector encryptOAEPpadding(
@@ -123,6 +131,34 @@ bytes::vector RSAPublicKey::Private::getE() const {
 	const BIGNUM *e;
 	RSA_get0_key(_rsa, nullptr, &e, nullptr);
 	return ToBytes(e);
+}
+
+int RSAPublicKey::Private::modulusBits() const {
+	Expects(valid());
+
+	return RSA_bits(_rsa);
+}
+
+bytes::vector RSAPublicKey::Private::getSubjectPublicKeyInfo() const {
+	Expects(valid());
+
+	// i2d_RSA_PUBKEY() writes the SubjectPublicKeyInfo encoding.
+	// i2d_RSAPublicKey(), four characters away, writes the bare PKCS#1
+	// one: it also compiles, also produces a digest, and that digest
+	// names no server.
+	auto der = (unsigned char*)nullptr;
+	const auto size = i2d_RSA_PUBKEY(_rsa, &der);
+	if (size <= 0 || !der) {
+		OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
+		LOG(("RSA Error: i2d_RSA_PUBKEY failed, key fp: %1, error: %2"
+			).arg(fingerprint()
+			).arg(ERR_error_string(ERR_get_error(), 0)
+			));
+		return {};
+	}
+	auto result = bytes::make_vector(bytes::make_span(der, size));
+	OPENSSL_free(der);
+	return result;
 }
 
 bytes::vector RSAPublicKey::Private::encrypt(bytes::const_span data) const {
@@ -244,6 +280,18 @@ bytes::vector RSAPublicKey::getE() const {
 	Expects(valid());
 
 	return _private->getE();
+}
+
+int RSAPublicKey::modulusBits() const {
+	Expects(valid());
+
+	return _private->modulusBits();
+}
+
+bytes::vector RSAPublicKey::getSubjectPublicKeyInfo() const {
+	Expects(valid());
+
+	return _private->getSubjectPublicKeyInfo();
 }
 
 bytes::vector RSAPublicKey::encrypt(bytes::const_span data) const {

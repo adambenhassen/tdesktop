@@ -31,6 +31,15 @@ public:
 	[[nodiscard]] bytes::vector getN() const;
 	[[nodiscard]] bytes::vector getE() const;
 
+	[[nodiscard]] int modulusBits() const;
+
+	// The DER SubjectPublicKeyInfo encoding of this key: the algorithm
+	// identifier and the key, which is what a server digests to name
+	// its own key. This is not the bare PKCS#1 RSAPublicKey encoding
+	// that getN() and getE() carry. The two produce different digests
+	// for the same key. Empty if the encoding failed.
+	[[nodiscard]] bytes::vector getSubjectPublicKeyInfo() const;
+
 	// data has exactly 256 chars to be encrypted
 	[[nodiscard]] bytes::vector encrypt(bytes::const_span data) const;
 
