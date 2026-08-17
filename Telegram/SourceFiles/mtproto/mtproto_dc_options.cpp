@@ -238,6 +238,11 @@ void DcOptions::processFromList(
 
 	const auto difference = [&] {
 		WriteLocker lock(this);
+		// This is the one endpoint write that does not go through
+		// applyOneGuarded(), so the blocked refusal has to be here too.
+		if (_blocked) {
+			return std::vector<DcId>();
+		}
 		auto result = CountOptionsDifference(_data, data);
 		if (!result.empty()) {
 			_data = std::move(data);
@@ -292,9 +297,10 @@ void DcOptions::addFromOther(DcOptions &&options) {
 				}
 			}
 			for (auto &item : options._cdnPublicKeys) {
-				// A CDN key for the pinned custom DC id would shadow the
+				// A blocked config holds no key at all, and a CDN key
+				// for the pinned custom DC id would shadow the
 				// user-verified key in getDcRSAKey().
-				if (isCustomServerPinnedUnlocked(item.first)) {
+				if (_blocked || isCustomServerPinnedUnlocked(item.first)) {
 					continue;
 				}
 				for (auto &entry : item.second) {
@@ -761,6 +767,11 @@ void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	Expects(server.key != nullptr);
 
+	// A blocked config is one whose pinned server could not be read
+	// back, and this is the user handing that server over again. Lift
+	// the block so the endpoint takes and the config is persisted
+	// again; the caller is supplying the key the block existed for.
+	_blocked = false;
 	_customServer = server;
 	// The pinned key replaces the built-in key table for this account,
 	// it is not merged into it.

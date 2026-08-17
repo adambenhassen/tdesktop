@@ -39,16 +39,16 @@ ConfigLoader::ConfigLoader(
 }
 
 void ConfigLoader::load() {
-	if (_instance->dcOptions().blocked()) {
-		// No endpoint to ask and no key to ask it with.
-		return;
-	}
 	if (!_instance->isKeysDestroyer()) {
 		sendRequest(_instance->mainDcId());
 		_enumDCTimer.callOnce(kEnumerateDcTimeout);
 	} else {
 		auto ids = _instance->dcOptions().configEnumDcIds();
-		Assert(!ids.empty());
+		if (ids.empty()) {
+			// Keys to destroy are copied onto a clone of the account's
+			// config, so a blocked one reaches here with no endpoint.
+			return;
+		}
 		_enumCurrent = ids.front();
 		enumerate();
 	}
@@ -104,7 +104,14 @@ void ConfigLoader::enumerate() {
 		_enumCurrent = _instance->mainDcId();
 	}
 	auto ids = _instance->dcOptions().configEnumDcIds();
-	Assert(!ids.empty());
+	if (ids.empty()) {
+		// A blocked config holds no endpoint at all, so there is
+		// nothing to enumerate. Keep the timer running instead of
+		// asserting: re-entering the pinned server puts an endpoint
+		// back, and this is what picks it up.
+		_enumDCTimer.callOnce(kEnumerateDcTimeout);
+		return;
+	}
 
 	auto i = std::find(ids.cbegin(), ids.cend(), _enumCurrent);
 	if (i == ids.cend() || (++i) == ids.cend()) {
