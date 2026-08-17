@@ -20,46 +20,66 @@ struct BIODeleter {
 	}
 };
 
-// The labels a PEM block may carry. A block that carries one of these is
-// a key the user can read; what kind it is decides the status.
-// "RSA PRIVATE KEY" is the PKCS#1 label; the labels without RSA in them
-// are PKCS#8 or an algorithm we cannot use either way, so the user is
-// told the same thing for all of them.
-constexpr const char *const kPrivateLabels[] = {
-	"BEGIN RSA PRIVATE KEY",
-	"BEGIN PRIVATE KEY",
-	"BEGIN EC PRIVATE KEY",
-	"BEGIN ENCRYPTED PRIVATE KEY",
+struct PkeyDeleter {
+	void operator()(EVP_PKEY *value) {
+		EVP_PKEY_free(value);
+	}
 };
 
-// What kind of key the input is, or none at all.
-enum class KeyKind {
-	None,
-	Private,
+// The names a private key frame may carry. "RSA PRIVATE KEY" is the
+// PKCS#1 name; the names without RSA in them are PKCS#8 or an
+// algorithm we cannot use either way, so the user is told the same
+// thing for all of them.
+constexpr const char *const kPrivateNames[] = {
+	"RSA PRIVATE KEY",
+	"PRIVATE KEY",
+	"EC PRIVATE KEY",
+	"ENCRYPTED PRIVATE KEY",
 };
 
-[[nodiscard]] KeyKind ClassifyKey(bytes::const_span pem) {
-	const auto array = QByteArray::fromRawData(
-		reinterpret_cast<const char *>(pem.data()),
-		pem.size());
-	for (const auto label : kPrivateLabels) {
-		if (array.indexOf(label) < 0) {
+// A private key frame: a "-----BEGIN <label>-----" line with its
+// matching "-----END <label>-----". The check is a frame check, not a
+// parse: the validator must not decode private key material, so it
+// never touches the base64, and a mangled body still says what the
+// user pasted. A paste containing the frame is refused, even if a
+// public key also parses out of the same text.
+[[nodiscard]] bool HasPrivateFrame(const QByteArray &text) {
+	for (const auto name : kPrivateNames) {
+		const auto begin = text.indexOf(
+			QByteArray("-----BEGIN ").append(name).append("-----"));
+		if (begin < 0) {
 			continue;
 		}
-		// A label alone is not proof: a block that merely mentions one
-		// and then fails to parse is not a readable key, so it stays
-		// Unreadable. The label only decides the status once the block
-		// parses.
-		const auto bio = std::unique_ptr<BIO, BIODeleter>(
-			BIO_new_mem_buf(
-				const_cast<gsl::byte *>(pem.data()),
-				pem.size()));
-		if (PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr)) {
-			return KeyKind::Private;
+		const auto end = text.indexOf(
+			QByteArray("-----END ").append(name).append("-----"),
+			begin);
+		if (end > begin) {
+			return true;
 		}
 	}
-	return KeyKind::None;
+	return false;
 }
+
+// The algorithm of a readable public key, or -1 when the input is not
+// a public key at all. A public key costs nothing to decode, so the
+// parsed algorithm id is the discriminator the label cannot give:
+// every algorithm's SPKI block carries the same "BEGIN PUBLIC KEY"
+// label.
+[[nodiscard]] int PublicKeyAlgorithm(bytes::const_span pem) {
+	const auto bio = std::unique_ptr<BIO, BIODeleter>(
+		BIO_new_mem_buf(
+			const_cast<gsl::byte *>(pem.data()),
+			pem.size()));
+	const auto pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>(
+		PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr));
+	return pkey ? EVP_PKEY_base_id(pkey.get()) : -1;
+}
+
+// A paste is a key the user typed, and a key the user typed fits in a
+// screen. Anything over this is not a key, and the bound keeps the
+// length out of the int range the BIO length parameter cannot carry.
+// The room is for a 4096 bit key and its armor, with margin.
+constexpr auto kMaxKeySize = 8192;
 
 // The exchange encrypts a fixed 256 byte block with RSA_NO_PADDING, so
 // a key of any other size cannot complete it: it would fail much later
@@ -151,17 +171,27 @@ ServerKeyCheck CheckServerKey(const QString &pem) {
 	if (utf8.isEmpty()) {
 		return { .status = ServerKeyStatus::Empty };
 	}
-	// The kind is decided before the key is read, and only the kind is
-	// kept: a private key is reported as "a private key", and nothing
-	// about it is logged, stored or returned.
-	const auto kind = ClassifyKey(bytes::make_span(utf8));
+	if (utf8.size() > kMaxKeySize) {
+		return { .status = ServerKeyStatus::Unreadable };
+	}
+	const auto text = QByteArray::fromRawData(
+		reinterpret_cast<const char *>(utf8.data()),
+		utf8.size());
+	// The private frame is checked first, and it refuses on its own:
+	// a paste that carries somebody's private key is not a usable
+	// public key, even if one also parses out of the same text. The
+	// check reads the frame, not the key, so nothing of the secret is
+	// decoded, logged, stored or returned.
+	if (HasPrivateFrame(text)) {
+		return { .status = ServerKeyStatus::PrivateKey };
+	}
 	auto key = details::RSAPublicKey(bytes::make_span(utf8));
 	if (!key.valid()) {
-		// An RSA public key parses through the RSAPublicKey reader, so
-		// the kind only decides between the refusals for everything
-		// else that is readable.
-		return (kind == KeyKind::Private)
-			? ServerKeyCheck{ .status = ServerKeyStatus::PrivateKey }
+		// A readable public key that is not RSA is a different mistake
+		// from not a key at all, and the algorithm id is what tells
+		// them apart.
+		return (PublicKeyAlgorithm(bytes::make_span(utf8)) >= 0)
+			? ServerKeyCheck{ .status = ServerKeyStatus::NotRsaKey }
 			: ServerKeyCheck{ .status = ServerKeyStatus::Unreadable };
 	} else if (key.modulusBits() != kRequiredModulusBits) {
 		return { .status = ServerKeyStatus::BadModulusSize };
