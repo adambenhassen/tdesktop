@@ -1,0 +1,7 @@
+# ubuntu-slim is a GitHub-hosted label that postdates actionlint's built-in
+# list, so the linter reports it as unknown. The issue-housekeeping lanes have
+# been scheduling on it successfully (run 31988522844, stale.yml on dev), so it
+# is declared here rather than rewritten to ubuntu-latest.
+self-hosted-runner:
+  labels:
+    - ubuntu-slim
