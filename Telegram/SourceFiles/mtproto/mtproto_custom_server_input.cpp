@@ -27,17 +27,16 @@ struct PkeyDeleter {
 };
 
 // A private key frame: a "-----BEGIN <label>-----" line whose label
-// contains "PRIVATE KEY", with its matching "-----END <label>-----".
-// The check is a frame check, not a parse: the validator must not
-// decode private key material, so it never touches the base64, and a
-// mangled body still says what the user pasted. A paste containing the
-// frame is refused, even if a public key also parses out of the same
-// text. One scan over the BEGIN lines covers every label OpenSSL or
-// another tool may use, so the cost does not grow with the number of
-// known names.
+// contains "PRIVATE KEY". The check is a frame check, not a parse:
+// the validator must not decode private key material, so it never
+// touches the base64, and a mangled body still says what the user
+// pasted. A paste containing the frame is refused, even if a public
+// key also parses out of the same text. The BEGIN line is the answer
+// on its own, so the check is one linear pass: no search for the
+// matching END, and the cost does not grow with the number of known
+// names.
 [[nodiscard]] bool HasPrivateFrame(const QByteArray &text) {
 	const auto kBegin = QByteArray("-----BEGIN ");
-	const auto kEnd = QByteArray("-----END ");
 	const auto kPrivate = QByteArray("PRIVATE KEY");
 	const auto kDashes = QByteArray("-----");
 
@@ -50,12 +49,7 @@ struct PkeyDeleter {
 		}
 		const auto label = text.mid(labelStart, labelEnd - labelStart);
 		if (label.contains(kPrivate)) {
-			const auto end = text.indexOf(
-				kEnd + label + kDashes,
-				labelEnd);
-			if (end > pos) {
-				return true;
-			}
+			return true;
 		}
 		pos = labelEnd + kDashes.size();
 	}

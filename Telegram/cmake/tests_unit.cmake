@@ -27,6 +27,7 @@ target_precompile_headers(test_unit PRIVATE ${src_loc}/mtproto/mtproto_pch.h)
 nice_target_sources(test_unit ${src_loc}
 PRIVATE
     tests/unit/logs_stub.cpp
+    tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
