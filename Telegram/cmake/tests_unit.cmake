@@ -18,15 +18,18 @@ init_target(test_unit "(tests)")
 
 target_include_directories(test_unit PRIVATE ${src_loc})
 
+# The mtproto headers are written expecting this prelude — scheme.h, rpl,
+# crl — because every target that compiles them has it precompiled. A test
+# including mtproto_dc_options.h without it fails on MTPDdcOption. Reuse
+# td_mtproto's own header rather than adding includes to app files.
+target_precompile_headers(test_unit PRIVATE ${src_loc}/mtproto/mtproto_pch.h)
+
 nice_target_sources(test_unit ${src_loc}
 PRIVATE
     tests/unit/logs_stub.cpp
     tests/unit/mtproto_dc_options_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
-
-    storage/serialize_common.cpp
-    storage/serialize_common.h
 )
 
 target_link_libraries(test_unit
