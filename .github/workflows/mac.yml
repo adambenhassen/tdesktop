@@ -80,14 +80,19 @@ jobs:
       - name: Free up some disk space.
         run: find Libraries '(' '(' ! '(' -name '*.a' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -perm +111 ')' -type f ')' -o -empty ')' -delete
 
-      # Saved only from the default branch and release tags. Every other ref
-      # reads that entry instead of writing its own: the fork's Actions cache
-      # is already over its 10 GB budget and evicting, and a per-branch copy of
-      # this tree would evict the entry the whole fork builds against.
-      # Saved after the trim, and with always(), so an hour of dependency work
-      # is not thrown away when the client code that follows fails to compile.
+      # Saved only from the default branch. Every other ref reads that entry
+      # instead of writing its own: the fork's Actions cache is already over
+      # its 10 GB budget and evicting, and any other copy of this tree would
+      # evict the entry the whole fork builds against. A tag ref would be the
+      # worst of those, since its cache is scoped to the tag and no branch,
+      # including dev, can ever restore it.
+      # Placed before the build step, so an hour of dependency work is not
+      # thrown away when the client code that follows fails to compile.
+      # !cancelled() rather than always(): under cancel-in-progress a
+      # cancellation can land mid-trim, and this key is immutable, so a
+      # half-trimmed tree would be the one every later run restores.
       - name: Save libraries cache.
-        if: always() && steps.libraries.outcome == 'success' && steps.cache-libs.outputs.cache-hit != 'true' && (github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))
+        if: ${{ !cancelled() && steps.libraries.outcome == 'success' && steps.cache-libs.outputs.cache-hit != 'true' && github.ref == 'refs/heads/dev' }}
         uses: actions/cache/save@v6
         with:
           path: |
