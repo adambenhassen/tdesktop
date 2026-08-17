@@ -462,14 +462,13 @@ QByteArray DcOptions::serialize() const {
 	// cannot match and the pin is silently ineffective.
 	bool pinned = false;
 	qint32 customDcId = 0, customPort = 0;
-	qint32 customIpSize = 0;
-	bytes::vector customKeyN, customKeyE, customIp;
+	auto customIp = std::string();
+	bytes::vector customKeyN, customKeyE;
 	if (_customServer.key) {
 		pinned = true;
 		customDcId = _customServer.dcId;
 		customPort = _customServer.port;
-		customIp.assign(_customServer.ip.begin(), _customServer.ip.end());
-		customIpSize = qint32(customIp.size());
+		customIp = _customServer.ip;
 		customKeyN = _customServer.key->getN();
 		customKeyE = _customServer.key->getE();
 	}
@@ -519,10 +518,10 @@ QByteArray DcOptions::serialize() const {
 		// Pinned custom server (v3).
 		stream << qint32(pinned ? 1 : 0);
 		if (pinned) {
-			stream << customDcId << customPort << customIpSize;
-			stream.writeRawData(
-				reinterpret_cast<const char*>(customIp.data()),
-				customIp.size());
+			stream << customDcId
+				<< customPort
+				<< qint32(customIp.size());
+			stream.writeRawData(customIp.data(), customIp.size());
 			stream
 				<< Serialize::bytes(customKeyN)
 				<< Serialize::bytes(customKeyE);
