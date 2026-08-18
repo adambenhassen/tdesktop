@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_start.h"
 #include "intro/intro_phone.h"
 #include "intro/intro_qr.h"
+#include "intro/intro_server.h"
 #include "intro/intro_code.h"
 #include "intro/intro_signup.h"
 #include "intro/intro_password_check.h"
@@ -109,14 +110,13 @@ Widget::Widget(
 
 	switch (point) {
 	case EnterPoint::Start:
-		getNearestDC();
 		appendStep(new StartWidget(this, _account, getData()));
 		break;
 	case EnterPoint::Phone:
 		appendStep(new PhoneWidget(this, _account, getData()));
 		break;
 	case EnterPoint::Qr:
-		appendStep(new QrWidget(this, _account, getData()));
+		appendStep(new ServerWidget(this, _account, getData()));
 		break;
 	default: Unexpected("Enter point in Intro::Widget::Widget.");
 	}
@@ -372,6 +372,10 @@ void Widget::setupStep() {
 		}
 	}, getStep()->lifetime());
 
+	getStep()->backAvailable() | rpl::on_next([=](bool available) {
+		_back->toggle(available, anim::type::normal);
+	}, getStep()->lifetime());
+
 	getStep()->finishInit();
 }
 
@@ -400,7 +404,7 @@ void Widget::historyMove(StackAction action, Animate animate) {
 
 	getStep()->prepareShowAnimated(wasStep);
 	if (wasStep->hasCover() != getStep()->hasCover()) {
-		_nextTopFrom = wasStep->contentTop() + st::introNextTop;
+		_nextTopFrom = wasStep->nextButtonTop();
 		_controlsTopFrom = wasStep->hasCover() ? st::introCoverHeight : 0;
 		_coverShownAnimation.start(
 			[this] { updateControlsGeometry(); },
@@ -849,7 +853,7 @@ void Widget::updateControlsGeometry() {
 	}
 	_back->moveToLeft(0, controlsTop);
 
-	auto nextTopTo = getStep()->contentTop() + st::introNextTop;
+	auto nextTopTo = getStep()->nextButtonTop();
 	auto nextTop = anim::interpolate(_nextTopFrom, nextTopTo, shown);
 	const auto shownAmount = _nextShownAnimation.value(_nextShown ? 1. : 0.);
 	const auto realNextTop = anim::interpolate(

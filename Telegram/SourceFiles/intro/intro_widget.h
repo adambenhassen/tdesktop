@@ -74,6 +74,10 @@ struct Data {
 
 	Window::TermsLock termsLock;
 
+	// Set by ServerWidget on valid input, consumed by ServerKeyWidget.
+	QString serverAddress;
+	QString serverPem;
+
 	rpl::event_stream<> updated;
 
 };

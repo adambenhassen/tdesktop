@@ -199,14 +199,14 @@ ServerKeyCheck CheckServerKey(const QString &pem) {
 			? ServerKeyCheck{ .status = ServerKeyStatus::NotRsaKey }
 			: ServerKeyCheck{ .status = ServerKeyStatus::Unreadable };
 	} else if (key.modulusBits() != kRequiredModulusBits) {
-		return { .status = ServerKeyStatus::BadModulusSize };
+		return {
+			.status = ServerKeyStatus::BadModulusSize,
+			.modulusBits = key.modulusBits(),
+		};
 	}
 	auto identity = ServerKeyIdentity(key);
 	if (identity.isEmpty()) {
-		// A key we cannot name is a key the user cannot check against
-		// the server, and an unchecked key is the failure this input
-		// exists to prevent, so it does not pass as a usable one.
-		return { .status = ServerKeyStatus::Unreadable };
+		return { .status = ServerKeyStatus::InternalError };
 	}
 	return {
 		.status = ServerKeyStatus::Valid,

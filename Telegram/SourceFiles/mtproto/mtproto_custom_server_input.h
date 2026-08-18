@@ -25,6 +25,9 @@ enum class ServerKeyStatus {
 		// secret, not the public half to paste here.
 	NotRsaKey, // A readable public key, but not an RSA one.
 	BadModulusSize, // A readable RSA key, of a size we cannot talk to.
+	InternalError, // A key that parsed but whose DER encoding failed —
+		// internal error, not a user mistake. Rare: only an allocation
+		// failure reaches it.
 };
 
 // The outcome of checking a pasted key. Anything other than Valid
@@ -34,6 +37,7 @@ struct ServerKeyCheck {
 	ServerKeyStatus status = ServerKeyStatus::Empty;
 	details::RSAPublicKey key;
 	QString identity;
+	int modulusBits = 0; // Set when status == BadModulusSize.
 
 	[[nodiscard]] bool valid() const {
 		return (status == ServerKeyStatus::Valid);
