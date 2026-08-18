@@ -9,6 +9,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/mtproto_custom_server_input.h"
 
+#include <QtCore/QStringList>
+
+#include <string>
+#include <vector>
+
 namespace {
 
 using namespace MTP;
@@ -219,4 +224,297 @@ TEST_CASE(EmptyIsEmpty) {
 
 TEST_CASE(WhitespaceOnlyIsEmpty) {
 	CHECK_EQ(Status("   \n\t  "), S(ServerKeyStatus::Empty));
+}
+
+namespace {
+
+// The identity of kRsa2048Spki, derived from OpenSSL and not from this
+// implementation. The whole point of the value is that it agrees with
+// what a server computes on its own, so pinning whatever the client
+// currently returns would pin a wrong encoding just as happily. To
+// regenerate it, write kRsa2048Spki to key.pem and run:
+//
+//   openssl pkey -pubin -in key.pem -outform DER | openssl dgst -sha256
+//
+// then split the 64 hex characters into 16 dash-separated groups of
+// four. Measured with OpenSSL 3.0.13.
+const char kRsa2048Identity[] = "\
+2c71-40fe-bd64-0fb0-2783-598e-1bac-d718-\
+d185-e7c6-3699-7044-7574-2013-d085-9e7a";
+
+[[nodiscard]] QString Identity(const char *pem) {
+	return CheckServerKey(QString::fromLatin1(pem)).identity;
+}
+
+} // namespace
+
+TEST_CASE(Rsa2048IdentityIsTheOpensslSpkiDigest) {
+	CHECK_EQ(Identity(kRsa2048Spki), QString::fromLatin1(kRsa2048Identity));
+}
+
+// The same key written PKCS#1 instead of SPKI. The identity names the
+// key, not the armor it arrived in, so re-encoding has to reproduce the
+// SPKI byte for byte rather than digesting whatever the user pasted.
+TEST_CASE(Pkcs1PubHasTheSameIdentity) {
+	CHECK_EQ(
+		Identity(kRsa2048Pkcs1Pub),
+		QString::fromLatin1(kRsa2048Identity));
+}
+
+TEST_CASE(IdentityOfAnInvalidKeyIsEmpty) {
+	CHECK_EQ(ServerKeyIdentity(details::RSAPublicKey()), QString());
+}
+
+TEST_CASE(IdentityMatchesIgnoringDashesSpaceAndCase) {
+	const auto computed = QString::fromLatin1(kRsa2048Identity);
+	CHECK(ServerKeyIdentityMatches(computed, computed));
+	CHECK(ServerKeyIdentityMatches(computed.toUpper(), computed));
+	auto undashed = computed;
+	CHECK(ServerKeyIdentityMatches(undashed.remove('-'), computed));
+	auto spaced = computed;
+	CHECK(ServerKeyIdentityMatches(spaced.replace('-', ' '), computed));
+}
+
+// All-or-nothing on purpose: a prefix that compares equal is exactly the
+// "close enough" answer that would let a user accept the wrong key.
+TEST_CASE(IdentityDoesNotMatchAPrefixOrANearMiss) {
+	const auto computed = QString::fromLatin1(kRsa2048Identity);
+	CHECK(!ServerKeyIdentityMatches(computed.left(computed.size() - 1), computed));
+	CHECK(!ServerKeyIdentityMatches(computed.left(4), computed));
+	CHECK(!ServerKeyIdentityMatches(computed + QString::fromLatin1("0"), computed));
+	CHECK(!ServerKeyIdentityMatches(QString(), computed));
+	auto oneOff = computed;
+	oneOff.replace(0, 1, QChar::fromLatin1('3'));
+	CHECK(!ServerKeyIdentityMatches(oneOff, computed));
+	CHECK(!ServerKeyIdentityMatches(
+		QString::fromLatin1("not an identity"),
+		computed));
+}
+
+namespace {
+
+struct NamedPem {
+	const char *name = nullptr;
+	QString pem;
+};
+
+// Every input the validator refuses, including the two generated ones:
+// the guarantee is about all of them, not only the ones that happen to
+// be string literals.
+[[nodiscard]] std::vector<NamedPem> RefusedKeys() {
+	const auto latin1 = [](const char *value) {
+		return QString::fromLatin1(value);
+	};
+	return {
+		{ "empty", QString() },
+		{ "whitespace", latin1("   \n\t  ") },
+		{ "garbage", latin1("this is not a key at all") },
+		{ "rsa1024", latin1(kRsa1024Spki) },
+		{ "ec", latin1(kEcSpki) },
+		{ "ed25519", latin1(kEd25519Spki) },
+		{ "pkcs8Private", latin1(kPrivateFramePkcs8) },
+		{ "pkcs1Private", latin1(kPrivateFramePkcs1) },
+		{ "encryptedPrivate", latin1(kPrivateFrameEncrypted) },
+		{ "ecPrivate", latin1(kPrivateFrameEc) },
+		{ "ed25519Private", latin1(kPrivateFrameEd25519) },
+		{ "opensshPrivate", latin1(kPrivateFrameOpenssh) },
+		{ "corruptPrivate", latin1(kCorruptPrivate) },
+		{ "concatPrivThenPub", latin1(kConcatPrivThenPub) },
+		{ "oversizedPrivate", OversizedPrivateFrame() },
+		{ "paddedValid", PaddedValidKey() },
+	};
+}
+
+// Names the refused inputs that left something usable behind, so a
+// failure says which one rather than just "false".
+[[nodiscard]] QString RefusedKeysLeavingResidue() {
+	auto result = QStringList();
+	for (const auto &entry : RefusedKeys()) {
+		const auto check = CheckServerKey(entry.pem);
+		if (check.valid()
+			|| bool(check)
+			|| !check.key.empty()
+			|| !check.identity.isEmpty()) {
+			result.append(QString::fromLatin1(entry.name));
+		}
+	}
+	return result.join(QString::fromLatin1(", "));
+}
+
+} // namespace
+
+// A caller that ignores the status must not be able to pick up half of a
+// refused key: nothing usable survives a refusal, whatever the reason.
+TEST_CASE(RefusedKeyLeavesNothingBehind) {
+	CHECK_EQ(RefusedKeysLeavingResidue(), QString());
+}
+
+// The other half of the guarantee above. Without this a validator that
+// returned an empty check for everything would satisfy it.
+TEST_CASE(AcceptedKeyCarriesTheKeyAndTheIdentity) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK(bool(check));
+	CHECK(check.key.valid());
+	CHECK_EQ(check.key.modulusBits(), 2048);
+	CHECK_EQ(check.identity, QString::fromLatin1(kRsa2048Identity));
+}
+
+namespace {
+
+[[nodiscard]] int EndpointStatus(const char *value) {
+	return int(CheckServerEndpoint(QString::fromLatin1(value)).status);
+}
+
+[[nodiscard]] int E(ServerEndpointStatus status) {
+	return int(status);
+}
+
+// kMaxHostSize is 45, the length of the longest IPv6 literal, so a host
+// of exactly that many characters is the last one accepted.
+[[nodiscard]] QString HostOfSize(int size, int port) {
+	const auto suffix = QString::fromLatin1(".com");
+	return QString(size - suffix.size(), QChar::fromLatin1('a'))
+		+ suffix
+		+ QChar::fromLatin1(':')
+		+ QString::number(port);
+}
+
+} // namespace
+
+TEST_CASE(EndpointEmpty) {
+	CHECK_EQ(EndpointStatus(""), E(ServerEndpointStatus::Empty));
+	CHECK_EQ(EndpointStatus("   \n\t  "), E(ServerEndpointStatus::Empty));
+}
+
+TEST_CASE(EndpointNoPort) {
+	CHECK_EQ(EndpointStatus("example.com"), E(ServerEndpointStatus::NoPort));
+	CHECK_EQ(EndpointStatus("127.0.0.1"), E(ServerEndpointStatus::NoPort));
+	CHECK_EQ(EndpointStatus("[::1]"), E(ServerEndpointStatus::NoPort));
+}
+
+TEST_CASE(EndpointBadPort) {
+	CHECK_EQ(EndpointStatus("example.com:"), E(ServerEndpointStatus::BadPort));
+	CHECK_EQ(EndpointStatus("example.com:http"), E(ServerEndpointStatus::BadPort));
+	CHECK_EQ(EndpointStatus("example.com:44a"), E(ServerEndpointStatus::BadPort));
+	// toInt() would take both of these; a port is digits.
+	CHECK_EQ(EndpointStatus("example.com:+443"), E(ServerEndpointStatus::BadPort));
+	CHECK_EQ(EndpointStatus("example.com: 443"), E(ServerEndpointStatus::BadPort));
+	CHECK_EQ(EndpointStatus("example.com:0"), E(ServerEndpointStatus::BadPort));
+	CHECK_EQ(EndpointStatus("example.com:65536"), E(ServerEndpointStatus::BadPort));
+	CHECK_EQ(EndpointStatus("example.com:99999999999"), E(ServerEndpointStatus::BadPort));
+	// Brackets closed, then something that is not ":port".
+	CHECK_EQ(EndpointStatus("[::1]443"), E(ServerEndpointStatus::BadPort));
+}
+
+TEST_CASE(EndpointEmptyHost) {
+	CHECK_EQ(EndpointStatus(":443"), E(ServerEndpointStatus::EmptyHost));
+	CHECK_EQ(EndpointStatus("[]:443"), E(ServerEndpointStatus::EmptyHost));
+}
+
+TEST_CASE(EndpointBadHost) {
+	CHECK_EQ(EndpointStatus("[::1:443"), E(ServerEndpointStatus::BadHost));
+	// Brackets say "IP literal", so a hostname inside them is a typo.
+	CHECK_EQ(EndpointStatus("[example.com]:443"), E(ServerEndpointStatus::BadHost));
+	CHECK_EQ(EndpointStatus("exa_mple.com:443"), E(ServerEndpointStatus::BadHost));
+	CHECK_EQ(EndpointStatus("-example.com:443"), E(ServerEndpointStatus::BadHost));
+	CHECK_EQ(EndpointStatus("example-.com:443"), E(ServerEndpointStatus::BadHost));
+	CHECK_EQ(EndpointStatus("example..com:443"), E(ServerEndpointStatus::BadHost));
+	CHECK_EQ(EndpointStatus("exam ple.com:443"), E(ServerEndpointStatus::BadHost));
+}
+
+TEST_CASE(EndpointHostTooLong) {
+	CHECK_EQ(
+		int(CheckServerEndpoint(HostOfSize(46, 443)).status),
+		E(ServerEndpointStatus::HostTooLong));
+	CHECK_EQ(
+		int(CheckServerEndpoint(HostOfSize(45, 443)).status),
+		E(ServerEndpointStatus::Valid));
+}
+
+// Two colons and no brackets is an IPv6 address with or without a port,
+// and there is no telling which. Splitting at the last colon would
+// silently pin a prefix of the address the user meant.
+TEST_CASE(EndpointUnbracketedIPv6) {
+	CHECK_EQ(EndpointStatus("::1:443"), E(ServerEndpointStatus::UnbracketedIPv6));
+	CHECK_EQ(
+		EndpointStatus("2001:db8::1:443"),
+		E(ServerEndpointStatus::UnbracketedIPv6));
+	CHECK_EQ(EndpointStatus("::1"), E(ServerEndpointStatus::UnbracketedIPv6));
+}
+
+TEST_CASE(EndpointValidIPv4) {
+	const auto check = CheckServerEndpoint(QString::fromLatin1("127.0.0.1:443"));
+	CHECK_EQ(int(check.status), E(ServerEndpointStatus::Valid));
+	CHECK(check.valid());
+	CHECK(bool(check));
+	CHECK_EQ(check.host, std::string("127.0.0.1"));
+	CHECK_EQ(check.port, 443);
+	CHECK_EQ(check.ipv6, false);
+}
+
+// The brackets are how the user writes it; the host that comes back is
+// the bare address, and ipv6 has to be set or the endpoint is built for
+// the wrong family.
+TEST_CASE(EndpointValidIPv6) {
+	const auto check = CheckServerEndpoint(
+		QString::fromLatin1("[2001:db8::1]:8443"));
+	CHECK_EQ(int(check.status), E(ServerEndpointStatus::Valid));
+	CHECK_EQ(check.host, std::string("2001:db8::1"));
+	CHECK_EQ(check.port, 8443);
+	CHECK_EQ(check.ipv6, true);
+}
+
+TEST_CASE(EndpointValidHostname) {
+	const auto check = CheckServerEndpoint(
+		QString::fromLatin1("  telegramd.example.com:443  "));
+	CHECK_EQ(int(check.status), E(ServerEndpointStatus::Valid));
+	CHECK_EQ(check.host, std::string("telegramd.example.com"));
+	CHECK_EQ(check.port, 443);
+	CHECK_EQ(check.ipv6, false);
+}
+
+TEST_CASE(EndpointPortBoundsAreInclusive) {
+	CHECK_EQ(EndpointStatus("example.com:1"), E(ServerEndpointStatus::Valid));
+	CHECK_EQ(EndpointStatus("example.com:65535"), E(ServerEndpointStatus::Valid));
+}
+
+namespace {
+
+// One refused endpoint per reason, named so a failure says which one
+// rather than just "false".
+[[nodiscard]] QString RefusedEndpointsLeavingResidue() {
+	const auto refused = QStringList()
+		<< QString()
+		<< QString::fromLatin1("   ")
+		<< QString::fromLatin1("example.com")
+		<< QString::fromLatin1("[::1]")
+		<< QString::fromLatin1("example.com:")
+		<< QString::fromLatin1("example.com:0")
+		<< QString::fromLatin1("example.com:65536")
+		<< QString::fromLatin1("[::1]443")
+		<< QString::fromLatin1(":443")
+		<< QString::fromLatin1("[::1:443")
+		<< QString::fromLatin1("[example.com]:443")
+		<< QString::fromLatin1("exa_mple.com:443")
+		<< QString::fromLatin1("::1:443")
+		<< HostOfSize(46, 443);
+	auto result = QStringList();
+	for (const auto &value : refused) {
+		const auto check = CheckServerEndpoint(value);
+		if (check.valid()
+			|| bool(check)
+			|| !check.host.empty()
+			|| check.port
+			|| check.ipv6) {
+			result.append(u"\"%1\""_q.arg(value));
+		}
+	}
+	return result.join(QString::fromLatin1(", "));
+}
+
+} // namespace
+
+TEST_CASE(RefusedEndpointLeavesNothingBehind) {
+	CHECK_EQ(RefusedEndpointsLeavingResidue(), QString());
 }
