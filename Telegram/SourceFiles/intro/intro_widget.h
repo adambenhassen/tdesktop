@@ -167,7 +167,6 @@ private:
 		details::Animate animate);
 	void appendStep(details::Step *step);
 
-	void getNearestDC();
 	void showTerms(Fn<void()> callback);
 
 	// FloatDelegate
@@ -219,6 +218,7 @@ private:
 
 	std::unique_ptr<Window::ConnectionState> _connecting;
 
+	bool _backAvailable = false;
 	bool _nextShown = true;
 	Ui::Animations::Simple _nextShownAnimation;
 

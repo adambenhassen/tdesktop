@@ -208,5 +208,5 @@ introServerKeyField: InputField(introCountry) {
 introServerPanelWidth: 340px;
 introServerPanelRadius: 6px;
 introServerPanelBg: windowBgOver;
-introServerIdentityFont: font(13px);
+introServerIdentityFont: font(13px monospace);
 introServerCompareField: InputField(introCountry) { width: 324px; }

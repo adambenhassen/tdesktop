@@ -373,6 +373,7 @@ void Widget::setupStep() {
 	}, getStep()->lifetime());
 
 	getStep()->backAvailable() | rpl::on_next([=](bool available) {
+		_backAvailable = available;
 		_back->toggle(available, anim::type::normal);
 	}, getStep()->lifetime());
 
@@ -421,7 +422,6 @@ void Widget::historyMove(StackAction action, Animate animate) {
 	if (action == StackAction::Back || action == StackAction::Replace) {
 		delete base::take(wasStep);
 	}
-	_back->toggle(getStep()->hasBack(), anim::type::normal);
 
 	auto stepHasCover = getStep()->hasCover();
 	_settings->toggle(!stepHasCover, anim::type::normal);
@@ -640,27 +640,6 @@ void Widget::resetAccount() {
 	}));
 }
 
-void Widget::getNearestDC() {
-	if (!_api) {
-		return;
-	}
-	_nearestDcRequestId = _api->request(MTPhelp_GetNearestDc(
-	)).done([=](const MTPNearestDc &result) {
-		_nearestDcRequestId = 0;
-		const auto &nearest = result.c_nearestDc();
-		DEBUG_LOG(("Got nearest dc, country: %1, nearest: %2, this: %3"
-			).arg(qs(nearest.vcountry())
-			).arg(nearest.vnearest_dc().v
-			).arg(nearest.vthis_dc().v));
-		_account->suggestMainDcId(nearest.vnearest_dc().v);
-		const auto nearestCountry = qs(nearest.vcountry());
-		if (getData()->country != nearestCountry) {
-			getData()->country = nearestCountry;
-			getData()->updated.fire({});
-		}
-	}).send();
-}
-
 void Widget::showTerms(Fn<void()> callback) {
 	if (getData()->termsLock.text.text.isEmpty()) {
 		return;
@@ -732,7 +711,7 @@ void Widget::showControls() {
 	if (_terms) {
 		_terms->show(anim::type::instant);
 	}
-	_back->toggle(getStep()->hasBack(), anim::type::instant);
+	_back->toggle(_backAvailable, anim::type::instant);
 }
 
 void Widget::setupNextButton() {

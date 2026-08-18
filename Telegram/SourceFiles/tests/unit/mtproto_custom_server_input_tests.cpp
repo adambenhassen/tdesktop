@@ -580,3 +580,32 @@ namespace {
 TEST_CASE(RefusedEndpointLeavesNothingBehind) {
 	CHECK_EQ(RefusedEndpointsLeavingResidue(), QString());
 }
+
+// The identity of a valid key must be 64 hex chars joined into 16
+// dash-separated groups of 4, totalling 64 + 15 = 79 characters.
+TEST_CASE(ValidKeyIdentityIs79Chars) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK_EQ(check.identity.size(), 79);
+}
+
+// Letter case must be ignored when comparing the typed value against
+// the computed identity: "ABCD" and "abcd" name the same hex digits.
+TEST_CASE(IdentityMatchIsCaseInsensitive) {
+	CHECK(ServerKeyIdentityMatches(u"ABCD"_q, u"abcd"_q));
+}
+
+// A typed value with a different total hex count is always a mismatch,
+// regardless of what prefix matches.
+TEST_CASE(IdentityDifferentHexLengthIsNoMatch) {
+	// "abcd" has 4 hex chars; "abcd-efgh" has 8 — different lengths.
+	CHECK(!ServerKeyIdentityMatches(u"abcd"_q, u"abcd-efgh"_q));
+}
+
+// A valid key's identity must round-trip through ServerKeyIdentityMatches
+// when typed back verbatim.
+TEST_CASE(ValidKeyIdentityMatchesItself) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK(ServerKeyIdentityMatches(check.identity, check.identity));
+}

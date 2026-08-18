@@ -836,10 +836,9 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	// getDcRSAKey(), and telegramd advertises no CDN at all, so a
 	// pinned account keeps no CDN keys.
 	_cdnPublicKeys.clear();
-	const auto isIPv6 = (server.ip.find(':') != std::string::npos);
 	applyOneGuarded(
 		server.dcId,
-		Flag::f_static | (isIPv6 ? Flag::f_ipv6 : 0),
+		Flag::f_static | (server.ipv6 ? Flag::f_ipv6 : Flag(0)),
 		server.ip,
 		server.port,
 		{});

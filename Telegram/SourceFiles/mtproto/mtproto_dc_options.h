@@ -28,6 +28,7 @@ struct CustomServer {
 	int dcId = 0;
 	std::string ip;
 	int port = 0;
+	bool ipv6 = false;
 	std::shared_ptr<details::RSAPublicKey> key;
 
 	[[nodiscard]] bool empty() const {

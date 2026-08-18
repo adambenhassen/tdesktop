@@ -409,6 +409,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_address_no_port"   = "Add the port after the address, for example 203.0.113.10:443.";
 "lng_intro_server_address_bad_port"  = "The port must be a number from 1 to 65535.";
 "lng_intro_server_address_invalid"   = "This is not a valid address. Use host:port, for example 203.0.113.10:443.";
+"lng_intro_server_address_empty_host"  = "The host part is empty. Enter host:port or [ipv6]:port.";
+"lng_intro_server_address_bad_host"    = "That is not a valid host or IP address.";
+"lng_intro_server_address_too_long"    = "The host name is too long.";
+"lng_intro_server_address_ipv6"        = "IPv6 addresses require brackets: [2001:db8::1]:443.";
 "lng_intro_server_key_empty"         = "Paste your server's public key.";
 "lng_intro_server_key_invalid"       = "This is not a public key. Copy the whole block, including the BEGIN and END lines.";
 "lng_intro_server_key_private"       = "This is a private key. Do not share it with anyone. Paste the server's public key instead.";

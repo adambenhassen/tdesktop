@@ -44,6 +44,7 @@ protected:
 
 private:
 	bool _locked = false;
+	QString _lockedIdentity;
 	object_ptr<Ui::InputField> _address;
 	object_ptr<Ui::InputField> _key;
 
@@ -74,6 +75,7 @@ private:
 		None,
 		Match,
 		Mismatch,
+		Unreadable,
 	};
 
 	void commitAndAdvance();
