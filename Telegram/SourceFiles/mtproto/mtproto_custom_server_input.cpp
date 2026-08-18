@@ -322,4 +322,42 @@ ServerEndpointCheck CheckServerEndpoint(const QString &value) {
 	};
 }
 
+bool LooksLikeKeyId(const QString &s) {
+	auto hexCount = 0;
+	for (const auto ch : s) {
+		if (ch == QChar::fromLatin1('-')) continue;
+		if (!((ch >= QChar::fromLatin1('0') && ch <= QChar::fromLatin1('9'))
+			|| (ch >= QChar::fromLatin1('a') && ch <= QChar::fromLatin1('f'))
+			|| (ch >= QChar::fromLatin1('A') && ch <= QChar::fromLatin1('F')))) {
+			return false;
+		}
+		++hexCount;
+	}
+	return hexCount == 64;
+}
+
+QString ExtractKeyId(const QString &text) {
+	const auto needle = u"key_id="_q;
+	const auto pos = text.indexOf(needle);
+	if (pos < 0) {
+		return text.trimmed();
+	}
+	const auto start = pos + needle.size();
+	auto end = start;
+	while (end < text.size() && !text[end].isSpace()) {
+		++end;
+	}
+	auto result = text.mid(start, end - start);
+	if (result.size() >= 2
+		&& result.front() == QChar::fromLatin1('"')
+		&& result.back() == QChar::fromLatin1('"')) {
+		result = result.mid(1, result.size() - 2);
+	}
+	return result;
+}
+
+bool IdentityRowFits(int advance, int innerWidth) {
+	return advance <= innerWidth;
+}
+
 } // namespace MTP

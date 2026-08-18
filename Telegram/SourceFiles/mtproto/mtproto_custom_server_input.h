@@ -101,4 +101,19 @@ struct ServerEndpointCheck {
 // or a hostname; an IPv6 literal is written in brackets, as "[::1]:443".
 [[nodiscard]] ServerEndpointCheck CheckServerEndpoint(const QString &value);
 
+// Whether a string looks like a key_id the server logged: exactly 64
+// hex characters, optionally grouped by dashes every 4 chars. Any
+// other character (including a surrounding quote) is not a key_id.
+[[nodiscard]] bool LooksLikeKeyId(const QString &s);
+
+// If text is a logfmt token of the form key_id=<value>, return the
+// value (stripping surrounding quotes if present); otherwise return
+// text.trimmed(). Lets the user paste a whole server log line.
+[[nodiscard]] QString ExtractKeyId(const QString &text);
+
+// Whether the first identity row fits in the available inner width.
+// A pure measure-vs-width comparison; call once per pixel-size
+// candidate and fall back to a four-row layout at the floor.
+[[nodiscard]] bool IdentityRowFits(int advance, int innerWidth);
+
 } // namespace MTP

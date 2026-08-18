@@ -30,38 +30,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Intro {
 namespace details {
-namespace {
-
-[[nodiscard]] QString ExtractKeyId(const QString &text) {
-	const auto needle = u"key_id="_q;
-	const auto pos = text.indexOf(needle);
-	if (pos < 0) {
-		return text.trimmed();
-	}
-	const auto start = pos + needle.size();
-	auto end = start;
-	while (end < text.size() && !text[end].isSpace()) {
-		++end;
-	}
-	return text.mid(start, end - start);
-}
-
-[[nodiscard]] bool LooksLikeKeyId(const QString &s) {
-	// A key_id is 64 lowercase hex chars, optionally with dashes every 4.
-	auto hexCount = 0;
-	for (const auto ch : s) {
-		if (ch == QChar::fromLatin1('-')) continue;
-		if (!((ch >= QChar::fromLatin1('0') && ch <= QChar::fromLatin1('9'))
-			|| (ch >= QChar::fromLatin1('a') && ch <= QChar::fromLatin1('f'))
-			|| (ch >= QChar::fromLatin1('A') && ch <= QChar::fromLatin1('F')))) {
-			return false;
-		}
-		++hexCount;
-	}
-	return hexCount == 64;
-}
-
-} // namespace
 
 ServerWidget::ServerWidget(
 	QWidget *parent,
@@ -85,7 +53,7 @@ ServerWidget::ServerWidget(
 
 	if (_locked) {
 		_address->setReadOnly(true);
-		_key->setReadOnly(true);
+		_key->hide();
 		const auto cs = account->mtp().dcOptions().customServer();
 		if (cs.key) {
 			_lockedIdentity = MTP::ServerKeyIdentity(*cs.key);
@@ -93,6 +61,41 @@ ServerWidget::ServerWidget(
 				QString::fromStdString(cs.ip)
 				+ u":"_q
 				+ QString::number(cs.port));
+			_identityPanel = object_ptr<Ui::RpWidget>(this);
+			_identityCopy = object_ptr<Ui::LinkButton>(
+				_identityPanel.data(),
+				tr::lng_intro_server_check_copy(tr::now));
+			_identityCopy->setClickedCallback([=] {
+				QGuiApplication::clipboard()->setText(_lockedIdentity);
+				getData()->controller->showToast(
+					tr::lng_text_copied(tr::now));
+			});
+			_identityPanel->paintRequest(
+			) | rpl::on_next([=](QRect) {
+				constexpr auto kRow1Len = 8 * 4 + (8 - 1);
+				const auto row1 = _lockedIdentity.left(kRow1Len) + u"-"_q;
+				const auto row2 = _lockedIdentity.mid(kRow1Len + 1);
+				auto monoFont = QFontDatabase::systemFont(
+					QFontDatabase::FixedFont);
+				const auto innerWidth = _identityPanel->width() - 16;
+				auto px = st::introServerIdentityFont->pixelSize();
+				static constexpr int kFloor = 9;
+				for (; px > kFloor; --px) {
+					monoFont.setPixelSize(px);
+					if (MTP::IdentityRowFits(
+						QFontMetrics(monoFont).horizontalAdvance(row1),
+						innerWidth)) {
+						break;
+					}
+				}
+				monoFont.setPixelSize(px);
+				const auto fm = QFontMetrics(monoFont);
+				auto p = QPainter(_identityPanel.data());
+				p.setFont(monoFont);
+				p.setPen(st::windowFg->c);
+				p.drawText(8, 8 + fm.ascent(), row1);
+				p.drawText(8, 28 + fm.ascent(), row2);
+			}, _identityPanel->lifetime());
 		}
 		showError(rpl::single(tr::lng_intro_server_locked(tr::now)));
 	}
@@ -135,7 +138,16 @@ void ServerWidget::activate() {
 void ServerWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
 	_address->moveToLeft(contentLeft(), contentTop() + 100);
-	_key->moveToLeft(contentLeft(), contentTop() + 167);
+	if (_identityPanel) {
+		const auto panelW = st::introServerPanelWidth;
+		const auto panelH = 44;
+		_identityPanel->setGeometry(
+			contentLeft(), contentTop() + 167, panelW, panelH);
+		_identityCopy->moveToLeft(
+			panelW - _identityCopy->width() - 8, 4);
+	} else {
+		_key->moveToLeft(contentLeft(), contentTop() + 167);
+	}
 }
 
 void ServerWidget::submit() {
@@ -178,6 +190,8 @@ void ServerWidget::submit() {
 		}
 		_address->showError();
 		showError(rpl::single(msg));
+		QAccessibleEvent alertEvent(this, QAccessible::Alert);
+		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 
@@ -211,6 +225,8 @@ void ServerWidget::submit() {
 		}
 		_key->showError();
 		showError(rpl::single(msg));
+		QAccessibleEvent alertEvent(this, QAccessible::Alert);
+		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 
@@ -238,7 +254,10 @@ ServerKeyWidget::ServerKeyWidget(
 	_endpoint = MTP::CheckServerEndpoint(getData()->serverAddress);
 	_keyCheck = MTP::CheckServerKey(getData()->serverPem);
 
-	if (_keyCheck.valid()) {
+	_panelA11yBase = [&] {
+		if (!_keyCheck.valid()) {
+			return tr::lng_intro_server_check_title(tr::now);
+		}
 		const auto identity = _keyCheck.identity;
 		const auto groupsString = [&] {
 			auto result = QString();
@@ -257,12 +276,12 @@ ServerKeyWidget::ServerKeyWidget(
 			}
 			return result;
 		}();
-		_panel->setAccessibleName(
-			tr::lng_intro_server_check_value_a11y(
-				tr::now,
-				lt_groups,
-				groupsString));
-	}
+		return tr::lng_intro_server_check_value_a11y(
+			tr::now,
+			lt_groups,
+			groupsString);
+	}();
+	_panel->setAccessibleName(_panelA11yBase);
 
 	_compare->setAccessibleName(
 		tr::lng_intro_server_check_ph(tr::now));
@@ -353,25 +372,49 @@ void ServerKeyWidget::paintPanel(QPainter &p) {
 	const auto row1 = identity.left(kRow1Len) + u"-"_q;
 	const auto row2 = identity.mid(kRow1Len + 1);
 
+	const auto textX = 8;
+	const auto innerWidth = _panel->width() - textX * 2;
 	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	monoFont.setPixelSize(st::introServerIdentityFont->pixelSize());
+	auto px = st::introServerIdentityFont->pixelSize();
+	static constexpr int kFloor = 9;
+	for (; px > kFloor; --px) {
+		monoFont.setPixelSize(px);
+		if (MTP::IdentityRowFits(
+			QFontMetrics(monoFont).horizontalAdvance(row1),
+			innerWidth)) {
+			break;
+		}
+	}
+	monoFont.setPixelSize(px);
 	const auto monoFm = QFontMetrics(monoFont);
 	p.setFont(monoFont);
 	p.setPen(st::windowFg->c);
 
-	const auto textX = 8;
-	p.drawText(textX, 8 + monoFm.ascent(), row1);
-	p.drawText(textX, 28 + monoFm.ascent(), row2);
+	if (MTP::IdentityRowFits(monoFm.horizontalAdvance(row1), innerWidth)) {
+		p.drawText(textX, 8 + monoFm.ascent(), row1);
+		p.drawText(textX, 28 + monoFm.ascent(), row2);
+	} else {
+		// Floor reached; reflow to 4 rows of 4 groups each.
+		constexpr auto kRowGroups = kHalfGroups / 2;
+		constexpr auto kRowChars = kRowGroups * kGroupSize + (kRowGroups - 1);
+		for (int row = 0; row < 4; ++row) {
+			const auto start = row * (kRowChars + 1);
+			p.drawText(
+				textX,
+				8 + row * 20 + monoFm.ascent(),
+				identity.mid(start, kRowChars) + u"-"_q);
+		}
+	}
 
 	p.setPen(st::shadowFg->c);
-	p.drawLine(8, 68, _panel->width() - 8, 68);
+	p.drawLine(8, 58, _panel->width() - 8, 58);
 
 	const auto verdictY = 152;
 	const auto copyOffset = _copy
 		? (_panel->width() - _copy->width() - 8)
 		: _panel->width();
 	const auto verdictMaxW = copyOffset - 12;
-	const auto verdictRect = QRect(8, verdictY, verdictMaxW, 36);
+	const auto verdictRect = QRect(8, verdictY, verdictMaxW, 30);
 	const auto textOpt = QTextOption(Qt::AlignLeft | Qt::AlignTop);
 	switch (_verdict) {
 	case Verdict::None:
@@ -402,10 +445,10 @@ void ServerKeyWidget::paintPanel(QPainter &p) {
 }
 
 void ServerKeyWidget::updateVerdict() {
-	const auto typed = ExtractKeyId(_compare->getLastText());
+	const auto typed = MTP::ExtractKeyId(_compare->getLastText());
 	if (typed.isEmpty()) {
 		_verdict = Verdict::None;
-	} else if (!LooksLikeKeyId(typed)) {
+	} else if (!MTP::LooksLikeKeyId(typed)) {
 		_verdict = Verdict::Unreadable;
 	} else if (_keyCheck.valid()
 		&& MTP::ServerKeyIdentityMatches(typed, _keyCheck.identity)) {
@@ -414,21 +457,21 @@ void ServerKeyWidget::updateVerdict() {
 		_verdict = Verdict::Mismatch;
 	}
 	_panel->update();
-	// Accessibility
-	if (_verdict != Verdict::None) {
-		const auto msg = [&] {
-			switch (_verdict) {
-			case Verdict::Match: return tr::lng_intro_server_check_match(tr::now);
-			case Verdict::Mismatch: return tr::lng_intro_server_check_mismatch(tr::now);
-			case Verdict::Unreadable: return tr::lng_intro_server_check_unreadable(tr::now);
-			default: return QString();
-			}
-		}();
-		if (!msg.isEmpty()) {
-			QAccessibleEvent event(_panel.data(), QAccessible::NameChanged);
-			QAccessible::updateAccessibility(&event);
+	const auto verdictText = [&] -> QString {
+		switch (_verdict) {
+		case Verdict::None: return tr::lng_intro_server_check_none(tr::now);
+		case Verdict::Match: return tr::lng_intro_server_check_match(tr::now);
+		case Verdict::Mismatch: return tr::lng_intro_server_check_mismatch(tr::now);
+		case Verdict::Unreadable: return tr::lng_intro_server_check_unreadable(tr::now);
 		}
-	}
+		return {};
+	}();
+	_panel->setAccessibleName(
+		verdictText.isEmpty()
+			? _panelA11yBase
+			: _panelA11yBase + u". "_q + verdictText);
+	QAccessibleEvent nameEvent(_panel.data(), QAccessible::NameChanged);
+	QAccessible::updateAccessibility(&nameEvent);
 }
 
 void ServerKeyWidget::commitAndAdvance() {
@@ -444,7 +487,9 @@ void ServerKeyWidget::commitAndAdvance() {
 		.ipv6 = _endpoint.ipv6,
 		.key = key,
 	})) {
-		showError(rpl::single(tr::lng_intro_server_key_internal(tr::now)));
+		showError(rpl::single(tr::lng_intro_server_set_failed(tr::now)));
+		QAccessibleEvent alertEvent(this, QAccessible::Alert);
+		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 	account().mtp().restart();
@@ -454,9 +499,8 @@ void ServerKeyWidget::commitAndAdvance() {
 void ServerKeyWidget::submit() {
 	if (_verdict == Verdict::Mismatch) {
 		showError(rpl::single(tr::lng_intro_server_check_mismatch(tr::now)));
-		return;
-	} else if (_verdict == Verdict::Unreadable) {
-		showError(rpl::single(tr::lng_intro_server_check_unreadable(tr::now)));
+		QAccessibleEvent alertEvent(this, QAccessible::Alert);
+		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 	commitAndAdvance();

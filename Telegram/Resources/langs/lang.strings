@@ -428,6 +428,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_check_match"       = "Match. This is the key your server printed.";
 "lng_intro_server_check_mismatch"    = "No match. This is not the key your server printed.";
 "lng_intro_server_locked"            = "This account is signed in to this server. The address and key can't be changed. To use another server, add a new account.";
+"lng_intro_server_set_failed"        = "The server configuration could not be saved. Go back and re-enter the address and key.";
 "lng_intro_server_check_value_a11y"  = "Key identity, 16 groups: {groups}";
 
 "lng_intro_fragment_title" = "Enter code";

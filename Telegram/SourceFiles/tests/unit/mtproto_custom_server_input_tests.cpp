@@ -598,8 +598,8 @@ TEST_CASE(IdentityMatchIsCaseInsensitive) {
 // A typed value with a different total hex count is always a mismatch,
 // regardless of what prefix matches.
 TEST_CASE(IdentityDifferentHexLengthIsNoMatch) {
-	// "abcd" has 4 hex chars; "abcd-efgh" has 8 — different lengths.
-	CHECK(!ServerKeyIdentityMatches(u"abcd"_q, u"abcd-efgh"_q));
+	// "abcd" has 4 hex chars; "abcd-ef01" has 8 — different lengths.
+	CHECK(!ServerKeyIdentityMatches(u"abcd"_q, u"abcd-ef01"_q));
 }
 
 // A valid key's identity must round-trip through ServerKeyIdentityMatches
@@ -608,4 +608,58 @@ TEST_CASE(ValidKeyIdentityMatchesItself) {
 	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
 	CHECK(check.valid());
 	CHECK(ServerKeyIdentityMatches(check.identity, check.identity));
+}
+
+// ExtractKeyId: plain text returns trimmed text unchanged.
+TEST_CASE(ExtractKeyIdReturnsPlainTextTrimmed) {
+	CHECK_EQ(ExtractKeyId(u"  abcd1234  "_q), u"abcd1234"_q);
+}
+
+// ExtractKeyId: a logfmt line yields the value after key_id=.
+TEST_CASE(ExtractKeyIdParsesLogfmtLine) {
+	CHECK_EQ(
+		ExtractKeyId(u"msg=\"server RSA key\" key_id=abc123 ts=1"_q),
+		u"abc123"_q);
+}
+
+// ExtractKeyId: a quoted logfmt value has its surrounding quotes stripped.
+TEST_CASE(ExtractKeyIdStripsQuotesFromLogfmt) {
+	CHECK_EQ(
+		ExtractKeyId(u"key_id=\"550a-1234\""_q),
+		u"550a-1234"_q);
+}
+
+// LooksLikeKeyId: 64 plain hex chars (no dashes) is accepted.
+TEST_CASE(LooksLikeKeyIdAccepts64PlainHex) {
+	const auto s = QString(64, QChar::fromLatin1('a'));
+	CHECK(LooksLikeKeyId(s));
+}
+
+// LooksLikeKeyId: 79-char form (64 hex + 15 dashes, grouped by 4) is accepted.
+TEST_CASE(LooksLikeKeyIdAccepts79CharForm) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK_EQ(check.identity.size(), 79);
+	CHECK(LooksLikeKeyId(check.identity));
+}
+
+// LooksLikeKeyId: a value with a leading quote (logfmt unstripped) is rejected.
+TEST_CASE(LooksLikeKeyIdRejectsQuotedValue) {
+	CHECK(!LooksLikeKeyId(u"\"abcd\""_q));
+}
+
+// LooksLikeKeyId: anything with fewer than 64 hex digits is rejected.
+TEST_CASE(LooksLikeKeyIdRejectsShortValue) {
+	CHECK(!LooksLikeKeyId(u"abcd"_q));
+}
+
+// IdentityRowFits: advance within the width returns true.
+TEST_CASE(IdentityRowFitsWhenAdvanceWithin) {
+	CHECK(IdentityRowFits(324, 324));
+	CHECK(IdentityRowFits(300, 324));
+}
+
+// IdentityRowFits: advance exceeding the width returns false.
+TEST_CASE(IdentityRowDoesNotFitWhenAdvanceExceeds) {
+	CHECK(!IdentityRowFits(325, 324));
 }
