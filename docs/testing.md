@@ -10,7 +10,10 @@ upload, so a failing test stops the upload.
 
 ### One command
 
-From the repository root, with the `tdesktop:centos_env` image present:
+From the repository root, with the `tdesktop:centos_env` image present and
+the submodules checked out (`git submodule update --init --recursive --depth 1
+-j 4`, about 90 seconds; without them the configure step dies on
+`ModuleNotFoundError: No module named 'run_cmake'`):
 
 ```bash
 docker run --rm -u $(id -u) -v $PWD:/usr/src/tdesktop -e CONFIG=Debug \

@@ -291,6 +291,37 @@ TEST_CASE(IdentityDoesNotMatchAPrefixOrANearMiss) {
 		computed));
 }
 
+// The comparison has to refuse when neither side is an identity, not
+// just when they differ. Both sides normalize to nothing whenever the
+// key was refused — ServerKeyIdentity returns empty for those — so an
+// equality that ignored emptiness would report a match on a key that
+// was never read, which is the one answer the confirmation step must
+// never give. Every case above compares against a real identity, so
+// none of them reaches the emptiness guard.
+TEST_CASE(IdentityDoesNotMatchWhenNeitherSideIsAnIdentity) {
+	const auto empty = QString();
+	// Text that survives to the comparison as nothing: dashes and
+	// whitespace are dropped, and a non-hex character empties the
+	// normalized form outright.
+	const auto dashes = QString::fromLatin1("----");
+	const auto blank = QString::fromLatin1("  \t ");
+	const auto words = QString::fromLatin1("no key was read");
+	CHECK(!ServerKeyIdentityMatches(empty, empty));
+	CHECK(!ServerKeyIdentityMatches(dashes, dashes));
+	CHECK(!ServerKeyIdentityMatches(words, words));
+	CHECK(!ServerKeyIdentityMatches(dashes, blank));
+	CHECK(!ServerKeyIdentityMatches(blank, empty));
+	CHECK(!ServerKeyIdentityMatches(words, empty));
+	// The shape it actually takes in the UI: a key that was refused has
+	// no identity, so `computed` is empty whatever the user typed.
+	const auto refused = CheckServerKey(QString::fromLatin1(kEcSpki));
+	CHECK(refused.identity.isEmpty());
+	CHECK(!ServerKeyIdentityMatches(empty, refused.identity));
+	CHECK(!ServerKeyIdentityMatches(
+		QString::fromLatin1(kRsa2048Identity),
+		refused.identity));
+}
+
 namespace {
 
 struct NamedPem {
