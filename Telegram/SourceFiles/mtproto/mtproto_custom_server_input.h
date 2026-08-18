@@ -20,7 +20,10 @@ namespace MTP {
 enum class ServerKeyStatus {
 	Valid,
 	Empty,
-	Unreadable, // Not a PEM block we can read, or not an RSA key.
+	Unreadable, // A PEM block we cannot read as a key of any kind.
+	PrivateKey, // A private key frame: the user is holding the server's
+		// secret, not the public half to paste here.
+	NotRsaKey, // A readable public key, but not an RSA one.
 	BadModulusSize, // A readable RSA key, of a size we cannot talk to.
 };
 

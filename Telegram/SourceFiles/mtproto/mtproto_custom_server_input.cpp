@@ -14,6 +14,77 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace {
 
+struct BIODeleter {
+	void operator()(BIO *value) {
+		BIO_free(value);
+	}
+};
+
+struct PkeyDeleter {
+	void operator()(EVP_PKEY *value) {
+		EVP_PKEY_free(value);
+	}
+};
+
+// A public key PEM can carry legacy encryption headers (Proc-Type,
+// DEK-Info). With a null callback OpenSSL falls back to PEM_def_callback
+// and prompts on stdin or the tty, which hangs a client started from a
+// terminal. Returning -1 refuses the prompt and yields no key.
+[[nodiscard]] int NoPassword(char *, int, int, void *) {
+	return -1;
+}
+
+// A private key frame: a "-----BEGIN <label>-----" line whose label
+// contains "PRIVATE KEY". The check is a frame check, not a parse:
+// the validator must not decode private key material, so it never
+// touches the base64, and a mangled body still says what the user
+// pasted. A paste containing the frame is refused, even if a public
+// key also parses out of the same text. The BEGIN line is the answer
+// on its own, so the check is one linear pass: no search for the
+// matching END, and the cost does not grow with the number of known
+// names.
+[[nodiscard]] bool HasPrivateFrame(const QByteArray &text) {
+	const auto kBegin = QByteArray("-----BEGIN ");
+	const auto kPrivate = QByteArray("PRIVATE KEY");
+	const auto kDashes = QByteArray("-----");
+
+	auto pos = 0;
+	while ((pos = text.indexOf(kBegin, pos)) >= 0) {
+		const auto labelStart = pos + kBegin.size();
+		const auto labelEnd = text.indexOf(kDashes, labelStart);
+		if (labelEnd < 0) {
+			break;
+		}
+		const auto label = text.mid(labelStart, labelEnd - labelStart);
+		if (label.contains(kPrivate)) {
+			return true;
+		}
+		pos = labelEnd + kDashes.size();
+	}
+	return false;
+}
+
+// The algorithm of a readable public key, or -1 when the input is not
+// a public key at all. A public key costs nothing to decode, so the
+// parsed algorithm id is the discriminator the label cannot give:
+// every algorithm's SPKI block carries the same "BEGIN PUBLIC KEY"
+// label.
+[[nodiscard]] int PublicKeyAlgorithm(bytes::const_span pem) {
+	const auto bio = std::unique_ptr<BIO, BIODeleter>(
+		BIO_new_mem_buf(
+			const_cast<gsl::byte *>(pem.data()),
+			pem.size()));
+	const auto pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>(
+		PEM_read_bio_PUBKEY(bio.get(), nullptr, NoPassword, nullptr));
+	return pkey ? EVP_PKEY_base_id(pkey.get()) : -1;
+}
+
+// A paste is a key the user typed, and a key the user typed fits in a
+// screen. Anything over this is not a key, and the bound keeps the
+// length out of the int range the BIO length parameter cannot carry.
+// The room is for a 4096 bit key and its armor, with margin.
+constexpr auto kMaxKeySize = 8192;
+
 // The exchange encrypts a fixed 256 byte block with RSA_NO_PADDING, so
 // a key of any other size cannot complete it: it would fail much later
 // and look like an unreachable server.
@@ -104,9 +175,29 @@ ServerKeyCheck CheckServerKey(const QString &pem) {
 	if (utf8.isEmpty()) {
 		return { .status = ServerKeyStatus::Empty };
 	}
+	const auto text = QByteArray::fromRawData(
+		reinterpret_cast<const char *>(utf8.data()),
+		utf8.size());
+	// The private frame is checked before anything else, and it refuses
+	// on its own: a paste that carries somebody's private key is not a
+	// usable public key, even if one also parses out of the same text.
+	// The check reads the frame, not the key, so nothing of the secret
+	// is decoded, logged, stored or returned, and it is not parsing, so
+	// it belongs ahead of the size bound that gates the parse path.
+	if (HasPrivateFrame(text)) {
+		return { .status = ServerKeyStatus::PrivateKey };
+	}
+	if (utf8.size() > kMaxKeySize) {
+		return { .status = ServerKeyStatus::Unreadable };
+	}
 	auto key = details::RSAPublicKey(bytes::make_span(utf8));
 	if (!key.valid()) {
-		return { .status = ServerKeyStatus::Unreadable };
+		// A readable public key that is not RSA is a different mistake
+		// from not a key at all, and the algorithm id is what tells
+		// them apart.
+		return (PublicKeyAlgorithm(bytes::make_span(utf8)) >= 0)
+			? ServerKeyCheck{ .status = ServerKeyStatus::NotRsaKey }
+			: ServerKeyCheck{ .status = ServerKeyStatus::Unreadable };
 	} else if (key.modulusBits() != kRequiredModulusBits) {
 		return { .status = ServerKeyStatus::BadModulusSize };
 	}
