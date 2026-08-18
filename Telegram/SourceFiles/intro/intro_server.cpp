@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPainter>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetrics>
 
 namespace Intro {
@@ -188,6 +189,8 @@ void ServerWidget::submit() {
 			msg = tr::lng_intro_server_key_empty(tr::now);
 			break;
 		case MTP::ServerKeyStatus::PrivateKey:
+			_key->setText(QString());
+			_key->rawTextEdit()->document()->clearUndoRedoStacks();
 			msg = tr::lng_intro_server_key_private(tr::now);
 			break;
 		case MTP::ServerKeyStatus::NotRsaKey:
@@ -350,12 +353,15 @@ void ServerKeyWidget::paintPanel(QPainter &p) {
 	const auto row1 = identity.left(kRow1Len) + u"-"_q;
 	const auto row2 = identity.mid(kRow1Len + 1);
 
-	p.setFont(st::introServerIdentityFont);
+	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	monoFont.setPixelSize(st::introServerIdentityFont->pixelSize());
+	const auto monoFm = QFontMetrics(monoFont);
+	p.setFont(monoFont);
 	p.setPen(st::windowFg->c);
 
 	const auto textX = 8;
-	p.drawText(textX, 8 + QFontMetrics(st::introServerIdentityFont).ascent(), row1);
-	p.drawText(textX, 28 + QFontMetrics(st::introServerIdentityFont).ascent(), row2);
+	p.drawText(textX, 8 + monoFm.ascent(), row1);
+	p.drawText(textX, 28 + monoFm.ascent(), row2);
 
 	p.setPen(st::shadowFg->c);
 	p.drawLine(8, 68, _panel->width() - 8, 68);
@@ -431,20 +437,26 @@ void ServerKeyWidget::commitAndAdvance() {
 	}
 	const auto key = std::make_shared<MTP::details::RSAPublicKey>(
 		_keyCheck.key);
-	account().mtp().dcOptions().setCustomServer(MTP::CustomServer{
+	if (!account().mtp().dcOptions().setCustomServer(MTP::CustomServer{
 		.dcId = 2,
 		.ip = _endpoint.host,
 		.port = _endpoint.port,
 		.ipv6 = _endpoint.ipv6,
 		.key = key,
-	});
+	})) {
+		showError(rpl::single(tr::lng_intro_server_key_internal(tr::now)));
+		return;
+	}
 	account().mtp().restart();
 	goNext<PhoneWidget>();
 }
 
 void ServerKeyWidget::submit() {
-	if (_verdict == Verdict::Mismatch || _verdict == Verdict::Unreadable) {
+	if (_verdict == Verdict::Mismatch) {
 		showError(rpl::single(tr::lng_intro_server_check_mismatch(tr::now)));
+		return;
+	} else if (_verdict == Verdict::Unreadable) {
+		showError(rpl::single(tr::lng_intro_server_check_unreadable(tr::now)));
 		return;
 	}
 	commitAndAdvance();
