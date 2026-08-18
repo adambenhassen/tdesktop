@@ -194,15 +194,14 @@ TEST_CASE(OversizedPrivateFrameIsPrivateKey) {
 	CHECK_EQ(int(check.status), S(ServerKeyStatus::PrivateKey));
 }
 
-// A valid RSA 2048 SPKI padded past the 8192 byte cap. The padding is
-// non-whitespace so it survives the trimmed() call. The cap refuses the
-// input before it reaches the PEM reader; the PEM reader would also
-// reject it (it is strict about trailing content), so this case guards
-// the cap as the first line of defense against oversized paste.
+// A valid RSA 2048 SPKI padded past the 8192 byte cap. The newline
+// after the END marker keeps the PEM block well-formed; the padding
+// is non-whitespace so it survives trimmed(). Without the cap the
+// reader accepts the input and the case goes red on cap-line delete.
 [[nodiscard]] QString PaddedValidKey() {
 	const auto key = QString::fromLatin1(kRsa2048Spki);
 	const auto padSize = 8192 - key.size() + 64;
-	return key + QString(padSize, QChar('x'));
+	return key + '\n' + QString(padSize, QChar('x'));
 }
 
 TEST_CASE(PaddedValidKeyIsUnreadable) {
