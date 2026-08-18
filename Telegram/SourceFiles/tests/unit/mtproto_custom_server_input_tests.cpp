@@ -117,6 +117,29 @@ S5OWD4uyANegnJWxYG3nWcREIcC5jTfGdf7xhSvMDo2LkEv2skHcYxuV8JaHOFZ8\n\
 rwIDAQAB\n\
 -----END PUBLIC KEY-----";
 
+// The same pair the other way round: the public key first, the private
+// key appended after it. This is the paste a user actually makes by
+// accident, by sending the whole key file rather than its public half,
+// and it is the ordering that says the scan covers the whole text. With
+// the private frame in the first block every other fixture here is
+// still refused by a scan that reads only that block, so without this
+// one the "anywhere in the paste" guarantee is unpinned — and the way
+// it fails is the bad one: the public key parses, so the paste reports
+// Valid and the user is never told they handled a secret.
+const char kConcatPubThenPriv[] = "\
+-----BEGIN PUBLIC KEY-----\n\
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxo6D8Nnc7doxTTylho4C\n\
+zeigjblTm8d/Ckb8j8Th2Fj9WpBmO9kcIlG4PWmu2lysm5x1UBbkWvZVYx8AHvOx\n\
+AOsqLX64MOHCt7Tv9vngecLdGV8LXbdcUKnurT2BTbHefnA851R6zVDZ4RGa0pzw\n\
+n11RFAW3AL2KurBZ273CzSDA/r+UXObYu4PFcoHiO6sxo/3SWz627Xt+HzGBdbwx\n\
+Hrw7CEKiSxuaWNHfENFNUdFY7LKe1eICR5zm0IzCZUg+5aOceQ/EcJgEofi27Cg+\n\
+S5OWD4uyANegnJWxYG3nWcREIcC5jTfGdf7xhSvMDo2LkEv2skHcYxuV8JaHOFZ8\n\
+rwIDAQAB\n\
+-----END PUBLIC KEY-----\n\
+-----BEGIN PRIVATE KEY-----\n\
+junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk\n\
+-----END PRIVATE KEY-----";
+
 // A private key frame over the 8192 byte cap. The frame check runs
 // before the size cap, so an oversized paste that carries the frame
 // still refuses as PrivateKey rather than Unreadable.
@@ -192,6 +215,13 @@ TEST_CASE(CorruptPrivateFrameIsPrivateKey) {
 
 TEST_CASE(ConcatPrivThenPubIsPrivateKey) {
 	CHECK_EQ(Status(kConcatPrivThenPub), S(ServerKeyStatus::PrivateKey));
+}
+
+// The frame is refused wherever it sits, not only when it opens the
+// paste. A scan narrowed to the first PEM block refuses every other
+// fixture here unchanged and accepts this one as a usable key.
+TEST_CASE(ConcatPubThenPrivIsPrivateKey) {
+	CHECK_EQ(Status(kConcatPubThenPriv), S(ServerKeyStatus::PrivateKey));
 }
 
 TEST_CASE(OversizedPrivateFrameIsPrivateKey) {
@@ -351,6 +381,7 @@ struct NamedPem {
 		{ "opensshPrivate", latin1(kPrivateFrameOpenssh) },
 		{ "corruptPrivate", latin1(kCorruptPrivate) },
 		{ "concatPrivThenPub", latin1(kConcatPrivThenPub) },
+		{ "concatPubThenPriv", latin1(kConcatPubThenPriv) },
 		{ "oversizedPrivate", OversizedPrivateFrame() },
 		{ "paddedValid", PaddedValidKey() },
 	};
