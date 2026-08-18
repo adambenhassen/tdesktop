@@ -26,6 +26,14 @@ struct PkeyDeleter {
 	}
 };
 
+// A public key PEM can carry legacy encryption headers (Proc-Type,
+// DEK-Info). With a null callback OpenSSL falls back to PEM_def_callback
+// and prompts on stdin or the tty, which hangs a client started from a
+// terminal. Returning -1 refuses the prompt and yields no key.
+[[nodiscard]] int NoPassword(char *, int, int, void *) {
+	return -1;
+}
+
 // A private key frame: a "-----BEGIN <label>-----" line whose label
 // contains "PRIVATE KEY". The check is a frame check, not a parse:
 // the validator must not decode private key material, so it never
@@ -67,7 +75,7 @@ struct PkeyDeleter {
 			const_cast<gsl::byte *>(pem.data()),
 			pem.size()));
 	const auto pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>(
-		PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr));
+		PEM_read_bio_PUBKEY(bio.get(), nullptr, NoPassword, nullptr));
 	return pkey ? EVP_PKEY_base_id(pkey.get()) : -1;
 }
 

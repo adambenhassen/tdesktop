@@ -24,6 +24,14 @@ struct BIODeleter {
 	}
 };
 
+// A public key PEM can carry legacy encryption headers (Proc-Type,
+// DEK-Info). With a null callback OpenSSL falls back to PEM_def_callback
+// and prompts on stdin or the tty, which hangs a client started from a
+// terminal. Returning -1 refuses the prompt and yields no key.
+[[nodiscard]] int NoPassword(char *, int, int, void *) {
+	return -1;
+}
+
 Format GuessFormat(bytes::const_span key) {
 	const auto array = QByteArray::fromRawData(
 		reinterpret_cast<const char*>(key.data()),
@@ -45,9 +53,9 @@ RSA *CreateRaw(bytes::const_span key) {
 	};
 	switch (format) {
 	case Format::RSAPublicKey:
-		return PEM_read_bio_RSAPublicKey(bio.get(), nullptr, nullptr, nullptr);
+		return PEM_read_bio_RSAPublicKey(bio.get(), nullptr, NoPassword, nullptr);
 	case Format::RSA_PUBKEY:
-		return PEM_read_bio_RSA_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
+		return PEM_read_bio_RSA_PUBKEY(bio.get(), nullptr, NoPassword, nullptr);
 	case Format::Unknown:
 		// Keys reach this from outside the process: a CDN config
 		// answer, and now a key the user pastes. A block we do not
