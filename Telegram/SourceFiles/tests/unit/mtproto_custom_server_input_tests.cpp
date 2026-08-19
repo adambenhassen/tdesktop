@@ -644,6 +644,17 @@ TEST_CASE(ExtractKeyIdStopsAt64BeforeNeighbouringHexField) {
 	CHECK_EQ(ExtractKeyId(line), hex64);
 }
 
+// ExtractKeyId: when key_id carries only 63 hex digits the space before
+// the next logfmt field must stop collection, even if that field's name
+// begins with a hex character. The old isSpace()-continue path absorbed
+// the 'f' from "fingerprint=" and returned a 64-digit string.
+TEST_CASE(ExtractKeyIdDoesNotAbsorbNeighbouringFieldOnTruncated) {
+	const auto hex63 = QString(63, QChar::fromLatin1('a'));
+	const auto line = u"key_id="_q + hex63 + u" fingerprint=99"_q;
+	const auto result = ExtractKeyId(line);
+	CHECK(!LooksLikeKeyId(result));
+}
+
 // ExtractKeyId: a key_id value that wraps at a terminal boundary (hex
 // spans two lines) yields the same 64 digits as the single-line form.
 TEST_CASE(ExtractKeyIdHandlesWrappedLogLine) {

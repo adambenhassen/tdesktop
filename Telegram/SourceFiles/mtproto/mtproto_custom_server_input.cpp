@@ -359,8 +359,11 @@ QString ExtractKeyId(const QString &text) {
 	auto hexCount = 0;
 	for (; i < size && hexCount < kIdentityHexSize; ++i) {
 		const auto ch = text[i];
+		if (ch == QChar::fromLatin1('\n') || ch == QChar::fromLatin1('\r')) {
+			continue; // terminal line wrap — keep collecting
+		}
 		if (ch.isSpace()) {
-			continue;
+			break; // space or tab is a logfmt field separator — stop here
 		}
 		if (quoted && ch == QChar::fromLatin1('"')) {
 			break;
