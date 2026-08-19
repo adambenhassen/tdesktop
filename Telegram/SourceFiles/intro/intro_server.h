@@ -43,12 +43,8 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
-	bool _locked = false;
-	QString _lockedIdentity;
 	object_ptr<Ui::InputField> _address;
 	object_ptr<Ui::InputField> _key;
-	object_ptr<Ui::RpWidget> _identityPanel = { nullptr };
-	object_ptr<Ui::LinkButton> _identityCopy = { nullptr };
 
 };
 

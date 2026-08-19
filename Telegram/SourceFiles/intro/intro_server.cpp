@@ -82,50 +82,15 @@ ServerWidget::ServerWidget(
 	tr::lng_intro_server_key_ph(),
 	QString(),
 	Ui::InputField::Mode::MultiLine) {
-	_locked = account->sessionExists();
-
+	// Not read-only for signed-in accounts: setupIntro is called only
+	// inside the else branch of the session check at
+	// window_controller.cpp:226, so this screen is never reached while
+	// logged in. The hazard of aliasing peer ids across endpoints is
+	// closed by Account::logOut(), which calls destroySession() and
+	// local().reset() at main_account.cpp:671, wiping local data before
+	// any re-entry.
 	setTitleText(tr::lng_intro_server_title());
 	setDescriptionText(tr::lng_intro_server_desc());
-
-	if (_locked) {
-		_address->setReadOnly(true);
-		_key->hide();
-		const auto cs = account->mtp().dcOptions().customServer();
-		if (cs.key) {
-			_lockedIdentity = MTP::ServerKeyIdentity(*cs.key);
-			_address->setText(
-				QString::fromStdString(cs.ip)
-				+ u":"_q
-				+ QString::number(cs.port));
-			_identityPanel = object_ptr<Ui::RpWidget>(this);
-			_identityCopy = object_ptr<Ui::LinkButton>(
-				_identityPanel.data(),
-				tr::lng_intro_server_check_copy(tr::now));
-			_identityCopy->setClickedCallback([=] {
-				QGuiApplication::clipboard()->setText(_lockedIdentity);
-				getData()->controller->showToast(
-					tr::lng_text_copied(tr::now));
-			});
-			_identityPanel->paintRequest(
-			) | rpl::on_next([=](QRect) {
-				auto p = QPainter(_identityPanel.data());
-				if (!PaintIdentityRows(
-						p,
-						_lockedIdentity,
-						_identityPanel->width())) {
-					p.setPen(st::windowSubTextFg->c);
-					p.setFont(st::normalFont);
-					const auto textX = 8;
-					const auto innerW = _identityPanel->width() - textX * 2;
-					p.drawText(
-						QRect(textX, 8, innerW, 34),
-						tr::lng_intro_server_identity_too_wide(tr::now),
-						QTextOption(Qt::AlignLeft | Qt::AlignTop));
-				}
-			}, _identityPanel->lifetime());
-		}
-		showError(rpl::single(tr::lng_intro_server_locked(tr::now)));
-	}
 
 	_address->setAccessibleName(
 		tr::lng_intro_server_address_ph(tr::now));
@@ -168,24 +133,10 @@ void ServerWidget::activate() {
 void ServerWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
 	_address->moveToLeft(contentLeft(), contentTop() + 100);
-	if (_identityPanel) {
-		const auto panelW = st::introServerPanelWidth;
-		const auto panelH = 64;
-		_identityPanel->setGeometry(
-			contentLeft(), contentTop() + 167, panelW, panelH);
-		_identityCopy->moveToLeft(
-			panelW - _identityCopy->width() - 8, 44);
-	} else {
-		_key->moveToLeft(contentLeft(), contentTop() + 167);
-	}
+	_key->moveToLeft(contentLeft(), contentTop() + 167);
 }
 
 void ServerWidget::submit() {
-	if (_locked) {
-		goNext<PhoneWidget>();
-		return;
-	}
-
 	const auto addressText = _address->getLastText();
 	const auto keyText = _key->getLastText();
 
