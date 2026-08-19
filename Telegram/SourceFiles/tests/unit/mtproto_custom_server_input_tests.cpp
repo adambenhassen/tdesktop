@@ -590,16 +590,23 @@ TEST_CASE(ValidKeyIdentityIs79Chars) {
 }
 
 // Letter case must be ignored when comparing the typed value against
-// the computed identity: "ABCD" and "abcd" name the same hex digits.
+// the computed identity. Test with a real 64-digit identity and its
+// uppercased form so both sides pass NormalizedIdentity's length check.
 TEST_CASE(IdentityMatchIsCaseInsensitive) {
-	CHECK(ServerKeyIdentityMatches(u"ABCD"_q, u"abcd"_q));
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK(ServerKeyIdentityMatches(check.identity.toUpper(), check.identity));
 }
 
-// A typed value with a different total hex count is always a mismatch,
-// regardless of what prefix matches.
+// A typed value with fewer than 64 hex digits never matches, even if
+// the digits present are a correct prefix of the computed identity.
 TEST_CASE(IdentityDifferentHexLengthIsNoMatch) {
-	// "abcd" has 4 hex chars; "abcd-ef01" has 8 — different lengths.
-	CHECK(!ServerKeyIdentityMatches(u"abcd"_q, u"abcd-ef01"_q));
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	// Take the first 20 characters of the 79-char identity: that is
+	// about 16 hex digits, well short of the required 64.
+	const auto prefix = check.identity.left(20);
+	CHECK(!ServerKeyIdentityMatches(prefix, check.identity));
 }
 
 // A valid key's identity must round-trip through ServerKeyIdentityMatches
