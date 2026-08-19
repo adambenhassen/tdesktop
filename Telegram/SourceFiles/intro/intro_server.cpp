@@ -118,7 +118,7 @@ ServerWidget::ServerWidget(
 					const auto textX = 8;
 					const auto innerW = _identityPanel->width() - textX * 2;
 					p.drawText(
-						QRect(textX, 8, innerW, 28),
+						QRect(textX, 8, innerW, 34),
 						tr::lng_intro_server_identity_too_wide(tr::now),
 						QTextOption(Qt::AlignLeft | Qt::AlignTop));
 				}
@@ -133,7 +133,10 @@ ServerWidget::ServerWidget(
 		tr::lng_intro_server_key_ph(tr::now));
 	_address->setMaxLength(120);
 
-	const auto onChanged = [=] { hideError(); };
+	const auto onChanged = [=] {
+		hideError();
+		setAccessibleDescription(QString());
+	};
 	connect(_address, &Ui::InputField::changed, onChanged);
 	connect(_key, &Ui::InputField::changed, onChanged);
 
@@ -444,6 +447,8 @@ void ServerKeyWidget::paintPanel(QPainter &p) {
 }
 
 void ServerKeyWidget::updateVerdict() {
+	hideError();
+	setAccessibleDescription(QString());
 	const auto typed = MTP::ExtractKeyId(_compare->getLastText());
 	if (typed.isEmpty()) {
 		_verdict = Verdict::None;
