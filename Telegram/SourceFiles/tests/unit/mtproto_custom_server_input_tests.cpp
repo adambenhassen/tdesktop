@@ -644,15 +644,24 @@ TEST_CASE(ExtractKeyIdStopsAt64BeforeNeighbouringHexField) {
 	CHECK_EQ(ExtractKeyId(line), hex64);
 }
 
-// ExtractKeyId: when key_id carries only 63 hex digits the space before
-// the next logfmt field must stop collection, even if that field's name
-// begins with a hex character. The old isSpace()-continue path absorbed
-// the 'f' from "fingerprint=" and returned a 64-digit string.
+// ExtractKeyId: when key_id carries only 63 hex digits, a space before
+// the next logfmt field stops collection. Pin the exact result rather
+// than only checking LooksLikeKeyId, so a regression that returns empty
+// or stops early does not silently pass.
 TEST_CASE(ExtractKeyIdDoesNotAbsorbNeighbouringFieldOnTruncated) {
 	const auto hex63 = QString(63, QChar::fromLatin1('a'));
 	const auto line = u"key_id="_q + hex63 + u" fingerprint=99"_q;
-	const auto result = ExtractKeyId(line);
-	CHECK(!LooksLikeKeyId(result));
+	CHECK_EQ(ExtractKeyId(line), hex63);
+}
+
+// ExtractKeyId: same as above but with a newline separator. The logfmt
+// lookahead identifies fingerprint= as a field (has '=' before
+// whitespace) and stops, so the absorbed 'f' bug cannot return via a
+// log paste that spans two lines.
+TEST_CASE(ExtractKeyIdDoesNotAbsorbNeighbouringFieldOnTruncatedNewline) {
+	const auto hex63 = QString(63, QChar::fromLatin1('a'));
+	const auto line = u"key_id="_q + hex63 + u"\nfingerprint=99"_q;
+	CHECK_EQ(ExtractKeyId(line), hex63);
 }
 
 // ExtractKeyId: a key_id value that wraps at a terminal boundary (hex

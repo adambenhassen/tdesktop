@@ -342,11 +342,11 @@ QString ExtractKeyId(const QString &text) {
 	if (pos < 0) {
 		return text.trimmed();
 	}
-	// For the logfmt form, collect hex and dashes across whitespace so
-	// that a key_id value that wraps at a terminal boundary is read in
-	// full. Stop the moment 64 hex digits are collected: a neighbouring
-	// logfmt field whose name begins with a hex character (e.g.
-	// fingerprint=...) is never absorbed.
+	// For the logfmt form, collect hex and dashes, crossing newlines only
+	// when the token that follows carries no '=' before its first
+	// whitespace. A logfmt field always has one (name=value); a wrapped
+	// continuation of a hex value never can. Space and tab are unambiguous
+	// logfmt field separators and always stop collection.
 	auto i = pos + needle.size();
 	const auto size = text.size();
 	const auto quoted = (i < size)
@@ -360,10 +360,26 @@ QString ExtractKeyId(const QString &text) {
 	for (; i < size && hexCount < kIdentityHexSize; ++i) {
 		const auto ch = text[i];
 		if (ch == QChar::fromLatin1('\n') || ch == QChar::fromLatin1('\r')) {
-			continue; // terminal line wrap — keep collecting
+			// Look ahead: if the next non-whitespace token has '=' before
+			// its first whitespace it is a logfmt field — stop. Otherwise
+			// it is a wrapped continuation of the hex value — keep going.
+			auto j = i + 1;
+			while (j < size && text[j].isSpace()) {
+				++j;
+			}
+			auto k = j;
+			while (k < size
+					&& !text[k].isSpace()
+					&& text[k] != QChar::fromLatin1('=')) {
+				++k;
+			}
+			if (k < size && text[k] == QChar::fromLatin1('=')) {
+				break; // next token is a logfmt field
+			}
+			continue;
 		}
 		if (ch.isSpace()) {
-			break; // space or tab is a logfmt field separator — stop here
+			break; // space or tab is a logfmt field separator
 		}
 		if (quoted && ch == QChar::fromLatin1('"')) {
 			break;
