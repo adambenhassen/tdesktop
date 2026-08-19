@@ -20,7 +20,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "styles/style_intro.h"
 
-#include <QtCore/QTextOption>
 #include <QtGui/QAccessible>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
