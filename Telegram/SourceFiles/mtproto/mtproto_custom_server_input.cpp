@@ -342,16 +342,41 @@ QString ExtractKeyId(const QString &text) {
 	if (pos < 0) {
 		return text.trimmed();
 	}
-	const auto start = pos + needle.size();
-	auto end = start;
-	while (end < text.size() && !text[end].isSpace()) {
-		++end;
+	// For the logfmt form, collect hex and dashes across whitespace so
+	// that a key_id value that wraps at a terminal boundary is read in
+	// full. Stop the moment 64 hex digits are collected: a neighbouring
+	// logfmt field whose name begins with a hex character (e.g.
+	// fingerprint=...) is never absorbed.
+	auto i = pos + needle.size();
+	const auto size = text.size();
+	const auto quoted = (i < size)
+		&& (text[i] == QChar::fromLatin1('"'));
+	if (quoted) {
+		++i;
 	}
-	auto result = text.mid(start, end - start);
-	if (result.size() >= 2
-		&& result.front() == QChar::fromLatin1('"')
-		&& result.back() == QChar::fromLatin1('"')) {
-		result = result.mid(1, result.size() - 2);
+	auto result = QString();
+	result.reserve(79); // 64 hex + up to 15 dashes
+	auto hexCount = 0;
+	for (; i < size && hexCount < kIdentityHexSize; ++i) {
+		const auto ch = text[i];
+		if (ch.isSpace()) {
+			continue;
+		}
+		if (quoted && ch == QChar::fromLatin1('"')) {
+			break;
+		}
+		if (ch == QChar::fromLatin1('-')) {
+			result += ch;
+			continue;
+		}
+		const auto code = ch.toLower().unicode();
+		const auto isHex = (code >= '0' && code <= '9')
+			|| (code >= 'a' && code <= 'f');
+		if (!isHex) {
+			break;
+		}
+		result += ch;
+		++hexCount;
 	}
 	return result;
 }

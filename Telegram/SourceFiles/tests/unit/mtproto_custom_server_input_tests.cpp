@@ -629,6 +629,23 @@ TEST_CASE(ExtractKeyIdStripsQuotesFromLogfmt) {
 		u"550a-1234"_q);
 }
 
+// ExtractKeyId: a full log line whose next field starts with a hex character
+// ('f' in fingerprint=...) must not absorb any of that field — stop at 64.
+TEST_CASE(ExtractKeyIdStopsAt64BeforeNeighbouringHexField) {
+	const auto hex64 = QString(64, QChar::fromLatin1('a'));
+	const auto line = u"key_id="_q + hex64 + u" fingerprint=-123"_q;
+	CHECK_EQ(ExtractKeyId(line), hex64);
+}
+
+// ExtractKeyId: a key_id value that wraps at a terminal boundary (hex
+// spans two lines) yields the same 64 digits as the single-line form.
+TEST_CASE(ExtractKeyIdHandlesWrappedLogLine) {
+	const auto hex32a = QString(32, QChar::fromLatin1('a'));
+	const auto hex32b = QString(32, QChar::fromLatin1('b'));
+	const auto wrapped = u"key_id="_q + hex32a + u"\n"_q + hex32b;
+	CHECK_EQ(ExtractKeyId(wrapped), hex32a + hex32b);
+}
+
 // LooksLikeKeyId: 64 plain hex chars (no dashes) is accepted.
 TEST_CASE(LooksLikeKeyIdAccepts64PlainHex) {
 	const auto s = QString(64, QChar::fromLatin1('a'));

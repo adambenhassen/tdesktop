@@ -46,6 +46,10 @@ namespace {
 	const auto row2 = identity.mid(kRow1Len + 1);
 
 	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	// Measuring row 1 alone is sound only because the font is fixed-pitch:
+	// every glyph has the same advance, so row 2 fits whenever row 1 does.
+	// If FixedFont ever falls back to a proportional face, row 2 can
+	// overflow a measurement that said it fits.
 	monoFont.setPixelSize(13);
 	const auto adv13 = QFontMetrics(monoFont).horizontalAdvance(row1);
 	monoFont.setPixelSize(12);
