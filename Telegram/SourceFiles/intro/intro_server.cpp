@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QPainter>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetrics>
+#include <QtWidgets/QTextEdit>
 
 namespace Intro {
 namespace details {
@@ -83,9 +84,8 @@ ServerWidget::ServerWidget(
 , _key(
 	this,
 	st::introServerKeyField,
-	tr::lng_intro_server_key_ph(),
-	QString(),
-	Ui::InputField::Mode::MultiLine) {
+	Ui::InputField::Mode::MultiLine,
+	tr::lng_intro_server_key_ph()) {
 	// Not read-only for signed-in accounts: setupIntro is called only
 	// inside the else branch of the session check at
 	// window_controller.cpp:226, so this screen is never reached while
@@ -106,8 +106,8 @@ ServerWidget::ServerWidget(
 		hideError();
 		setAccessibleDescription(QString());
 	};
-	connect(_address, &Ui::InputField::changed, onChanged);
-	connect(_key, &Ui::InputField::changed, onChanged);
+	_address->changes() | rpl::on_next(onChanged, _address->lifetime());
+	_key->changes() | rpl::on_next(onChanged, _key->lifetime());
 
 	if (!getData()->serverAddress.isEmpty()) {
 		_address->setText(getData()->serverAddress);
@@ -293,9 +293,9 @@ ServerKeyWidget::ServerKeyWidget(
 			}
 		});
 
-	connect(_compare, &Ui::InputField::changed, [=] {
+	_compare->changes() | rpl::on_next([=] {
 		updateVerdict();
-	});
+	}, _compare->lifetime());
 
 	_copy->setClickedCallback([=] {
 		if (_keyCheck.valid()) {
