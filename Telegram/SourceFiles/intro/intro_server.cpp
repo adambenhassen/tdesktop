@@ -47,14 +47,16 @@ namespace {
 	const auto row2 = identity.mid(kRow1Len + 1);
 
 	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	// Measuring row 1 alone is sound only because the font is fixed-pitch:
-	// every glyph has the same advance, so row 2 fits whenever row 1 does.
-	// If FixedFont ever falls back to a proportional face, row 2 can
-	// overflow a measurement that said it fits.
 	monoFont.setPixelSize(13);
-	const auto adv13 = QFontMetrics(monoFont).horizontalAdvance(row1);
+	const auto fm13 = QFontMetrics(monoFont);
+	const auto adv13 = std::max(
+		fm13.horizontalAdvance(row1),
+		fm13.horizontalAdvance(row2));
 	monoFont.setPixelSize(12);
-	const auto adv12 = QFontMetrics(monoFont).horizontalAdvance(row1);
+	const auto fm12 = QFontMetrics(monoFont);
+	const auto adv12 = std::max(
+		fm12.horizontalAdvance(row1),
+		fm12.horizontalAdvance(row2));
 
 	const auto layout = MTP::ChooseIdentityLayout(innerWidth, adv13, adv12);
 	if (!layout.fits) {
@@ -86,13 +88,25 @@ ServerWidget::ServerWidget(
 	st::introServerKeyField,
 	Ui::InputField::Mode::MultiLine,
 	tr::lng_intro_server_key_ph()) {
-	// Not read-only for signed-in accounts: setupIntro is called only
-	// inside the else branch of the session check at
-	// window_controller.cpp:226, so this screen is never reached while
-	// logged in. The hazard of aliasing peer ids across endpoints is
-	// closed by Account::logOut(), which calls destroySession() and
-	// local().reset() at main_account.cpp:671, wiping local data before
-	// any re-entry.
+	// This screen is never reached while the account holds readable local
+	// data from another server. Two invariants protect it:
+	//
+	// 1. The intro is only shown when the mtp blob carries user id 0.
+	//    setMtpAuthorization (main_account.cpp:510) sets _sessionUserId
+	//    before reading any key; startMtp creates the session from it
+	//    alone at :605. An account whose blob still names a user restores
+	//    a session and bypasses the intro entirely.
+	//    Break shape: zeroing the user id inside resetAuthorizationKeys()
+	//    before its write (main_account.cpp:745) would let a kill during
+	//    forcedLogOut() reach this screen with peer ids still cached.
+	//
+	// 2. Storage::Account::reset() zeroes every FileKey and flushes the
+	//    map before handing file removal to crl::async
+	//    (storage_account.cpp:821-824). An interrupted wipe leaves
+	//    orphaned ciphertext and a blob naming user id 0 — not readable
+	//    data — so invariant 1 prevents the intro from being reached.
+	//    Break shape: reordering reset() to delete files before writeMap()
+	//    would leave readable data behind an invalidated map.
 	setTitleText(tr::lng_intro_server_title());
 	setDescriptionText(tr::lng_intro_server_desc());
 
