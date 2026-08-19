@@ -356,8 +356,13 @@ QString ExtractKeyId(const QString &text) {
 	return result;
 }
 
-bool IdentityRowFits(int advance, int innerWidth) {
-	return advance <= innerWidth;
+IdentityLayout ChooseIdentityLayout(
+		int innerWidth,
+		int advance13,
+		int advance12) {
+	if (advance13 <= innerWidth) return {.pixelSize = 13, .fits = true};
+	if (advance12 <= innerWidth) return {.pixelSize = 12, .fits = true};
+	return {.pixelSize = 12, .fits = false};
 }
 
 } // namespace MTP

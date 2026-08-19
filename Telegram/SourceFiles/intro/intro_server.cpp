@@ -29,6 +29,43 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Intro {
 namespace details {
+namespace {
+
+// Paints the two-row identity display into p at the standard position.
+// Returns true when the rows were drawn; returns false when neither
+// 13px nor 12px fits in the panel's inner width, in which case the
+// caller should show a short fallback message instead.
+[[nodiscard]] bool PaintIdentityRows(
+		QPainter &p,
+		const QString &identity,
+		int panelWidth) {
+	constexpr auto kRow1Len = 8 * 4 + 7; // 39 chars: 8 groups of 4 + 7 dashes
+	const auto textX = 8;
+	const auto innerWidth = panelWidth - textX * 2;
+	const auto row1 = identity.left(kRow1Len) + u"-"_q;
+	const auto row2 = identity.mid(kRow1Len + 1);
+
+	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	monoFont.setPixelSize(13);
+	const auto adv13 = QFontMetrics(monoFont).horizontalAdvance(row1);
+	monoFont.setPixelSize(12);
+	const auto adv12 = QFontMetrics(monoFont).horizontalAdvance(row1);
+
+	const auto layout = MTP::ChooseIdentityLayout(innerWidth, adv13, adv12);
+	if (!layout.fits) {
+		return false;
+	}
+
+	monoFont.setPixelSize(layout.pixelSize);
+	const auto fm = QFontMetrics(monoFont);
+	p.setFont(monoFont);
+	p.setPen(st::windowFg->c);
+	p.drawText(textX, 8 + fm.ascent(), row1);
+	p.drawText(textX, 28 + fm.ascent(), row2);
+	return true;
+}
+
+} // namespace
 
 ServerWidget::ServerWidget(
 	QWidget *parent,
@@ -71,29 +108,20 @@ ServerWidget::ServerWidget(
 			});
 			_identityPanel->paintRequest(
 			) | rpl::on_next([=](QRect) {
-				constexpr auto kRow1Len = 8 * 4 + (8 - 1);
-				const auto row1 = _lockedIdentity.left(kRow1Len) + u"-"_q;
-				const auto row2 = _lockedIdentity.mid(kRow1Len + 1);
-				auto monoFont = QFontDatabase::systemFont(
-					QFontDatabase::FixedFont);
-				const auto innerWidth = _identityPanel->width() - 16;
-				auto px = st::introServerIdentityFont->pixelSize();
-				static constexpr int kFloor = 9;
-				for (; px > kFloor; --px) {
-					monoFont.setPixelSize(px);
-					if (MTP::IdentityRowFits(
-						QFontMetrics(monoFont).horizontalAdvance(row1),
-						innerWidth)) {
-						break;
-					}
-				}
-				monoFont.setPixelSize(px);
-				const auto fm = QFontMetrics(monoFont);
 				auto p = QPainter(_identityPanel.data());
-				p.setFont(monoFont);
-				p.setPen(st::windowFg->c);
-				p.drawText(8, 8 + fm.ascent(), row1);
-				p.drawText(8, 28 + fm.ascent(), row2);
+				if (!PaintIdentityRows(
+						p,
+						_lockedIdentity,
+						_identityPanel->width())) {
+					p.setPen(st::windowSubTextFg->c);
+					p.setFont(st::normalFont);
+					const auto textX = 8;
+					const auto innerW = _identityPanel->width() - textX * 2;
+					p.drawText(
+						QRect(textX, 8, innerW, 28),
+						tr::lng_intro_server_identity_too_wide(tr::now),
+						QTextOption(Qt::AlignLeft | Qt::AlignTop));
+				}
 			}, _identityPanel->lifetime());
 		}
 		showError(rpl::single(tr::lng_intro_server_locked(tr::now)));
@@ -139,11 +167,11 @@ void ServerWidget::resizeEvent(QResizeEvent *e) {
 	_address->moveToLeft(contentLeft(), contentTop() + 100);
 	if (_identityPanel) {
 		const auto panelW = st::introServerPanelWidth;
-		const auto panelH = 44;
+		const auto panelH = 64;
 		_identityPanel->setGeometry(
 			contentLeft(), contentTop() + 167, panelW, panelH);
 		_identityCopy->moveToLeft(
-			panelW - _identityCopy->width() - 8, 4);
+			panelW - _identityCopy->width() - 8, 44);
 	} else {
 		_key->moveToLeft(contentLeft(), contentTop() + 167);
 	}
@@ -189,6 +217,7 @@ void ServerWidget::submit() {
 		}
 		_address->showError();
 		showError(rpl::single(msg));
+		setAccessibleDescription(msg);
 		QAccessibleEvent alertEvent(this, QAccessible::Alert);
 		QAccessible::updateAccessibility(&alertEvent);
 		return;
@@ -224,6 +253,7 @@ void ServerWidget::submit() {
 		}
 		_key->showError();
 		showError(rpl::single(msg));
+		setAccessibleDescription(msg);
 		QAccessibleEvent alertEvent(this, QAccessible::Alert);
 		QAccessible::updateAccessibility(&alertEvent);
 		return;
@@ -364,45 +394,15 @@ void ServerKeyWidget::paintPanel(QPainter &p) {
 	}
 
 	const auto identity = _keyCheck.identity;
-	constexpr auto kGroupCount = 16;
-	constexpr auto kGroupSize = 4;
-	constexpr auto kHalfGroups = kGroupCount / 2;
-	constexpr auto kRow1Len = kHalfGroups * kGroupSize + (kHalfGroups - 1);
-	const auto row1 = identity.left(kRow1Len) + u"-"_q;
-	const auto row2 = identity.mid(kRow1Len + 1);
-
-	const auto textX = 8;
-	const auto innerWidth = _panel->width() - textX * 2;
-	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	auto px = st::introServerIdentityFont->pixelSize();
-	static constexpr int kFloor = 9;
-	for (; px > kFloor; --px) {
-		monoFont.setPixelSize(px);
-		if (MTP::IdentityRowFits(
-			QFontMetrics(monoFont).horizontalAdvance(row1),
-			innerWidth)) {
-			break;
-		}
-	}
-	monoFont.setPixelSize(px);
-	const auto monoFm = QFontMetrics(monoFont);
-	p.setFont(monoFont);
-	p.setPen(st::windowFg->c);
-
-	if (MTP::IdentityRowFits(monoFm.horizontalAdvance(row1), innerWidth)) {
-		p.drawText(textX, 8 + monoFm.ascent(), row1);
-		p.drawText(textX, 28 + monoFm.ascent(), row2);
-	} else {
-		// Floor reached; reflow to 4 rows of 4 groups each.
-		constexpr auto kRowGroups = kHalfGroups / 2;
-		constexpr auto kRowChars = kRowGroups * kGroupSize + (kRowGroups - 1);
-		for (int row = 0; row < 4; ++row) {
-			const auto start = row * (kRowChars + 1);
-			p.drawText(
-				textX,
-				8 + row * 20 + monoFm.ascent(),
-				identity.mid(start, kRowChars) + u"-"_q);
-		}
+	if (!PaintIdentityRows(p, identity, _panel->width())) {
+		p.setPen(st::windowSubTextFg->c);
+		p.setFont(st::normalFont);
+		const auto textX = 8;
+		const auto innerW = _panel->width() - textX * 2;
+		p.drawText(
+			QRect(textX, 8, innerW, 50),
+			tr::lng_intro_server_identity_too_wide(tr::now),
+			QTextOption(Qt::AlignLeft | Qt::AlignTop));
 	}
 
 	p.setPen(st::shadowFg->c);
@@ -456,7 +456,7 @@ void ServerKeyWidget::updateVerdict() {
 		_verdict = Verdict::Mismatch;
 	}
 	_panel->update();
-	const auto verdictText = [&] -> QString {
+	const auto verdictText = [&]() -> QString {
 		switch (_verdict) {
 		case Verdict::None: return tr::lng_intro_server_check_none(tr::now);
 		case Verdict::Match: return tr::lng_intro_server_check_match(tr::now);
@@ -486,7 +486,9 @@ void ServerKeyWidget::commitAndAdvance() {
 		.ipv6 = _endpoint.ipv6,
 		.key = key,
 	})) {
-		showError(rpl::single(tr::lng_intro_server_set_failed(tr::now)));
+		const auto setFailedMsg = tr::lng_intro_server_set_failed(tr::now);
+		showError(rpl::single(setFailedMsg));
+		setAccessibleDescription(setFailedMsg);
 		QAccessibleEvent alertEvent(this, QAccessible::Alert);
 		QAccessible::updateAccessibility(&alertEvent);
 		return;
@@ -497,7 +499,9 @@ void ServerKeyWidget::commitAndAdvance() {
 
 void ServerKeyWidget::submit() {
 	if (_verdict == Verdict::Mismatch) {
-		showError(rpl::single(tr::lng_intro_server_check_mismatch(tr::now)));
+		const auto mismatchMsg = tr::lng_intro_server_check_mismatch(tr::now);
+		showError(rpl::single(mismatchMsg));
+		setAccessibleDescription(mismatchMsg);
 		QAccessibleEvent alertEvent(this, QAccessible::Alert);
 		QAccessible::updateAccessibility(&alertEvent);
 		return;

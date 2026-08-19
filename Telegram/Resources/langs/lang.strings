@@ -430,6 +430,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_locked"            = "This account is signed in to this server. The address and key can't be changed. To use another server, add a new account.";
 "lng_intro_server_set_failed"        = "The server configuration could not be saved. Go back and re-enter the address and key.";
 "lng_intro_server_check_value_a11y"  = "Key identity, 16 groups: {groups}";
+"lng_intro_server_identity_too_wide" = "Identity cannot be displayed at a legible size. Use Copy to verify.";
 
 "lng_intro_fragment_title" = "Enter code";
 "lng_intro_fragment_about" = "Get the code for {phone_number} in the Anonymous Numbers section on Fragment.";

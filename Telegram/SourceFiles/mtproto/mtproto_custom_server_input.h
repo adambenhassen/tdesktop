@@ -111,9 +111,18 @@ struct ServerEndpointCheck {
 // text.trimmed(). Lets the user paste a whole server log line.
 [[nodiscard]] QString ExtractKeyId(const QString &text);
 
-// Whether the first identity row fits in the available inner width.
-// A pure measure-vs-width comparison; call once per pixel-size
-// candidate and fall back to a four-row layout at the floor.
-[[nodiscard]] bool IdentityRowFits(int advance, int innerWidth);
+// Layout decision for the identity display: which pixel size to use and
+// whether both rows fit. advance13 and advance12 are the horizontal pixel
+// widths of row 1 at 13px and 12px respectively. Callers compute those
+// with QFontMetrics before calling so the decision is testable without a
+// widget.
+struct IdentityLayout {
+	int pixelSize = 13;
+	bool fits = true;
+};
+[[nodiscard]] IdentityLayout ChooseIdentityLayout(
+	int innerWidth,
+	int advance13,
+	int advance12);
 
 } // namespace MTP

@@ -653,13 +653,22 @@ TEST_CASE(LooksLikeKeyIdRejectsShortValue) {
 	CHECK(!LooksLikeKeyId(u"abcd"_q));
 }
 
-// IdentityRowFits: advance within the width returns true.
-TEST_CASE(IdentityRowFitsWhenAdvanceWithin) {
-	CHECK(IdentityRowFits(324, 324));
-	CHECK(IdentityRowFits(300, 324));
+// ChooseIdentityLayout: both sizes fit at 13px.
+TEST_CASE(ChooseIdentityLayoutUsesSize13WhenFits) {
+	const auto layout = ChooseIdentityLayout(324, 320, 300);
+	CHECK_EQ(layout.pixelSize, 13);
+	CHECK(layout.fits);
 }
 
-// IdentityRowFits: advance exceeding the width returns false.
-TEST_CASE(IdentityRowDoesNotFitWhenAdvanceExceeds) {
-	CHECK(!IdentityRowFits(325, 324));
+// ChooseIdentityLayout: only 12px fits, so the layout steps down.
+TEST_CASE(ChooseIdentityLayoutStepsDownTo12WhenOnly12Fits) {
+	const auto layout = ChooseIdentityLayout(324, 330, 320);
+	CHECK_EQ(layout.pixelSize, 12);
+	CHECK(layout.fits);
+}
+
+// ChooseIdentityLayout: neither size fits; fits is false.
+TEST_CASE(ChooseIdentityLayoutNoFitWhenNeitherFits) {
+	const auto layout = ChooseIdentityLayout(324, 330, 330);
+	CHECK(!layout.fits);
 }
