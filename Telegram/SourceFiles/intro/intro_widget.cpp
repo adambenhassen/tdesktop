@@ -864,7 +864,7 @@ void Widget::keyPressEvent(QKeyEvent *e) {
 	if (_showAnimation || getStep()->animating()) return;
 
 	if (e->key() == Qt::Key_Escape || e->key() == Qt::Key_Back) {
-		if (getStep()->hasBack()) {
+		if (_backAvailable) {
 			backRequested();
 		}
 	} else if (e->key() == Qt::Key_Enter
