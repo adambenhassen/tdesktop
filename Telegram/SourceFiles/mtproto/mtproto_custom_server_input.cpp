@@ -199,14 +199,14 @@ ServerKeyCheck CheckServerKey(const QString &pem) {
 			? ServerKeyCheck{ .status = ServerKeyStatus::NotRsaKey }
 			: ServerKeyCheck{ .status = ServerKeyStatus::Unreadable };
 	} else if (key.modulusBits() != kRequiredModulusBits) {
-		return { .status = ServerKeyStatus::BadModulusSize };
+		return {
+			.status = ServerKeyStatus::BadModulusSize,
+			.modulusBits = key.modulusBits(),
+		};
 	}
 	auto identity = ServerKeyIdentity(key);
 	if (identity.isEmpty()) {
-		// A key we cannot name is a key the user cannot check against
-		// the server, and an unchecked key is the failure this input
-		// exists to prevent, so it does not pass as a usable one.
-		return { .status = ServerKeyStatus::Unreadable };
+		return { .status = ServerKeyStatus::InternalError };
 	}
 	return {
 		.status = ServerKeyStatus::Valid,
@@ -320,6 +320,93 @@ ServerEndpointCheck CheckServerEndpoint(const QString &value) {
 		.ipv6 = (literal
 			&& (address.protocol() == QAbstractSocket::IPv6Protocol)),
 	};
+}
+
+bool LooksLikeKeyId(const QString &s) {
+	auto hexCount = 0;
+	for (const auto ch : s) {
+		if (ch == QChar::fromLatin1('-')) continue;
+		if (!((ch >= QChar::fromLatin1('0') && ch <= QChar::fromLatin1('9'))
+			|| (ch >= QChar::fromLatin1('a') && ch <= QChar::fromLatin1('f'))
+			|| (ch >= QChar::fromLatin1('A') && ch <= QChar::fromLatin1('F')))) {
+			return false;
+		}
+		++hexCount;
+	}
+	return hexCount == 64;
+}
+
+QString ExtractKeyId(const QString &text) {
+	const auto needle = u"key_id="_q;
+	const auto pos = text.indexOf(needle);
+	if (pos < 0) {
+		return text.trimmed();
+	}
+	// For the logfmt form, collect hex and dashes, crossing newlines only
+	// when the token that follows carries no '=' before its first
+	// whitespace. A logfmt field always has one (name=value); a wrapped
+	// continuation of a hex value never can. Space and tab are unambiguous
+	// logfmt field separators and always stop collection.
+	auto i = pos + needle.size();
+	const auto size = text.size();
+	const auto quoted = (i < size)
+		&& (text[i] == QChar::fromLatin1('"'));
+	if (quoted) {
+		++i;
+	}
+	auto result = QString();
+	result.reserve(79); // 64 hex + up to 15 dashes
+	auto hexCount = 0;
+	for (; i < size && hexCount < kIdentityHexSize; ++i) {
+		const auto ch = text[i];
+		if (ch == QChar::fromLatin1('\n') || ch == QChar::fromLatin1('\r')) {
+			// Look ahead: if the next non-whitespace token has '=' before
+			// its first whitespace it is a logfmt field — stop. Otherwise
+			// it is a wrapped continuation of the hex value — keep going.
+			auto j = i + 1;
+			while (j < size && text[j].isSpace()) {
+				++j;
+			}
+			auto k = j;
+			while (k < size
+					&& !text[k].isSpace()
+					&& text[k] != QChar::fromLatin1('=')) {
+				++k;
+			}
+			if (k < size && text[k] == QChar::fromLatin1('=')) {
+				break; // next token is a logfmt field
+			}
+			continue;
+		}
+		if (ch.isSpace()) {
+			break; // space or tab is a logfmt field separator
+		}
+		if (quoted && ch == QChar::fromLatin1('"')) {
+			break;
+		}
+		if (ch == QChar::fromLatin1('-')) {
+			result += ch;
+			continue;
+		}
+		const auto code = ch.toLower().unicode();
+		const auto isHex = (code >= '0' && code <= '9')
+			|| (code >= 'a' && code <= 'f');
+		if (!isHex) {
+			break;
+		}
+		result += ch;
+		++hexCount;
+	}
+	return result;
+}
+
+IdentityLayout ChooseIdentityLayout(
+		int innerWidth,
+		int advance13,
+		int advance12) {
+	if (advance13 <= innerWidth) return {.pixelSize = 13, .fits = true};
+	if (advance12 <= innerWidth) return {.pixelSize = 12, .fits = true};
+	return {.pixelSize = 12, .fits = false};
 }
 
 } // namespace MTP

@@ -97,6 +97,15 @@ public:
 		-> rpl::producer<const style::RoundButton*>;
 	[[nodiscard]] virtual rpl::producer<> nextButtonFocusRequests() const;
 
+	// The y position (from the widget's top) where the Next button
+	// should sit. The default reads st::introNextTop; steps with taller
+	// content override this.
+	[[nodiscard]] virtual int nextButtonTop() const;
+
+	// Whether Back is currently available. The default never changes;
+	// override in steps where Back must be withdrawn at a runtime event.
+	[[nodiscard]] virtual rpl::producer<bool> backAvailable() const;
+
 	[[nodiscard]] int contentLeft() const;
 	[[nodiscard]] int contentTop() const;
 

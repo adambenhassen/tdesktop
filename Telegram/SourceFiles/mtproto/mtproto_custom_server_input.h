@@ -25,6 +25,9 @@ enum class ServerKeyStatus {
 		// secret, not the public half to paste here.
 	NotRsaKey, // A readable public key, but not an RSA one.
 	BadModulusSize, // A readable RSA key, of a size we cannot talk to.
+	InternalError, // A key that parsed but whose DER encoding failed —
+		// internal error, not a user mistake. Rare: only an allocation
+		// failure reaches it.
 };
 
 // The outcome of checking a pasted key. Anything other than Valid
@@ -34,6 +37,7 @@ struct ServerKeyCheck {
 	ServerKeyStatus status = ServerKeyStatus::Empty;
 	details::RSAPublicKey key;
 	QString identity;
+	int modulusBits = 0; // Set when status == BadModulusSize.
 
 	[[nodiscard]] bool valid() const {
 		return (status == ServerKeyStatus::Valid);
@@ -96,5 +100,29 @@ struct ServerEndpointCheck {
 // Read a "host:port" endpoint the user typed. The host is an IP literal
 // or a hostname; an IPv6 literal is written in brackets, as "[::1]:443".
 [[nodiscard]] ServerEndpointCheck CheckServerEndpoint(const QString &value);
+
+// Whether a string looks like a key_id the server logged: exactly 64
+// hex characters, optionally grouped by dashes every 4 chars. Any
+// other character (including a surrounding quote) is not a key_id.
+[[nodiscard]] bool LooksLikeKeyId(const QString &s);
+
+// If text is a logfmt token of the form key_id=<value>, return the
+// value (stripping surrounding quotes if present); otherwise return
+// text.trimmed(). Lets the user paste a whole server log line.
+[[nodiscard]] QString ExtractKeyId(const QString &text);
+
+// Layout decision for the identity display: which pixel size to use and
+// whether both rows fit. advance13 and advance12 are the horizontal pixel
+// widths of row 1 at 13px and 12px respectively. Callers compute those
+// with QFontMetrics before calling so the decision is testable without a
+// widget.
+struct IdentityLayout {
+	int pixelSize = 13;
+	bool fits = true;
+};
+[[nodiscard]] IdentityLayout ChooseIdentityLayout(
+	int innerWidth,
+	int advance13,
+	int advance12);
 
 } // namespace MTP

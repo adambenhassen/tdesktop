@@ -294,6 +294,14 @@ int Step::errorTop() const {
 	return contentTop() + st::introErrorTop;
 }
 
+int Step::nextButtonTop() const {
+	return contentTop() + st::introNextTop;
+}
+
+rpl::producer<bool> Step::backAvailable() const {
+	return rpl::single(hasBack());
+}
+
 void Step::setTitleText(rpl::producer<QString> titleText) {
 	_titleText = std::move(titleText);
 }

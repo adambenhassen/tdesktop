@@ -192,3 +192,21 @@ introQrStepMargins: margins(20px, 8px, 0px, 0px);
 introQrSkipTop: 360px;
 introQrCenterSize: 44px;
 introQrPlane: icon {{ "intro_qr_plane", activeButtonFg }};
+
+introServerNextTop: 320px;
+introServerErrorTop: 253px;
+introServerKeyField: InputField(introCountry) {
+	textMargins: margins(12px, 22px, 12px, 6px);
+	style: TextStyle(defaultTextStyle) {
+		font: font(12px);
+		lineHeight: 16px;
+	}
+	width: 300px;
+	heightMin: 80px;
+	heightMax: 80px;
+}
+introServerPanelWidth: 340px;
+introServerPanelRadius: 6px;
+introServerPanelBg: windowBgOver;
+introServerIdentityFont: font(13px);
+introServerCompareField: InputField(introCountry) { width: 324px; }

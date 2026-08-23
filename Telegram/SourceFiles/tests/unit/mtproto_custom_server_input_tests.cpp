@@ -580,3 +580,139 @@ namespace {
 TEST_CASE(RefusedEndpointLeavesNothingBehind) {
 	CHECK_EQ(RefusedEndpointsLeavingResidue(), QString());
 }
+
+// The identity of a valid key must be 64 hex chars joined into 16
+// dash-separated groups of 4, totalling 64 + 15 = 79 characters.
+TEST_CASE(ValidKeyIdentityIs79Chars) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK_EQ(check.identity.size(), 79);
+}
+
+// Letter case must be ignored when comparing the typed value against
+// the computed identity. Test with a real 64-digit identity and its
+// uppercased form so both sides pass NormalizedIdentity's length check.
+TEST_CASE(IdentityMatchIsCaseInsensitive) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK(ServerKeyIdentityMatches(check.identity.toUpper(), check.identity));
+}
+
+// A typed value with fewer than 64 hex digits never matches, even if
+// the digits present are a correct prefix of the computed identity.
+TEST_CASE(IdentityDifferentHexLengthIsNoMatch) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	// Take the first 20 characters of the 79-char identity: that is
+	// about 16 hex digits, well short of the required 64.
+	const auto prefix = check.identity.left(20);
+	CHECK(!ServerKeyIdentityMatches(prefix, check.identity));
+}
+
+// A valid key's identity must round-trip through ServerKeyIdentityMatches
+// when typed back verbatim.
+TEST_CASE(ValidKeyIdentityMatchesItself) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK(ServerKeyIdentityMatches(check.identity, check.identity));
+}
+
+// ExtractKeyId: plain text returns trimmed text unchanged.
+TEST_CASE(ExtractKeyIdReturnsPlainTextTrimmed) {
+	CHECK_EQ(ExtractKeyId(u"  abcd1234  "_q), u"abcd1234"_q);
+}
+
+// ExtractKeyId: a logfmt line yields the value after key_id=.
+TEST_CASE(ExtractKeyIdParsesLogfmtLine) {
+	CHECK_EQ(
+		ExtractKeyId(u"msg=\"server RSA key\" key_id=abc123 ts=1"_q),
+		u"abc123"_q);
+}
+
+// ExtractKeyId: a quoted logfmt value has its surrounding quotes stripped.
+TEST_CASE(ExtractKeyIdStripsQuotesFromLogfmt) {
+	CHECK_EQ(
+		ExtractKeyId(u"key_id=\"550a-1234\""_q),
+		u"550a-1234"_q);
+}
+
+// ExtractKeyId: a full log line whose next field starts with a hex character
+// ('f' in fingerprint=...) must not absorb any of that field — stop at 64.
+TEST_CASE(ExtractKeyIdStopsAt64BeforeNeighbouringHexField) {
+	const auto hex64 = QString(64, QChar::fromLatin1('a'));
+	const auto line = u"key_id="_q + hex64 + u" fingerprint=-123"_q;
+	CHECK_EQ(ExtractKeyId(line), hex64);
+}
+
+// ExtractKeyId: when key_id carries only 63 hex digits, a space before
+// the next logfmt field stops collection. Pin the exact result rather
+// than only checking LooksLikeKeyId, so a regression that returns empty
+// or stops early does not silently pass.
+TEST_CASE(ExtractKeyIdDoesNotAbsorbNeighbouringFieldOnTruncated) {
+	const auto hex63 = QString(63, QChar::fromLatin1('a'));
+	const auto line = u"key_id="_q + hex63 + u" fingerprint=99"_q;
+	CHECK_EQ(ExtractKeyId(line), hex63);
+}
+
+// ExtractKeyId: same as above but with a newline separator. The logfmt
+// lookahead identifies fingerprint= as a field (has '=' before
+// whitespace) and stops, so the absorbed 'f' bug cannot return via a
+// log paste that spans two lines.
+TEST_CASE(ExtractKeyIdDoesNotAbsorbNeighbouringFieldOnTruncatedNewline) {
+	const auto hex63 = QString(63, QChar::fromLatin1('a'));
+	const auto line = u"key_id="_q + hex63 + u"\nfingerprint=99"_q;
+	CHECK_EQ(ExtractKeyId(line), hex63);
+}
+
+// ExtractKeyId: a key_id value that wraps at a terminal boundary (hex
+// spans two lines) yields the same 64 digits as the single-line form.
+TEST_CASE(ExtractKeyIdHandlesWrappedLogLine) {
+	const auto hex32a = QString(32, QChar::fromLatin1('a'));
+	const auto hex32b = QString(32, QChar::fromLatin1('b'));
+	const auto wrapped = u"key_id="_q + hex32a + u"\n"_q + hex32b;
+	CHECK_EQ(ExtractKeyId(wrapped), hex32a + hex32b);
+}
+
+// LooksLikeKeyId: 64 plain hex chars (no dashes) is accepted.
+TEST_CASE(LooksLikeKeyIdAccepts64PlainHex) {
+	const auto s = QString(64, QChar::fromLatin1('a'));
+	CHECK(LooksLikeKeyId(s));
+}
+
+// LooksLikeKeyId: 79-char form (64 hex + 15 dashes, grouped by 4) is accepted.
+TEST_CASE(LooksLikeKeyIdAccepts79CharForm) {
+	const auto check = CheckServerKey(QString::fromLatin1(kRsa2048Spki));
+	CHECK(check.valid());
+	CHECK_EQ(check.identity.size(), 79);
+	CHECK(LooksLikeKeyId(check.identity));
+}
+
+// LooksLikeKeyId: a value with a leading quote (logfmt unstripped) is rejected.
+TEST_CASE(LooksLikeKeyIdRejectsQuotedValue) {
+	CHECK(!LooksLikeKeyId(u"\"abcd\""_q));
+}
+
+// LooksLikeKeyId: anything with fewer than 64 hex digits is rejected.
+TEST_CASE(LooksLikeKeyIdRejectsShortValue) {
+	CHECK(!LooksLikeKeyId(u"abcd"_q));
+}
+
+// ChooseIdentityLayout: both sizes fit at 13px.
+TEST_CASE(ChooseIdentityLayoutUsesSize13WhenFits) {
+	const auto layout = ChooseIdentityLayout(324, 320, 300);
+	CHECK_EQ(layout.pixelSize, 13);
+	CHECK(layout.fits);
+}
+
+// ChooseIdentityLayout: only 12px fits, so the layout steps down.
+TEST_CASE(ChooseIdentityLayoutStepsDownTo12WhenOnly12Fits) {
+	const auto layout = ChooseIdentityLayout(324, 330, 320);
+	CHECK_EQ(layout.pixelSize, 12);
+	CHECK(layout.fits);
+}
+
+// ChooseIdentityLayout: neither size fits; fits is false.
+TEST_CASE(ChooseIdentityLayoutNoFitWhenNeitherFits) {
+	const auto layout = ChooseIdentityLayout(324, 330, 330);
+	CHECK(!layout.fits);
+}

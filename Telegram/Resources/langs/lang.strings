@@ -400,6 +400,37 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_qr_phone" = "Log in using phone number";
 "lng_intro_qr_passkey" = "Log in using passkey";
 
+"lng_intro_server_title"             = "Your server";
+"lng_intro_server_desc"              = "This app connects only to the server you enter here.\nYou need its address and its public key.";
+"lng_intro_server_address_ph"        = "Server address (host:port)";
+"lng_intro_server_key_ph"            = "Server public key (PEM)";
+
+"lng_intro_server_address_empty"     = "Enter the address of your server.";
+"lng_intro_server_address_no_port"   = "Add the port after the address, for example 203.0.113.10:443.";
+"lng_intro_server_address_bad_port"  = "The port must be a number from 1 to 65535.";
+"lng_intro_server_address_invalid"   = "This is not a valid address. Use host:port, for example 203.0.113.10:443.";
+"lng_intro_server_address_empty_host"  = "The host part is empty. Enter host:port or [ipv6]:port.";
+"lng_intro_server_address_bad_host"    = "That is not a valid host or IP address.";
+"lng_intro_server_address_too_long"    = "The host name is too long.";
+"lng_intro_server_address_ipv6"        = "IPv6 addresses require brackets: [2001:db8::1]:443.";
+"lng_intro_server_key_empty"         = "Paste your server's public key.";
+"lng_intro_server_key_invalid"       = "This is not a public key. Copy the whole block, including the BEGIN and END lines.";
+"lng_intro_server_key_private"       = "This is a private key. Do not share it with anyone. Paste the server's public key instead.";
+"lng_intro_server_key_not_rsa"       = "This key is not RSA. The server's key must be an RSA key.";
+"lng_intro_server_key_bits"          = "This key is {bits}-bit. The protocol only uses 2048-bit RSA keys, so this server would never connect.";
+"lng_intro_server_key_internal"      = "The key could not be processed. Try a different key or format.";
+"lng_intro_server_check_title"       = "Check the key";
+"lng_intro_server_check_desc"        = "Your server prints a key_id when it starts. It must match the value below. If someone else gave you the address and key, you are trusting them.";
+"lng_intro_server_check_ph"          = "Paste key_id from the server log";
+"lng_intro_server_check_copy"        = "Copy key_id";
+"lng_intro_server_check_none"        = "Not checked yet.";
+"lng_intro_server_check_unreadable"  = "That is not a key_id. Copy the value after key_id= in your server's startup line.";
+"lng_intro_server_check_match"       = "Match. This is the key your server printed.";
+"lng_intro_server_check_mismatch"    = "No match. This is not the key your server printed.";
+"lng_intro_server_set_failed"        = "The server configuration could not be saved. Restart the client without the endpoint override.";
+"lng_intro_server_check_value_a11y"  = "Key identity, 16 groups: {groups}";
+"lng_intro_server_identity_too_wide" = "Identity cannot be displayed at a legible size. Use Copy to verify.";
+
 "lng_intro_fragment_title" = "Enter code";
 "lng_intro_fragment_about" = "Get the code for {phone_number} in the Anonymous Numbers section on Fragment.";
 "lng_intro_fragment_button" = "Open Fragment";

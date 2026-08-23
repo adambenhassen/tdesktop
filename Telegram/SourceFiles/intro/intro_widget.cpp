@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_start.h"
 #include "intro/intro_phone.h"
 #include "intro/intro_qr.h"
+#include "intro/intro_server.h"
 #include "intro/intro_code.h"
 #include "intro/intro_signup.h"
 #include "intro/intro_password_check.h"
@@ -109,14 +110,13 @@ Widget::Widget(
 
 	switch (point) {
 	case EnterPoint::Start:
-		getNearestDC();
 		appendStep(new StartWidget(this, _account, getData()));
 		break;
 	case EnterPoint::Phone:
 		appendStep(new PhoneWidget(this, _account, getData()));
 		break;
 	case EnterPoint::Qr:
-		appendStep(new QrWidget(this, _account, getData()));
+		appendStep(new ServerWidget(this, _account, getData()));
 		break;
 	default: Unexpected("Enter point in Intro::Widget::Widget.");
 	}
@@ -372,6 +372,11 @@ void Widget::setupStep() {
 		}
 	}, getStep()->lifetime());
 
+	getStep()->backAvailable() | rpl::on_next([=](bool available) {
+		_backAvailable = available;
+		_back->toggle(available, anim::type::normal);
+	}, getStep()->lifetime());
+
 	getStep()->finishInit();
 }
 
@@ -400,7 +405,7 @@ void Widget::historyMove(StackAction action, Animate animate) {
 
 	getStep()->prepareShowAnimated(wasStep);
 	if (wasStep->hasCover() != getStep()->hasCover()) {
-		_nextTopFrom = wasStep->contentTop() + st::introNextTop;
+		_nextTopFrom = wasStep->nextButtonTop();
 		_controlsTopFrom = wasStep->hasCover() ? st::introCoverHeight : 0;
 		_coverShownAnimation.start(
 			[this] { updateControlsGeometry(); },
@@ -417,7 +422,6 @@ void Widget::historyMove(StackAction action, Animate animate) {
 	if (action == StackAction::Back || action == StackAction::Replace) {
 		delete base::take(wasStep);
 	}
-	_back->toggle(getStep()->hasBack(), anim::type::normal);
 
 	auto stepHasCover = getStep()->hasCover();
 	_settings->toggle(!stepHasCover, anim::type::normal);
@@ -636,27 +640,6 @@ void Widget::resetAccount() {
 	}));
 }
 
-void Widget::getNearestDC() {
-	if (!_api) {
-		return;
-	}
-	_nearestDcRequestId = _api->request(MTPhelp_GetNearestDc(
-	)).done([=](const MTPNearestDc &result) {
-		_nearestDcRequestId = 0;
-		const auto &nearest = result.c_nearestDc();
-		DEBUG_LOG(("Got nearest dc, country: %1, nearest: %2, this: %3"
-			).arg(qs(nearest.vcountry())
-			).arg(nearest.vnearest_dc().v
-			).arg(nearest.vthis_dc().v));
-		_account->suggestMainDcId(nearest.vnearest_dc().v);
-		const auto nearestCountry = qs(nearest.vcountry());
-		if (getData()->country != nearestCountry) {
-			getData()->country = nearestCountry;
-			getData()->updated.fire({});
-		}
-	}).send();
-}
-
 void Widget::showTerms(Fn<void()> callback) {
 	if (getData()->termsLock.text.text.isEmpty()) {
 		return;
@@ -728,7 +711,7 @@ void Widget::showControls() {
 	if (_terms) {
 		_terms->show(anim::type::instant);
 	}
-	_back->toggle(getStep()->hasBack(), anim::type::instant);
+	_back->toggle(_backAvailable, anim::type::instant);
 }
 
 void Widget::setupNextButton() {
@@ -849,7 +832,7 @@ void Widget::updateControlsGeometry() {
 	}
 	_back->moveToLeft(0, controlsTop);
 
-	auto nextTopTo = getStep()->contentTop() + st::introNextTop;
+	auto nextTopTo = getStep()->nextButtonTop();
 	auto nextTop = anim::interpolate(_nextTopFrom, nextTopTo, shown);
 	const auto shownAmount = _nextShownAnimation.value(_nextShown ? 1. : 0.);
 	const auto realNextTop = anim::interpolate(
@@ -881,7 +864,7 @@ void Widget::keyPressEvent(QKeyEvent *e) {
 	if (_showAnimation || getStep()->animating()) return;
 
 	if (e->key() == Qt::Key_Escape || e->key() == Qt::Key_Back) {
-		if (getStep()->hasBack()) {
+		if (_backAvailable) {
 			backRequested();
 		}
 	} else if (e->key() == Qt::Key_Enter

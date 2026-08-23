@@ -717,10 +717,20 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 			// endpoint identity is what the CDN-shadowing control
 			// matches against, and the key must replace the built-in
 			// table that the DcOptions(Environment) ctor already filled.
+			//
+			// ipv6 is not stored in the v3 blob, so derive it from the
+			// stored ip on every load. This is the only option: every
+			// blob already written carries no flag to read, and the
+			// original substring scan was self-healing for the same
+			// reason — it re-derived the flag from the ip on each load.
+			auto hostAddr = QHostAddress(QString::fromStdString(ip));
+			const auto ipv6 = (hostAddr.protocol()
+				== QAbstractSocket::IPv6Protocol);
 			auto restored = CustomServer{
 				.dcId = dcId,
 				.ip = std::move(ip),
 				.port = port,
+				.ipv6 = ipv6,
 				.key = std::make_shared<RSAPublicKey>(RSAPublicKey(n, e))
 			};
 			// A blob that claims a pin but carries a partial one must
@@ -838,7 +848,7 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	_cdnPublicKeys.clear();
 	applyOneGuarded(
 		server.dcId,
-		Flag::f_static | 0,
+		Flag::f_static | (server.ipv6 ? Flag::f_ipv6 : Flag(0)),
 		server.ip,
 		server.port,
 		{});
