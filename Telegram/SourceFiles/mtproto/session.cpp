@@ -354,6 +354,15 @@ void Session::pinnedServerFailure(PinnedServerFailure failure) {
 	_instance->onPinnedServerFailure(_shiftedDcId, failure);
 }
 
+void Session::stopUntilPinChange() {
+	if (_killed || !_private) {
+		return;
+	}
+	InvokeQueued(_private, [captured = _private] {
+		captured->stopUntilPinChange();
+	});
+}
+
 void Session::resetDone() {
 	_instance->onSessionReset(_shiftedDcId);
 }

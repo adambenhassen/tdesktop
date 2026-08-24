@@ -183,6 +183,7 @@ public:
 	void needToResumeAndSend();
 	void connectionStateChange(int newState);
 	void pinnedServerFailure(PinnedServerFailure failure);
+	void stopUntilPinChange();
 	void resetDone();
 	void sendAnything(crl::time msCanWait = 0);
 

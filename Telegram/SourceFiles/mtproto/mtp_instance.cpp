@@ -324,6 +324,19 @@ Instance::Private::Private(
 , _proxySettings(Core::App().settings().proxy()) {
 	Expects(_config != nullptr);
 
+	// The reported failure and the sessions' give-up state die
+	// together, with the pin that produced them: setCustomServer()
+	// fires this change when the user corrects the address or the
+	// key. No other event may clear one without the other - a proxy
+	// change or a manual restart has to leave a stopped, reported
+	// failure stopped and reported.
+	dcOptions().changed(
+	) | rpl::filter([=](DcId dcId) {
+		return dcId == dcOptions().customServer().dcId;
+	}) | rpl::on_next([=] {
+		_pinnedServerFailure = std::nullopt;
+	}, _lifetime);
+
 	const auto idealThreadPoolSize = QThread::idealThreadCount();
 	_fileSessionThreads.resize(2 * std::max(idealThreadPoolSize / 2, 1));
 
@@ -616,7 +629,6 @@ void Instance::Private::requestCDNConfig() {
 }
 
 void Instance::Private::restart() {
-	_pinnedServerFailure = std::nullopt;
 	for (const auto &[shiftedDcId, session] : _sessions) {
 		session->restart();
 	}
@@ -1257,6 +1269,18 @@ void Instance::Private::onPinnedServerFailure(
 			: "dc id mismatch"));
 	if (_pinnedServerFailure.current() != failure) {
 		_pinnedServerFailure = failure;
+	}
+	if (failure == PinnedServerFailure::DcIdMismatch) {
+		// Gate reconnection exactly like the key mismatch: neither
+		// class may re-enter the requestConfig / restart cycle. A
+		// corrected pin arrives through dcOptionsChanged(), which
+		// clears both the report and the sessions' give-up state.
+		const auto dcId = BareDcId(shiftedDcId);
+		for (const auto &[shifted, session] : _sessions) {
+			if (BareDcId(shifted) == dcId) {
+				session->stopUntilPinChange();
+			}
+		}
 	}
 }
 

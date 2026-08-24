@@ -350,9 +350,14 @@ int32 SessionPrivate::getShiftedDcId() const {
 }
 
 void SessionPrivate::dcOptionsChanged() {
-	_gaveUpOnKeyMismatch = false;
+	_gaveUpOnPinnedFailure = false;
 	_retryTimeout = 1;
 	connectToServer(true);
+}
+
+void SessionPrivate::stopUntilPinChange() {
+	_gaveUpOnPinnedFailure = true;
+	doDisconnect();
 }
 
 int32 SessionPrivate::getState() const {
@@ -1010,10 +1015,11 @@ void SessionPrivate::restartNow() {
 }
 
 void SessionPrivate::connectToServer(bool afterConfig) {
-	// A key mismatch is answered once and then waited out: retrying
-	// cannot change what the endpoint answered with. A corrected pin
-	// arrives through dcOptionsChanged(), which passes afterConfig.
-	if (_gaveUpOnKeyMismatch && !afterConfig) {
+	// A pin failure is answered once and then waited out: retrying
+	// cannot change the key the endpoint answers with, nor the DC id
+	// it reports. A corrected pin arrives through dcOptionsChanged(),
+	// which passes afterConfig.
+	if (_gaveUpOnPinnedFailure && !afterConfig) {
 		return;
 	}
 	if (afterConfig && (!_testConnections.empty() || _connection)) {
@@ -2546,10 +2552,9 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 				// corrected pin instead of looping.
 				LOG(("AuthKey Error: public key mismatch, "
 					"stopping until the endpoint is corrected"));
-				_gaveUpOnKeyMismatch = true;
 				_sessionData->queuePinnedServerFailure(
 					PinnedServerFailure::KeyMismatch);
-				doDisconnect();
+				stopUntilPinChange();
 				return;
 			}
 			case Action::Retry:

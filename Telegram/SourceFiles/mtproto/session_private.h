@@ -49,6 +49,9 @@ public:
 	void restartNow();
 	void sendPingForce();
 	void tryToSend();
+	// Stop retrying until the pin changes: the endpoint failed the
+	// pin check and asking again reaches the same answer.
+	void stopUntilPinChange();
 
 private:
 	static constexpr auto kUpdateStateAlways = 666;
@@ -198,10 +201,10 @@ private:
 	int _retryTimeout = 1;
 	qint64 _retryWillFinish = 0;
 
-	// Set when the endpoint answered the auth-key exchange with an
-	// unknown public key: a stop, not a retry. Only a corrected pin
-	// (dcOptionsChanged) clears it.
-	bool _gaveUpOnKeyMismatch = false;
+	// Set when the endpoint fails the pin check — an unknown public
+	// key, or a server DC id that does not confirm the pin. A stop,
+	// not a retry: only a corrected pin (dcOptionsChanged) clears it.
+	bool _gaveUpOnPinnedFailure = false;
 
 	base::Timer _oldConnectionTimer;
 	bool _oldConnection = true;

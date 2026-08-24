@@ -75,10 +75,10 @@ public:
 	[[nodiscard]] rpl::producer<> allKeysDestroyed() const;
 
 	// A pinned endpoint that failed on its face: a key the account was
-	// not given, or a server DC id different from the pin. Reported
-	// once and held until restart() clears it; fires the current value
-	// to late subscribers, so UI attached after the failure still sees
-	// it.
+	// not given, or a server DC id that does not confirm the pin.
+	// Reported once and held until a pin change clears it; fires the
+	// current value to late subscribers, so UI attached after the
+	// failure still sees it.
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure);
