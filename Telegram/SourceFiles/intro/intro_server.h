@@ -69,13 +69,6 @@ protected:
 	void paintEvent(QPaintEvent *e) override;
 
 private:
-	enum class Verdict {
-		None,
-		Match,
-		Mismatch,
-		Unreadable,
-	};
-
 	void commitAndAdvance();
 	void updateVerdict();
 	void paintPanel(QPainter &p);
@@ -87,7 +80,7 @@ private:
 	object_ptr<Ui::InputField> _compare;
 	object_ptr<Ui::LinkButton> _copy;
 
-	Verdict _verdict = Verdict::None;
+	MTP::KeyIdCompare _compareStatus = MTP::KeyIdCompare::None;
 	QString _panelA11yBase;
 
 };
