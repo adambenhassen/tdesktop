@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/mtproto_custom_server_input.h"
 
+#include "base/algorithm.h"
 #include "base/openssl_help.h"
 
 #include <QtNetwork/QHostAddress>
@@ -409,17 +410,38 @@ IdentityLayout ChooseIdentityLayout(
 	return {.pixelSize = 12, .fits = false};
 }
 
+AuthKeyFailureAction ClassifyAuthKeyFailure(
+		details::DcKeyError error,
+		DcType dcType) {
+	if (dcType == DcType::Cdn) {
+		// A CDN DC missing its keys asks for CDN config, it does not
+		// fail the pin (MAIN-313 owns CDN key handling).
+		return (error == details::DcKeyError::UnknownPublicKey)
+			? AuthKeyFailureAction::RequestCdnConfig
+			: AuthKeyFailureAction::Retry;
+	}
+	return (error == details::DcKeyError::UnknownPublicKey)
+		? AuthKeyFailureAction::ReportKeyMismatch
+		: AuthKeyFailureAction::Retry;
+}
+
 std::optional<PinnedServerFailure> CheckPinnedServerConfig(
 		int thisDc,
+		const std::vector<int> &advertisedDcs,
 		const CustomServer &pinned) {
 	if (pinned.empty()) {
 		return std::nullopt;
 	}
-	// The pin is all-or-nothing, so a pinned server always carries a
-	// dc id; compare against the id the server claims for itself.
-	return (thisDc != pinned.dcId)
-		? std::make_optional(PinnedServerFailure::DcIdMismatch)
-		: std::nullopt;
+	if (thisDc != pinned.dcId) {
+		return std::make_optional(PinnedServerFailure::DcIdMismatch);
+	}
+	// A server may omit dc options entirely and still be the right
+	// one; an advertisement that exists has to carry the pin.
+	if (!advertisedDcs.empty()
+		&& !base::contains(advertisedDcs, pinned.dcId)) {
+		return std::make_optional(PinnedServerFailure::DcIdMismatch);
+	}
+	return std::nullopt;
 }
 
 } // namespace MTP

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "mtproto/details/mtproto_dc_key_creator.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
 
@@ -125,13 +126,30 @@ enum class PinnedServerFailure {
 		// than the one pinned for this account.
 };
 
+// What a failed auth-key exchange says about the pin. Only an endpoint
+// answering with a public key this account was not given is a pin
+// failure; every other key error is transient and keeps its existing
+// retry behaviour, and a CDN DC refuses differently (MAIN-313).
+enum class AuthKeyFailureAction {
+	Retry, // Not a pin problem: keep the existing restart-on-failure
+		// behaviour for this error.
+	RequestCdnConfig, // A CDN DC missing its keys asks for CDN config.
+	ReportKeyMismatch, // The endpoint answered with an unknown public
+		// key: report and stop.
+};
+[[nodiscard]] AuthKeyFailureAction ClassifyAuthKeyFailure(
+	details::DcKeyError error,
+	DcType dcType);
+
 // What the first config response from the connected server says about
-// the endpoint pinned for this account. A server naming a different
-// DC id than the pin carries means the account would drop its only
-// endpoint as soon as the advertised id took over, so it has to be
-// caught here, at the first response. Nothing pinned returns empty.
+// the endpoint pinned for this account. The server confirms the pin by
+// naming it as its own DC (thisDc) and, when it advertises any dc
+// options at all, by listing the pinned id among them; either refusal
+// means the account would drop its only endpoint once the advertised
+// id took over. Nothing pinned returns empty.
 [[nodiscard]] std::optional<PinnedServerFailure> CheckPinnedServerConfig(
 	int thisDc,
+	const std::vector<int> &advertisedDcs,
 	const CustomServer &pinned);
 
 // Layout decision for the identity display: which pixel size to use and

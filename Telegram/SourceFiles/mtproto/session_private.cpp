@@ -2530,12 +2530,13 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 	delegate.unboundReady = [=](base::expected<Result, Error> result) {
 		if (!result) {
 			releaseKeyCreationOnFail();
-			if (result.error() == Error::UnknownPublicKey) {
-				if (_realDcType == DcType::Cdn) {
-					LOG(("Warning: CDN public RSA key not found"));
-					requestCDNConfig();
-					return;
-				}
+			using Action = AuthKeyFailureAction;
+			switch (ClassifyAuthKeyFailure(result.error(), _realDcType)) {
+			case Action::RequestCdnConfig:
+				LOG(("Warning: CDN public RSA key not found"));
+				requestCDNConfig();
+				return;
+			case Action::ReportKeyMismatch: {
 				// The endpoint answered our auth-key exchange with a
 				// public key this account was not given. Either the
 				// pasted PEM is wrong, or something on the network path
@@ -2550,6 +2551,9 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 					PinnedServerFailure::KeyMismatch);
 				doDisconnect();
 				return;
+			}
+			case Action::Retry:
+				break;
 			}
 			restart();
 			return;

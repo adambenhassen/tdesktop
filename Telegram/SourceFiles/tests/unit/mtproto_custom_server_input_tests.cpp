@@ -731,18 +731,67 @@ TEST_CASE(ChooseIdentityLayoutNoFitWhenNeitherFits) {
 
 // CheckPinnedServerConfig: nothing pinned means nothing to contradict.
 TEST_CASE(NoPinMeansNoConfigFailure) {
-	CHECK(CheckPinnedServerConfig(2, CustomServer{}) == std::nullopt);
+	CHECK(CheckPinnedServerConfig(2, {}, CustomServer{}) == std::nullopt);
 }
 
-// CheckPinnedServerConfig: a server reporting the pinned dc id passes.
+// CheckPinnedServerConfig: a server reporting the pinned dc id, with
+// it advertised, passes.
 TEST_CASE(MatchingConfigDcIsNoFailure) {
-	CHECK(CheckPinnedServerConfig(2, PinnedServer(2)) == std::nullopt);
+	CHECK(CheckPinnedServerConfig(2, {2}, PinnedServer(2)) == std::nullopt);
 }
 
 // CheckPinnedServerConfig: a server naming another dc id than the pin
 // is a mismatch. This is the telegramd-with-non-default-TG_DC_ID case:
 // without the report the account loses its only endpoint in silence.
 TEST_CASE(DifferentConfigDcIsMismatch) {
-	const auto failure = CheckPinnedServerConfig(3, PinnedServer(2));
+	const auto failure = CheckPinnedServerConfig(3, {3}, PinnedServer(2));
 	CHECK(failure == PinnedServerFailure::DcIdMismatch);
+}
+
+// CheckPinnedServerConfig: an advertisement that omits the pinned id
+// is a mismatch even while this_dc still agrees — the server has
+// stopped confirming the DC this account is pinned to.
+TEST_CASE(AdvertisedListWithoutPinIsMismatch) {
+	const auto failure = CheckPinnedServerConfig(2, {3}, PinnedServer(2));
+	CHECK(failure == PinnedServerFailure::DcIdMismatch);
+}
+
+// CheckPinnedServerConfig: a list that carries the pin alongside other
+// ids is no failure; the pin only needs confirming, not exclusivity.
+TEST_CASE(AdvertisedListWithPinPasses) {
+	CHECK(CheckPinnedServerConfig(2, {2, 3}, PinnedServer(2)) == std::nullopt);
+}
+
+// CheckPinnedServerConfig: an empty advertisement is tolerated. A
+// minimal server may send config without dc options and still be the
+// right one; absence of a list cannot contradict the pin.
+TEST_CASE(EmptyAdvertisementIsTolerated) {
+	CHECK(CheckPinnedServerConfig(2, {}, PinnedServer(2)) == std::nullopt);
+}
+
+// ClassifyAuthKeyFailure: an unknown public key on a regular DC is the
+// key-mismatch report and stop.
+TEST_CASE(UnknownPublicKeyOnRegularDcReportsMismatch) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Regular) == AuthKeyFailureAction::ReportKeyMismatch);
+}
+
+// ClassifyAuthKeyFailure: an unknown public key on a CDN DC asks for
+// CDN config instead (MAIN-313 owns that path).
+TEST_CASE(UnknownPublicKeyOnCdnRequestsCdnConfig) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Cdn) == AuthKeyFailureAction::RequestCdnConfig);
+}
+
+// ClassifyAuthKeyFailure: any other key error retries as before, on
+// both regular and CDN DCs.
+TEST_CASE(OtherKeyErrorsKeepRetrying) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::Other,
+		DcType::Regular) == AuthKeyFailureAction::Retry);
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::Other,
+		DcType::Cdn) == AuthKeyFailureAction::Retry);
 }

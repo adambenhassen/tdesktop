@@ -939,14 +939,23 @@ void Instance::Private::configLoadDone(const MTPConfig &result) {
 	const auto &data = result.c_config();
 	_config->apply(data);
 
-	// The first config response names the server's own DC. A pin to a
-	// different id is visible only here, and without a report it ends
-	// the account's connectivity in silence on every start.
+	// The first config response is where a wrong pin becomes visible:
+	// the server names its own DC here and lists what it advertises.
+	// A pin the server does not confirm ends the account's
+	// connectivity in silence on every start; report it instead.
 	if (hasMainDcId()
 		&& (mtpIsTrue(data.vtest_mode())
 			== _config->dcOptions().isTestMode())) {
+		auto advertised = std::vector<int>();
+		advertised.reserve(data.vdc_options().v.size());
+		for (const auto &option : data.vdc_options().v) {
+			if (option.type() == mtpc_dcOption) {
+				advertised.push_back(option.c_dcOption().vid().v);
+			}
+		}
 		if (const auto failure = CheckPinnedServerConfig(
 				data.vthis_dc().v,
+				advertised,
 				_config->dcOptions().customServer())) {
 			onPinnedServerFailure(mainDcId(), *failure);
 		}
