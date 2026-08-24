@@ -96,6 +96,24 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	return nullptr;
 }
 
+// Whether two pins name the same server: the same endpoint identity and
+// the same key bytes. The fingerprint alone would do in practice, but a
+// pin decision should not rest on a digest.
+[[nodiscard]] bool SameCustomServer(
+		const CustomServer &a,
+		const CustomServer &b) {
+	if (a.dcId != b.dcId
+		|| a.ip != b.ip
+		|| a.port != b.port
+		|| a.ipv6 != b.ipv6) {
+		return false;
+	} else if (!a.key || !b.key) {
+		return false;
+	}
+	return a.key->getN() == b.key->getN()
+		&& a.key->getE() == b.key->getE();
+}
+
 } // namespace
 
 class DcOptions::WriteLocker {
@@ -867,7 +885,29 @@ bool DcOptions::setCustomServer(const CustomServer &server) {
 		return false;
 	}
 	{
+		// One write lock around the check and the apply: a read-lock
+		// check released before the write would let two concurrent
+		// callers each observe an unpinned account and both proceed,
+		// the later write replacing the first pin.
 		WriteLocker lock(this);
+		if (hasCustomServerUnlocked()
+			&& !SameCustomServer(_customServer, server)) {
+			// A pinned account's peer and message ids are small
+			// server-scoped integers: reading them against another
+			// server sends a forward for "user 12345" to an unrelated
+			// person. A second server is a second account, never an
+			// edit of this one. The identical pin stays allowed, since
+			// startup and config rewrites go through here. Returning
+			// before applyCustomServerUnlocked() also leaves _blocked,
+			// the production-fallback block, exactly as it was.
+			LOG(("MTP Error: refusing to replace pinned custom server"
+				" %1:%2 with %3:%4."
+				).arg(QString::fromStdString(_customServer.ip)
+				).arg(_customServer.port
+				).arg(QString::fromStdString(server.ip)
+				).arg(server.port));
+			return false;
+		}
 		applyCustomServerUnlocked(server);
 	}
 	// Main::Account::startMtp() writes the config to tdata on this, and

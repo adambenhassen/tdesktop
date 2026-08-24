@@ -217,7 +217,13 @@ void ServerWidget::submit() {
 		case MTP::ServerKeyStatus::InternalError:
 			msg = tr::lng_intro_server_key_internal(tr::now);
 			break;
-		default:
+		case MTP::ServerKeyStatus::Unreadable:
+			msg = tr::lng_intro_server_key_unreadable(tr::now);
+			break;
+		case MTP::ServerKeyStatus::Valid:
+			// No default branch on purpose: adding a status must fail
+			// the build until its message exists. This branch is not
+			// reachable: !keyCheck means the status is not Valid.
 			msg = tr::lng_intro_server_key_invalid(tr::now);
 			break;
 		}
@@ -383,26 +389,26 @@ void ServerKeyWidget::paintPanel(QPainter &p) {
 	const auto verdictMaxW = copyOffset - 12;
 	const auto verdictRect = QRect(8, verdictY, verdictMaxW, 30);
 	const auto textOpt = QTextOption(Qt::AlignLeft | Qt::AlignTop);
-	switch (_verdict) {
-	case Verdict::None:
+	switch (_compareStatus) {
+	case MTP::KeyIdCompare::None:
 		p.setPen(st::windowSubTextFg->c);
 		p.drawText(verdictRect,
 			tr::lng_intro_server_check_none(tr::now),
 			textOpt);
 		break;
-	case Verdict::Match:
+	case MTP::KeyIdCompare::Match:
 		p.setPen(st::activeLineFg->c);
 		p.drawText(verdictRect,
 			tr::lng_intro_server_check_match(tr::now),
 			textOpt);
 		break;
-	case Verdict::Mismatch:
+	case MTP::KeyIdCompare::Mismatch:
 		p.setPen(st::boxTextFgError->c);
 		p.drawText(verdictRect,
 			tr::lng_intro_server_check_mismatch(tr::now),
 			textOpt);
 		break;
-	case Verdict::Unreadable:
+	case MTP::KeyIdCompare::Unreadable:
 		p.setPen(st::windowSubTextFg->c);
 		p.drawText(verdictRect,
 			tr::lng_intro_server_check_unreadable(tr::now),
@@ -415,23 +421,14 @@ void ServerKeyWidget::updateVerdict() {
 	hideError();
 	setAccessibleDescription(QString());
 	const auto typed = MTP::ExtractKeyId(_compare->getLastText());
-	if (typed.isEmpty()) {
-		_verdict = Verdict::None;
-	} else if (!MTP::LooksLikeKeyId(typed)) {
-		_verdict = Verdict::Unreadable;
-	} else if (_keyCheck.valid()
-		&& MTP::ServerKeyIdentityMatches(typed, _keyCheck.identity)) {
-		_verdict = Verdict::Match;
-	} else {
-		_verdict = Verdict::Mismatch;
-	}
+	_compareStatus = MTP::CompareKeyId(typed, _keyCheck.identity);
 	_panel->update();
 	const auto verdictText = [&]() -> QString {
-		switch (_verdict) {
-		case Verdict::None: return tr::lng_intro_server_check_none(tr::now);
-		case Verdict::Match: return tr::lng_intro_server_check_match(tr::now);
-		case Verdict::Mismatch: return tr::lng_intro_server_check_mismatch(tr::now);
-		case Verdict::Unreadable: return tr::lng_intro_server_check_unreadable(tr::now);
+		switch (_compareStatus) {
+		case MTP::KeyIdCompare::None: return tr::lng_intro_server_check_none(tr::now);
+		case MTP::KeyIdCompare::Match: return tr::lng_intro_server_check_match(tr::now);
+		case MTP::KeyIdCompare::Mismatch: return tr::lng_intro_server_check_mismatch(tr::now);
+		case MTP::KeyIdCompare::Unreadable: return tr::lng_intro_server_check_unreadable(tr::now);
 		}
 		return {};
 	}();
@@ -466,10 +463,17 @@ void ServerKeyWidget::commitAndAdvance() {
 }
 
 void ServerKeyWidget::submit() {
-	if (_verdict == Verdict::Mismatch) {
-		const auto mismatchMsg = tr::lng_intro_server_check_mismatch(tr::now);
-		showError(rpl::single(mismatchMsg));
-		setAccessibleDescription(mismatchMsg);
+	// An unreadable entry blocks like a mismatch: the user tried to
+	// compare and produced nothing comparable, so nothing was verified.
+	// Only an empty field (None) and a confirmed Match advance.
+	if (!MTP::KeyIdCompareAllowsAdvance(_compareStatus)) {
+		const auto msg = (_compareStatus == MTP::KeyIdCompare::Mismatch)
+			? tr::lng_intro_server_check_mismatch(tr::now)
+			: tr::lng_intro_server_check_unreadable(tr::now);
+		showError(rpl::single(msg));
+		setAccessibleDescription(msg);
+		QAccessibleEvent alertEvent(this, QAccessible::Alert);
+		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 	commitAndAdvance();

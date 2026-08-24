@@ -716,3 +716,60 @@ TEST_CASE(ChooseIdentityLayoutNoFitWhenNeitherFits) {
 	const auto layout = ChooseIdentityLayout(324, 330, 330);
 	CHECK(!layout.fits);
 }
+
+// CompareKeyId: an empty comparison is None, not a failed check, and it
+// advances — the user has not started verifying yet.
+TEST_CASE(CompareKeyIdEmptyIsNoneAndAdvances) {
+	const auto computed = CheckServerKey(
+		QString::fromLatin1(kRsa2048Spki)).identity;
+	CHECK_EQ(static_cast<int>(CompareKeyId(QString(), computed)), static_cast<int>(KeyIdCompare::None));
+	CHECK(KeyIdCompareAllowsAdvance(CompareKeyId(QString(), computed)));
+}
+
+// CompareKeyId: something typed that is not a readable key_id is
+// Unreadable, and it must block — the user compared nothing at all.
+TEST_CASE(CompareKeyIdUnreadableBlocks) {
+	const auto computed = CheckServerKey(
+		QString::fromLatin1(kRsa2048Spki)).identity;
+	CHECK(!computed.isEmpty());
+	for (const auto &typed : { u"not a key id"_q, u"abcd"_q }) {
+		CHECK_EQ(
+			static_cast<int>(CompareKeyId(typed, computed)),
+			static_cast<int>(KeyIdCompare::Unreadable));
+		CHECK(!KeyIdCompareAllowsAdvance(CompareKeyId(typed, computed)));
+	}
+}
+
+// CompareKeyId: the exact identity matches and advances; a one-off
+// hex digit is a mismatch and blocks.
+TEST_CASE(CompareKeyIdMatchAdvancesMismatchBlocks) {
+	const auto computed = CheckServerKey(
+		QString::fromLatin1(kRsa2048Spki)).identity;
+	CHECK(!computed.isEmpty());
+
+	CHECK_EQ(
+		static_cast<int>(CompareKeyId(computed, computed)),
+		static_cast<int>(KeyIdCompare::Match));
+	CHECK(KeyIdCompareAllowsAdvance(CompareKeyId(computed, computed)));
+
+	auto oneOff = computed;
+	oneOff[oneOff.size() - 1]
+		= (oneOff[oneOff.size() - 1] == QChar::fromLatin1('0'))
+			? QChar::fromLatin1('1')
+			: QChar::fromLatin1('0');
+	CHECK_EQ(
+		static_cast<int>(CompareKeyId(oneOff, computed)),
+		static_cast<int>(KeyIdCompare::Mismatch));
+	CHECK(!KeyIdCompareAllowsAdvance(CompareKeyId(oneOff, computed)));
+}
+
+// CompareKeyId: with no valid key entered there is nothing to match,
+// so even a well-formed key_id cannot produce Match.
+TEST_CASE(CompareKeyIdWithEmptyComputedNeverMatches) {
+	const auto typed = CheckServerKey(
+		QString::fromLatin1(kRsa2048Spki)).identity;
+	CHECK_EQ(
+		static_cast<int>(CompareKeyId(typed, QString())),
+		static_cast<int>(KeyIdCompare::Mismatch));
+	CHECK(!KeyIdCompareAllowsAdvance(CompareKeyId(typed, QString())));
+}
