@@ -142,3 +142,83 @@ TEST_CASE(BlockedConfigRefusesStoredOptions) {
 	CHECK(!blocked.hasCustomServer());
 	CHECK(blocked.refusesProductionFallback());
 }
+
+// A pin is immutable for the life of the account. Peer and message ids
+// are small server-scoped integers, so reading one server's cached ids
+// against another sends a forward for "user 12345" to an unrelated
+// person. A different pin must be refused and the original kept.
+TEST_CASE(PinnedCustomServerRefusesADifferentPin) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+
+	auto different = MakeCustomServer();
+	different.ip = "10.4.1.8";
+	CHECK(!options.setCustomServer(different));
+
+	const auto got = options.customServer();
+	CHECK_EQ(got.ip, original.ip);
+	CHECK_EQ(got.port, original.port);
+	CHECK(options.refusesProductionFallback());
+}
+
+// The key is what authenticates the server to the client, so the same
+// endpoint with a different key is still a different server.
+TEST_CASE(PinnedCustomServerRefusesADifferentKey) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+
+	auto n = MakeKey()->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	auto forged = std::make_shared<details::RSAPublicKey>(
+		n,
+		MakeKey()->getE());
+	CHECK(forged->valid());
+
+	auto different = MakeCustomServer();
+	different.key = forged;
+	CHECK(!options.setCustomServer(different));
+
+	const auto got = options.customServer();
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(qint64(got.key->fingerprint()), kProductionKeyFingerprint);
+	}
+}
+
+// Startup and config rewrites re-apply the stored pin through the same
+// setter, so the identical pin must stay allowed.
+TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+
+	CHECK(options.setCustomServer(MakeCustomServer()));
+	CHECK(options.hasCustomServer());
+	CHECK(options.refusesProductionFallback());
+
+	const auto serialized = options.serialize();
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(serialized));
+	CHECK(restored.isCustomServerPinned(MakeCustomServer().dcId));
+}
+
+// A refused overwrite returns before any state is touched, so it must
+// not lift or weaken the production-fallback block.
+TEST_CASE(RefusedOverwriteLeavesFallbackBlockInForce) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+	CHECK(options.refusesProductionFallback());
+
+	auto different = MakeCustomServer();
+	different.ip = "10.4.1.8";
+	CHECK(!options.setCustomServer(different));
+	CHECK(options.refusesProductionFallback());
+	CHECK(options.isCustomServerPinned(different.dcId));
+
+	// The no-key refusal keeps the same property.
+	auto keyless = MakeCustomServer();
+	keyless.key = nullptr;
+	CHECK(!options.setCustomServer(keyless));
+	CHECK(options.refusesProductionFallback());
+}

@@ -131,6 +131,11 @@ public:
 	// built-in table and keys for this account. Returns false when the
 	// server carries no key, so a caller with an endpoint but no key
 	// can report the failure instead of silently pinning nothing.
+	// Returns false as well when a *different* server is already
+	// pinned: a pin is immutable for the life of the account, a
+	// second server is a second account, never an edit of the first.
+	// Re-applying the identical pin succeeds, so startup and config
+	// rewrites go through.
 	[[nodiscard]] bool setCustomServer(const CustomServer &server);
 	[[nodiscard]] CustomServer customServer() const;
 	[[nodiscard]] bool hasCustomServer() const;

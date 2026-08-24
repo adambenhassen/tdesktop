@@ -400,6 +400,32 @@ QString ExtractKeyId(const QString &text) {
 	return result;
 }
 
+KeyIdCompare CompareKeyId(
+		const QString &typed,
+		const QString &computed) {
+	if (typed.isEmpty()) {
+		return KeyIdCompare::None;
+	} else if (!LooksLikeKeyId(typed)) {
+		return KeyIdCompare::Unreadable;
+	} else if (!computed.isEmpty()
+		&& ServerKeyIdentityMatches(typed, computed)) {
+		return KeyIdCompare::Match;
+	}
+	return KeyIdCompare::Mismatch;
+}
+
+bool KeyIdCompareAllowsAdvance(KeyIdCompare compare) {
+	switch (compare) {
+	case KeyIdCompare::None:
+	case KeyIdCompare::Match:
+		return true;
+	case KeyIdCompare::Mismatch:
+	case KeyIdCompare::Unreadable:
+		return false;
+	}
+	return false;
+}
+
 IdentityLayout ChooseIdentityLayout(
 		int innerWidth,
 		int advance13,
