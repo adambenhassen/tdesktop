@@ -732,7 +732,7 @@ TEST_CASE(CompareKeyIdUnreadableBlocks) {
 	const auto computed = CheckServerKey(
 		QString::fromLatin1(kRsa2048Spki)).identity;
 	CHECK(!computed.isEmpty());
-	for (const auto typed : { u"not a key id"_q, u"abcd"_q }) {
+	for (const auto &typed : { u"not a key id"_q, u"abcd"_q }) {
 		CHECK_EQ(
 			static_cast<int>(CompareKeyId(typed, computed)),
 			static_cast<int>(KeyIdCompare::Unreadable));
