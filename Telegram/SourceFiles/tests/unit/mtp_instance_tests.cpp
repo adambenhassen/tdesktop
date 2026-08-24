@@ -77,7 +77,7 @@ TEST_CASE(LateSubscriberSeesHeldReport) {
 TEST_CASE(RetireMatchesTheReportingSessionOnly) {
 	PinnedServerFailureChannel channel;
 	const auto main = ShiftedDcId(2);
-	const auto shifted = ShiftedDcId(1000 + 2);
+	const auto shifted = ShiftDcId(2, 1);
 	channel.report(Report(main, PinnedServerFailure::DcIdMismatch));
 	Emissions emissions(channel);
 
