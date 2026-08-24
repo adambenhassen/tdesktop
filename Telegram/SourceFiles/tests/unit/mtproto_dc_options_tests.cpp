@@ -221,17 +221,33 @@ TEST_CASE(ConcurrentSetCustomServerAcceptsOnlyOneDistinctPin) {
 	std::atomic<int> acceptedOriginal = 0;
 	std::atomic<int> acceptedOther = 0;
 	constexpr auto kThreads = 8;
+
+	// Every thread waits at the gate until all of them are ready, so
+	// the calls really overlap instead of serialising by accident.
+	std::atomic<int> ready = 0;
+	std::atomic<bool> go = false;
+
 	auto threads = std::vector<std::thread>();
 	threads.reserve(kThreads);
 	for (auto i = 0; i != kThreads; ++i) {
 		const auto attemptOriginal = (i % 2) == 0;
-		threads.emplace_back([&] {
+		// attemptOriginal is a loop-body local: it must be captured by
+		// value, the thread runs long after the iteration is over.
+		threads.emplace_back([&, attemptOriginal] {
+			++ready;
+			while (!go.load(std::memory_order_acquire)) {
+				std::this_thread::yield();
+			}
 			const auto ok = options.setCustomServer(
 				attemptOriginal ? MakeCustomServer() : other);
 			(attemptOriginal ? acceptedOriginal : acceptedOther)
 				+= (ok ? 1 : 0);
 		});
 	}
+	while (ready.load() != kThreads) {
+		std::this_thread::yield();
+	}
+	go.store(true, std::memory_order_release);
 	for (auto &thread : threads) {
 		thread.join();
 	}
