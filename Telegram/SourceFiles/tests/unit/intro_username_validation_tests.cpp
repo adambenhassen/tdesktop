@@ -50,34 +50,105 @@ TEST_CASE(WireFormIsLowercased) {
 	CHECK_EQ(ToWireUsername(u"Alice_1B"_q), u"alice_1b"_q);
 }
 
+const auto kServerA = UsernameServerIdentity{ u"10.0.0.1"_q, 443, 111 };
+const auto kServerB = UsernameServerIdentity{ u"10.0.0.2"_q, 443, 222 };
+
 TEST_CASE(CacheIsFreshOnlyForSameNameInsideWindow) {
 	const auto name = u"alice"_q;
 	const auto cache = UsernameCodeCache{
 		name,
+		kServerA,
 		QByteArray("hash"),
 		1000,
 	};
 
-	CHECK(cache.freshFor(name, 1000));
+	CHECK(cache.freshFor(name, kServerA, 1000));
 	// The window is four minutes: checked as literals so a change to
 	// kFreshForMs cannot move the goalposts of its own test.
 	constexpr auto kFourMinutesMs = qint64(4) * 60 * 1000;
-	CHECK(cache.freshFor(name, 1000 + kFourMinutesMs - 1));
+	CHECK(cache.freshFor(name, kServerA, 1000 + kFourMinutesMs - 1));
 	// codeTTL on the server is 5 minutes; the cache holds only 4, so a
 	// hash that is still valid on the wire is not reused past the window.
-	CHECK(!cache.freshFor(name, 1000 + kFourMinutesMs));
+	CHECK(!cache.freshFor(name, kServerA, 1000 + kFourMinutesMs));
 
-	CHECK(!cache.freshFor(u"bob"_q, 1001)); // Another username reissues.
+	// Another username reissues.
+	CHECK(!cache.freshFor(u"bob"_q, kServerA, 1001));
+}
+
+TEST_CASE(CacheNeverCrossesToAnotherServer) {
+	const auto name = u"alice"_q;
+	const auto cache = UsernameCodeCache{
+		name,
+		kServerA,
+		QByteArray("hash"),
+		1000,
+	};
+
+	// Back to the server step, commit a different pair, submit the same
+	// name inside the window: server A's hash must not reach server B.
+	CHECK(!cache.freshFor(name, kServerB, 1001));
+	// One differing component of the triple is enough.
+	CHECK(!cache.freshFor(
+		name,
+		UsernameServerIdentity{ u"10.0.0.1"_q, 443, 999 },
+		1001));
+	CHECK(!cache.freshFor(
+		name,
+		UsernameServerIdentity{ u"10.0.0.1"_q, 8443, 111 },
+		1001));
+	CHECK(!cache.freshFor(
+		name,
+		UsernameServerIdentity{ u"10.0.0.9"_q, 443, 111 },
+		1001));
+
+	// Fails closed when either side has no usable server identity.
+	CHECK(!cache.freshFor(name, UsernameServerIdentity(), 1001));
+	const auto noServer = UsernameCodeCache{
+		name,
+		UsernameServerIdentity(),
+		QByteArray("hash"),
+		1000,
+	};
+	CHECK(!noServer.freshFor(name, kServerA, 1001));
+}
+
+TEST_CASE(ServerIdentityIsEmptyWithoutAllThreeParts) {
+	CHECK(!kServerA.empty());
+	CHECK(UsernameServerIdentity().empty());
+	const auto noIp = UsernameServerIdentity{ QString(), 443, 111 };
+	const auto noPort = UsernameServerIdentity{ u"10.0.0.1"_q, 0, 111 };
+	// No pinned key fingerprint is no identity at all.
+	const auto noKey = UsernameServerIdentity{ u"10.0.0.1"_q, 443, 0 };
+	CHECK(noIp.empty());
+	CHECK(noPort.empty());
+	CHECK(noKey.empty());
 }
 
 TEST_CASE(DroppedAndEmptyCachesNeverLookFresh) {
-	auto cache = UsernameCodeCache{ u"alice"_q, QByteArray("hash"), 1000 };
+	auto cache = UsernameCodeCache{
+		u"alice"_q,
+		kServerA,
+		QByteArray("hash"),
+		1000,
+	};
 	cache.drop();
 	CHECK(cache.hash.isEmpty());
-	CHECK(!cache.freshFor(u"alice"_q, 1000));
+	CHECK(!cache.freshFor(u"alice"_q, kServerA, 1000));
 
 	const auto neverIssued = UsernameCodeCache();
-	CHECK(!neverIssued.freshFor(u"alice"_q, 1000));
+	CHECK(!neverIssued.freshFor(u"alice"_q, kServerA, 1000));
+}
+
+TEST_CASE(FloodWaitSecondsReadsDigitsFromTheEnd) {
+	CHECK_EQ(FloodWaitSeconds(u"FLOOD_WAIT_42"_q), 42);
+	// The whole family, not just the fixed FLOOD_WAIT_ prefix length:
+	// MTP::IsFloodError matches this one too and a fixed offset read 0.
+	CHECK_EQ(FloodWaitSeconds(u"FLOOD_PREMIUM_WAIT_42"_q), 42);
+	CHECK_EQ(FloodWaitSeconds(u"FLOOD_WAIT_0"_q), 0);
+	CHECK_EQ(FloodWaitSeconds(u"FLOOD_WAIT_3600"_q), 3600);
+	// No trailing digits at all degrades to 0 rather than misreading.
+	CHECK_EQ(FloodWaitSeconds(u"FLOOD_WAIT_"_q), 0);
+	CHECK_EQ(FloodWaitSeconds(QString()), 0);
 }
 
 } // namespace

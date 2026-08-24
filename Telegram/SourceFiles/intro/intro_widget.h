@@ -82,7 +82,9 @@ struct Data {
 	// The phone_code_hash UsernameWidget obtained for its username, so
 	// a back-and-forward loop reuses it instead of burning another
 	// shared per-IP sendCode call. Fresh for 4 of the server's
-	// 5-minute codeTTL; see UsernameCodeCache.
+	// 5-minute codeTTL, and only against the server that issued it —
+	// Back to the server step can commit a different pair inside that
+	// window. See UsernameCodeCache.
 	UsernameCodeCache usernameCode;
 
 	rpl::event_stream<> updated;

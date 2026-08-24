@@ -44,9 +44,21 @@ constexpr auto kStillWaitingAfterSeconds = 10;
 }
 
 [[nodiscard]] int FloodWaitSeconds(const MTP::Error &error) {
-	return base::StringViewMid(
-		error.type(),
-		u"FLOOD_WAIT_"_q.size()).toInt();
+	return FloodWaitSeconds(error.type());
+}
+
+// The server the client is talking to right now. A phone_code_hash is
+// only reusable against the server that issued it.
+[[nodiscard]] UsernameServerIdentity CurrentServerIdentity(
+		const MTP::CustomServer &server) {
+	if (server.empty()) {
+		return UsernameServerIdentity();
+	}
+	return UsernameServerIdentity{
+		.ip = QString::fromStdString(server.ip),
+		.port = server.port,
+		.keyFingerprint = server.key->fingerprint(),
+	};
 }
 
 } // namespace
@@ -262,7 +274,7 @@ void UsernameWidget::submit() {
 	_sentUsername = wire;
 
 	auto &cache = getData()->usernameCode;
-	if (cache.freshFor(_sentUsername, NowMs())) {
+	if (cache.freshFor(_sentUsername, CurrentServerIdentity(mine), NowMs())) {
 		_sentHash = cache.hash;
 		signIn();
 	} else {
@@ -315,7 +327,12 @@ void UsernameWidget::sendCodeDone(const MTPauth_SentCode &result) {
 			fail(Lang::Hard::ServerError());
 			return;
 		}
-		getData()->usernameCode = { _sentUsername, hash, NowMs() };
+		getData()->usernameCode = {
+			_sentUsername,
+			CurrentServerIdentity(account().mtp().dcOptions().customServer()),
+			hash,
+			NowMs(),
+		};
 		_sentHash = hash;
 		signIn();
 	}, [&](const MTPDauth_sentCodeSuccess &data) {
