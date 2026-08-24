@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include <atomic>
+#include <thread>
+#include <vector>
+
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
 
@@ -201,6 +205,45 @@ TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {
 	auto restored = DcOptions(Environment::Production);
 	CHECK(restored.constructFromSerialized(serialized));
 	CHECK(restored.isCustomServerPinned(MakeCustomServer().dcId));
+}
+
+// The check and the apply must be one atomic step under the write lock.
+// With the comparison in a separate read-lock scope, two concurrent
+// callers can each observe an unpinned account, both proceed, and the
+// later write replaces the first pin. Two distinct servers hammered at
+// one DcOptions must therefore never both get accepted.
+TEST_CASE(ConcurrentSetCustomServerAcceptsOnlyOneDistinctPin) {
+	auto options = DcOptions(Environment::Production);
+
+	auto other = MakeCustomServer();
+	other.ip = "10.4.1.9";
+
+	std::atomic<int> acceptedOriginal = 0;
+	std::atomic<int> acceptedOther = 0;
+	constexpr auto kThreads = 8;
+	auto threads = std::vector<std::thread>();
+	threads.reserve(kThreads);
+	for (auto i = 0; i != kThreads; ++i) {
+		const auto attemptOriginal = (i % 2) == 0;
+		threads.emplace_back([&] {
+			const auto ok = options.setCustomServer(
+				attemptOriginal ? MakeCustomServer() : other);
+			(attemptOriginal ? acceptedOriginal : acceptedOther)
+				+= (ok ? 1 : 0);
+		});
+	}
+	for (auto &thread : threads) {
+		thread.join();
+	}
+
+	CHECK((acceptedOriginal == 0) || (acceptedOther == 0));
+	CHECK((acceptedOriginal + acceptedOther) > 0);
+	const auto got = options.customServer();
+	if (acceptedOriginal > 0) {
+		CHECK_EQ(got.ip, MakeCustomServer().ip);
+	} else {
+		CHECK_EQ(got.ip, other.ip);
+	}
 }
 
 // A refused overwrite returns before any state is touched, so it must

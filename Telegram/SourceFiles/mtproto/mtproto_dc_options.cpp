@@ -885,7 +885,11 @@ bool DcOptions::setCustomServer(const CustomServer &server) {
 		return false;
 	}
 	{
-		ReadLocker lock(this);
+		// One write lock around the check and the apply: a read-lock
+		// check released before the write would let two concurrent
+		// callers each observe an unpinned account and both proceed,
+		// the later write replacing the first pin.
+		WriteLocker lock(this);
 		if (hasCustomServerUnlocked()
 			&& !SameCustomServer(_customServer, server)) {
 			// A pinned account's peer and message ids are small
@@ -904,9 +908,6 @@ bool DcOptions::setCustomServer(const CustomServer &server) {
 				).arg(server.port));
 			return false;
 		}
-	}
-	{
-		WriteLocker lock(this);
 		applyCustomServerUnlocked(server);
 	}
 	// Main::Account::startMtp() writes the config to tdata on this, and
