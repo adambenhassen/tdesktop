@@ -85,17 +85,17 @@ TEST_CASE(RetireMatchesTheReportingSessionOnly) {
 	CHECK_EQ(emissions.count(), 1);
 	CHECK(emissions.at(0).has_value());
 
-	CHECK(!channel.retireIfReportedBy(shifted));
+	channel.retireIfReportedBy(shifted);
 	CHECK_EQ(emissions.count(), 1);
 	CHECK(channel.current().has_value());
 
-	CHECK(channel.retireIfReportedBy(main));
+	channel.retireIfReportedBy(main);
 	CHECK(!channel.current().has_value());
 	CHECK_EQ(emissions.count(), 2);
 	CHECK(!emissions.at(1).has_value());
 
 	// Retiring twice reports once.
-	CHECK(!channel.retireIfReportedBy(main));
+	channel.retireIfReportedBy(main);
 	CHECK_EQ(emissions.count(), 2);
 }
 
@@ -103,7 +103,7 @@ TEST_CASE(RetireMatchesTheReportingSessionOnly) {
 TEST_CASE(RetireWithoutAReportIsANoop) {
 	PinnedServerFailureChannel channel;
 	Emissions emissions(channel);
-	CHECK(!channel.retireIfReportedBy(2));
+	channel.retireIfReportedBy(2);
 	CHECK_EQ(emissions.count(), 1); // only the initial empty value
 	CHECK(!channel.current().has_value());
 }

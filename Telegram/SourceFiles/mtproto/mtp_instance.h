@@ -67,13 +67,12 @@ public:
 		_changes.fire_copy(report);
 	}
 
-	[[nodiscard]] bool retireIfReportedBy(ShiftedDcId dcWithShift) {
+	void retireIfReportedBy(ShiftedDcId dcWithShift) {
 		if (!_held || (_held->shiftedDcId != dcWithShift)) {
-			return false;
+			return;
 		}
 		_held.reset();
 		_changes.fire_copy(std::nullopt);
-		return true;
 	}
 
 	[[nodiscard]] const std::optional<PinnedServerFailureReport> &current()
