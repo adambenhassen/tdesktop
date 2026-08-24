@@ -146,7 +146,7 @@ public:
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure);
 	[[nodiscard]] auto pinnedServerFailureValue() const
-		-> rpl::producer<std::optional<PinnedServerFailure>>;
+		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
 	// return true if need to clean request data
 	bool rpcErrorOccured(
@@ -291,7 +291,7 @@ private:
 	Fn<void(ShiftedDcId shiftedDcId, int32 state)> _stateChangedHandler;
 	Fn<void(ShiftedDcId shiftedDcId)> _sessionResetHandler;
 
-	rpl::variable<std::optional<PinnedServerFailure>> _pinnedServerFailure;
+	rpl::variable<std::optional<PinnedServerFailureReport>> _pinnedServerFailure;
 
 	rpl::event_stream<mtpRequestId> _nonPremiumDelayedRequests;
 	rpl::event_stream<> _frozenErrorReceived;
@@ -1245,14 +1245,16 @@ void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 		_stateChangedHandler(dcWithShift, state);
 	}
 	// A successful connection is the only proof a corrected pin works,
-	// so only it retires the reported failure. ConnectedState here
-	// means the auth-key exchange completed under the current pin -
-	// an endpoint with the wrong key never reaches it. Clearing on
-	// the pin change itself would wipe the warning before anything
-	// confirmed the correction; clearing on a restart attempt would
-	// wipe it while the session stays blocked.
+	// so only it retires the reported failure - and only for the
+	// session that reported: another session of the same DC reaching
+	// ConnectedState proves nothing about the endpoint that failed.
+	// ConnectedState here means the auth-key exchange completed under
+	// the current pin - an endpoint with the wrong key never reaches
+	// it. Clearing on a restart attempt would wipe the warning while
+	// the reporting session stays blocked.
 	if (state == ConnectedState
 		&& _pinnedServerFailure.current() != std::nullopt
+		&& _pinnedServerFailure.current()->shiftedDcId == dcWithShift
 		&& dcOptions().isCustomServerPinned(BareDcId(dcWithShift))) {
 		_pinnedServerFailure = std::nullopt;
 	}
@@ -1266,8 +1268,12 @@ void Instance::Private::onPinnedServerFailure(
 		).arg(failure == PinnedServerFailure::KeyMismatch
 			? "key mismatch"
 			: "dc id mismatch"));
-	if (_pinnedServerFailure.current() != failure) {
-		_pinnedServerFailure = failure;
+	auto report = PinnedServerFailureReport{
+		shiftedDcId,
+		failure
+	};
+	if (_pinnedServerFailure.current() != report) {
+		_pinnedServerFailure = report;
 	}
 	if (failure == PinnedServerFailure::DcIdMismatch) {
 		// Gate reconnection exactly like the key mismatch: neither
@@ -1283,7 +1289,7 @@ void Instance::Private::onPinnedServerFailure(
 	}
 }
 
-rpl::producer<std::optional<PinnedServerFailure>>
+rpl::producer<std::optional<PinnedServerFailureReport>>
 Instance::Private::pinnedServerFailureValue() const {
 	return _pinnedServerFailure.value();
 }
@@ -2025,7 +2031,7 @@ void Instance::onPinnedServerFailure(
 	_private->onPinnedServerFailure(shiftedDcId, failure);
 }
 
-rpl::producer<std::optional<PinnedServerFailure>>
+rpl::producer<std::optional<PinnedServerFailureReport>>
 Instance::pinnedServerFailure() const {
 	return _private->pinnedServerFailureValue();
 }

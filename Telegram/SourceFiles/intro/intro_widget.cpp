@@ -151,17 +151,19 @@ Widget::Widget(
 	// particular can be something on the path answering for the
 	// server, and retrying through it is the one wrong reaction.
 	_account->mtp().pinnedServerFailure(
-	) | rpl::on_next([=](std::optional<MTP::PinnedServerFailure> failure) {
-		if (!failure) {
+	) | rpl::on_next([=](
+			std::optional<MTP::PinnedServerFailureReport> report) {
+		if (!report) {
 			return;
 		}
-		const auto text = (*failure == MTP::PinnedServerFailure::KeyMismatch)
-			? tr::lng_intro_server_key_mismatch(tr::now)
-			: tr::lng_intro_server_dc_mismatch(
-				tr::now,
-				lt_dc,
-				QString::number(
-					_account->mtp().dcOptions().customServer().dcId));
+		const auto text = (
+			report->failure == MTP::PinnedServerFailure::KeyMismatch
+		)	? tr::lng_intro_server_key_mismatch(tr::now)
+		: tr::lng_intro_server_dc_mismatch(
+			tr::now,
+			lt_dc,
+			QString::number(
+				_account->mtp().dcOptions().customServer().dcId));
 		getStep()->showError(rpl::single(text));
 	}, lifetime());
 

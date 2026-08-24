@@ -29,6 +29,24 @@ using AuthKeyPtr = std::shared_ptr<AuthKey>;
 using AuthKeysList = std::vector<AuthKeyPtr>;
 enum class Environment : uchar;
 
+// A pinned endpoint failure together with the session that reported
+// it. The report is retired only by a successful connection of that
+// same session: any other session of the DC reaching ConnectedState
+// proves nothing about the endpoint that failed - after a stop, a
+// fresh session can still connect on an existing auth key while the
+// reporting one waits for a corrected pin.
+struct PinnedServerFailureReport {
+	ShiftedDcId shiftedDcId = 0;
+	PinnedServerFailure failure = PinnedServerFailure::KeyMismatch;
+
+	friend inline bool operator==(
+			const PinnedServerFailureReport &a,
+			const PinnedServerFailureReport &b) {
+		return (a.shiftedDcId == b.shiftedDcId)
+			&& (a.failure == b.failure);
+	}
+};
+
 class Instance : public QObject {
 	Q_OBJECT
 
@@ -76,14 +94,14 @@ public:
 
 	// A pinned endpoint that failed on its face: a key the account was
 	// not given, or a server DC id that does not confirm the pin.
-	// Reported once and held until a connection under a corrected pin
-	// succeeds; fires the current value to late subscribers, so UI
-	// attached after the failure still sees it.
+	// Reported once and held until the session that reported it
+	// connects successfully; fires the current value to late
+	// subscribers, so UI attached after the failure still sees it.
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure);
 	[[nodiscard]] auto pinnedServerFailure() const
-		-> rpl::producer<std::optional<PinnedServerFailure>>;
+		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
 	// Thread-safe.
 	[[nodiscard]] Config &config() const;
