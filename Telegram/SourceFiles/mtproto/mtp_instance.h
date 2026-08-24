@@ -76,9 +76,9 @@ public:
 
 	// A pinned endpoint that failed on its face: a key the account was
 	// not given, or a server DC id that does not confirm the pin.
-	// Reported once and held until a pin change clears it; fires the
-	// current value to late subscribers, so UI attached after the
-	// failure still sees it.
+	// Reported once and held until a connection under a corrected pin
+	// succeeds; fires the current value to late subscribers, so UI
+	// attached after the failure still sees it.
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure);

@@ -324,19 +324,6 @@ Instance::Private::Private(
 , _proxySettings(Core::App().settings().proxy()) {
 	Expects(_config != nullptr);
 
-	// The reported failure and the sessions' give-up state die
-	// together, with the pin that produced them: setCustomServer()
-	// fires this change when the user corrects the address or the
-	// key. No other event may clear one without the other - a proxy
-	// change or a manual restart has to leave a stopped, reported
-	// failure stopped and reported.
-	dcOptions().changed(
-	) | rpl::filter([=](DcId dcId) {
-		return dcId == dcOptions().customServer().dcId;
-	}) | rpl::on_next([=] {
-		_pinnedServerFailure = std::nullopt;
-	}, _lifetime);
-
 	const auto idealThreadPoolSize = QThread::idealThreadCount();
 	_fileSessionThreads.resize(2 * std::max(idealThreadPoolSize / 2, 1));
 
@@ -1256,6 +1243,18 @@ void Instance::Private::processUpdate(const Response &message) {
 void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 	if (_stateChangedHandler) {
 		_stateChangedHandler(dcWithShift, state);
+	}
+	// A successful connection is the only proof a corrected pin works,
+	// so only it retires the reported failure. ConnectedState here
+	// means the auth-key exchange completed under the current pin -
+	// an endpoint with the wrong key never reaches it. Clearing on
+	// the pin change itself would wipe the warning before anything
+	// confirmed the correction; clearing on a restart attempt would
+	// wipe it while the session stays blocked.
+	if (state == ConnectedState
+		&& _pinnedServerFailure.current() != std::nullopt
+		&& dcOptions().isCustomServerPinned(BareDcId(dcWithShift))) {
+		_pinnedServerFailure = std::nullopt;
 	}
 }
 
