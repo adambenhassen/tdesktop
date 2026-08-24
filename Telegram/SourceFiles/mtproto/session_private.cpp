@@ -2562,6 +2562,11 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 				return;
 			}
 			case Action::Retry:
+				// Upstream logged this on the unknown-key path; the
+				// unpinned account still runs that path.
+				if (result.error() == Error::UnknownPublicKey) {
+					LOG(("AuthKey Error: could not choose public RSA key"));
+				}
 				break;
 			}
 			restart();

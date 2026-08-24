@@ -790,12 +790,17 @@ TEST_CASE(UnpinnedRegularDcKeepsRetrying) {
 }
 
 // ClassifyAuthKeyFailure: an unknown public key on a CDN DC asks for
-// CDN config instead (MAIN-313 owns that path), pinned or not.
+// CDN config instead (MAIN-313 owns that path), pinned or not - both
+// pinned states are asserted so the comment stays true.
 TEST_CASE(UnknownPublicKeyOnCdnRequestsCdnConfig) {
 	CHECK(ClassifyAuthKeyFailure(
 		details::DcKeyError::UnknownPublicKey,
 		DcType::Cdn,
 		false) == AuthKeyFailureAction::RequestCdnConfig);
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Cdn,
+		true) == AuthKeyFailureAction::RequestCdnConfig);
 }
 
 // ClassifyAuthKeyFailure: any other key error retries as before, on
