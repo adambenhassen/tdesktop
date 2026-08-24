@@ -22,7 +22,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/facade.h" // MTP::RequestSent
 #include "base/bytes.h"
-#include "base/qt/qt_string_view.h" // base::StringViewMid
 #include "ui/text/format_values.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
@@ -41,10 +40,6 @@ constexpr auto kStillWaitingAfterSeconds = 10;
 
 [[nodiscard]] qint64 NowMs() {
 	return crl::now();
-}
-
-[[nodiscard]] int FloodWaitSeconds(const MTP::Error &error) {
-	return FloodWaitSeconds(error.type());
 }
 
 // The server the client is talking to right now. A phone_code_hash is
@@ -355,7 +350,7 @@ void UsernameWidget::requestFail(const MTP::Error &error) {
 		fail(tr::lng_intro_username_flood(
 			tr::now,
 			lt_duration,
-			Ui::FormatDurationWords(FloodWaitSeconds(error))));
+			Ui::FormatDurationWords(FloodWaitSeconds(error.type()))));
 	} else if (error.type() == u"PHONE_NUMBER_INVALID"_q) {
 		fail(tr::lng_intro_username_unavailable(tr::now));
 	} else {
@@ -398,7 +393,7 @@ void UsernameWidget::signInFail(const MTP::Error &error) {
 		fail(tr::lng_intro_username_flood(
 			tr::now,
 			lt_duration,
-			Ui::FormatDurationWords(FloodWaitSeconds(error))));
+			Ui::FormatDurationWords(FloodWaitSeconds(error.type()))));
 	} else {
 		LOG(("Intro Username Error: signIn failed with %1 (%2)"
 			).arg(type).arg(error.code()));
