@@ -39,6 +39,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_intro.h"
 #include "styles/style_window.h"
 
+#include <QtGui/QAccessible>
+
 namespace Intro {
 namespace details {
 namespace {
@@ -302,6 +304,10 @@ rpl::producer<bool> Step::backAvailable() const {
 	return rpl::single(hasBack());
 }
 
+QWidget *Step::firstTabWidget() const {
+	return nullptr;
+}
+
 void Step::setTitleText(rpl::producer<QString> titleText) {
 	_titleText = std::move(titleText);
 }
@@ -536,6 +542,12 @@ void Step::refreshError(const QString &text) {
 		_error->entity()->setText(text);
 		updateLabelsPosition();
 		_error->show(anim::type::normal);
+
+		// The inline error is the entire output of a step for six of its
+		// states; without this it never reaches assistive technology.
+		// Clearing announces nothing, or every keystroke would.
+		auto alertEvent = QAccessibleEvent(this, QAccessible::Alert);
+		QAccessible::updateAccessibility(&alertEvent);
 	}
 }
 

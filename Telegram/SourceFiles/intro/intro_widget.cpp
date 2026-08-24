@@ -457,6 +457,14 @@ void Widget::fixOrder() {
 	_back->raise();
 	floatPlayerRaiseAll();
 	_connecting->raise();
+
+	// Steps that name a first field get the field → Next → Back →
+	// Settings tab chain; the rest keep the default order.
+	if (auto first = getStep()->firstTabWidget()) {
+		QWidget::setTabOrder(first, _next->entity());
+		QWidget::setTabOrder(_next->entity(), _back->entity());
+		QWidget::setTabOrder(_back->entity(), _settings->entity());
+	}
 }
 
 void Widget::moveToStep(Step *step, StackAction action, Animate animate) {

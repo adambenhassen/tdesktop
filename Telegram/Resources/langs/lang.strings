@@ -431,6 +431,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_check_value_a11y"  = "Key identity, 16 groups: {groups}";
 "lng_intro_server_identity_too_wide" = "Identity cannot be displayed at a legible size. Use Copy to verify.";
 
+"lng_intro_username_title"        = "Your username";
+"lng_intro_username_desc"         = "Enter your username on {server}.";
+"lng_intro_username_ph"           = "Username";
+
+"lng_intro_username_empty"        = "Enter your username.";
+"lng_intro_username_bad"          = "Usernames are 5 to 32 characters: letters, digits and underscores, starting with a letter.";
+"lng_intro_username_unavailable"  = "That username can't be used on this server. Try another one.";
+"lng_intro_username_flood"        = "Too many sign-in attempts from this network. Try again in {duration}.";
+
+"lng_intro_checking"              = "Checking…";
+"lng_intro_still_waiting"         = "Still trying to reach {server}. It may be offline.";
+"lng_intro_retry"                 = "That didn't go through. Try again.";
+"lng_intro_server_error"          = "The server ran into a problem. Try again.";
+"lng_intro_please_wait"           = "Please wait…";
+
 "lng_intro_fragment_title" = "Enter code";
 "lng_intro_fragment_about" = "Get the code for {phone_number} in the Anonymous Numbers section on Fragment.";
 "lng_intro_fragment_button" = "Open Fragment";

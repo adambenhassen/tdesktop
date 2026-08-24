@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/sender.h"
+#include "intro/intro_username_validation.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
 #include "window/window_lock_widgets.h"
@@ -77,6 +78,12 @@ struct Data {
 	// Set by ServerWidget on valid input, consumed by ServerKeyWidget.
 	QString serverAddress;
 	QString serverPem;
+
+	// The phone_code_hash UsernameWidget obtained for its username, so
+	// a back-and-forward loop reuses it instead of burning another
+	// shared per-IP sendCode call. Fresh for 4 of the server's
+	// 5-minute codeTTL; see UsernameCodeCache.
+	UsernameCodeCache usernameCode;
 
 	rpl::event_stream<> updated;
 
