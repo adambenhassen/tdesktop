@@ -409,4 +409,17 @@ IdentityLayout ChooseIdentityLayout(
 	return {.pixelSize = 12, .fits = false};
 }
 
+std::optional<PinnedServerFailure> CheckPinnedServerConfig(
+		int thisDc,
+		const CustomServer &pinned) {
+	if (pinned.empty()) {
+		return std::nullopt;
+	}
+	// The pin is all-or-nothing, so a pinned server always carries a
+	// dc id; compare against the id the server claims for itself.
+	return (thisDc != pinned.dcId)
+		? std::make_optional(PinnedServerFailure::DcIdMismatch)
+		: std::nullopt;
+}
+
 } // namespace MTP

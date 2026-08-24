@@ -350,6 +350,7 @@ int32 SessionPrivate::getShiftedDcId() const {
 }
 
 void SessionPrivate::dcOptionsChanged() {
+	_gaveUpOnKeyMismatch = false;
 	_retryTimeout = 1;
 	connectToServer(true);
 }
@@ -1009,6 +1010,12 @@ void SessionPrivate::restartNow() {
 }
 
 void SessionPrivate::connectToServer(bool afterConfig) {
+	// A key mismatch is answered once and then waited out: retrying
+	// cannot change what the endpoint answered with. A corrected pin
+	// arrives through dcOptionsChanged(), which passes afterConfig.
+	if (_gaveUpOnKeyMismatch && !afterConfig) {
+		return;
+	}
 	if (afterConfig && (!_testConnections.empty() || _connection)) {
 		return;
 	}
@@ -2529,7 +2536,20 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 					requestCDNConfig();
 					return;
 				}
-				LOG(("AuthKey Error: could not choose public RSA key"));
+				// The endpoint answered our auth-key exchange with a
+				// public key this account was not given. Either the
+				// pasted PEM is wrong, or something on the network path
+				// is answering for the server - the second is exactly
+				// the attack key pinning exists to catch. Asking again
+				// reaches the same answer, so report it and wait for a
+				// corrected pin instead of looping.
+				LOG(("AuthKey Error: public key mismatch, "
+					"stopping until the endpoint is corrected"));
+				_gaveUpOnKeyMismatch = true;
+				_sessionData->queuePinnedServerFailure(
+					PinnedServerFailure::KeyMismatch);
+				doDisconnect();
+				return;
 			}
 			restart();
 			return;

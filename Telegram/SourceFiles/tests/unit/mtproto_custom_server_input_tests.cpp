@@ -716,3 +716,33 @@ TEST_CASE(ChooseIdentityLayoutNoFitWhenNeitherFits) {
 	const auto layout = ChooseIdentityLayout(324, 330, 330);
 	CHECK(!layout.fits);
 }
+
+// CheckPinnedServerConfig: the pinned endpoint fixture, valid apart
+// from the dc id passed in.
+[[nodiscard]] CustomServer PinnedServer(int dcId) {
+	return CustomServer{
+		.dcId = dcId,
+		.ip = "203.0.113.10",
+		.port = 443,
+		.key = std::make_shared<details::RSAPublicKey>(
+			CheckServerKey(QString::fromLatin1(kRsa2048Spki)).key),
+	};
+}
+
+// CheckPinnedServerConfig: nothing pinned means nothing to contradict.
+TEST_CASE(NoPinMeansNoConfigFailure) {
+	CHECK(CheckPinnedServerConfig(2, CustomServer{}) == std::nullopt);
+}
+
+// CheckPinnedServerConfig: a server reporting the pinned dc id passes.
+TEST_CASE(MatchingConfigDcIsNoFailure) {
+	CHECK(CheckPinnedServerConfig(2, PinnedServer(2)) == std::nullopt);
+}
+
+// CheckPinnedServerConfig: a server naming another dc id than the pin
+// is a mismatch. This is the telegramd-with-non-default-TG_DC_ID case:
+// without the report the account loses its only endpoint in silence.
+TEST_CASE(DifferentConfigDcIsMismatch) {
+	const auto failure = CheckPinnedServerConfig(3, PinnedServer(2));
+	CHECK(failure == PinnedServerFailure::DcIdMismatch);
+}

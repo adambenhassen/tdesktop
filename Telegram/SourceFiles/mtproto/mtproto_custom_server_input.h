@@ -8,8 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
+#include "mtproto/mtproto_dc_options.h"
 
 #include <QtCore/QString>
+#include <optional>
 #include <string>
 
 namespace MTP {
@@ -110,6 +112,27 @@ struct ServerEndpointCheck {
 // value (stripping surrounding quotes if present); otherwise return
 // text.trimmed(). Lets the user paste a whole server log line.
 [[nodiscard]] QString ExtractKeyId(const QString &text);
+
+// Why a pinned endpoint failed after the connection came up. Neither
+// value is a transient network problem and neither fixes itself on
+// retry, so both have to reach the user instead of a reconnect loop.
+// Each is a different message and a different thing to do about it.
+enum class PinnedServerFailure {
+	KeyMismatch, // The endpoint answered the auth-key exchange with an
+		// RSA public key this account was not given: either the pasted
+		// key is wrong or something on the path answers for the server.
+	DcIdMismatch, // The connected server reports a different DC id
+		// than the one pinned for this account.
+};
+
+// What the first config response from the connected server says about
+// the endpoint pinned for this account. A server naming a different
+// DC id than the pin carries means the account would drop its only
+// endpoint as soon as the advertised id took over, so it has to be
+// caught here, at the first response. Nothing pinned returns empty.
+[[nodiscard]] std::optional<PinnedServerFailure> CheckPinnedServerConfig(
+	int thisDc,
+	const CustomServer &pinned);
 
 // Layout decision for the identity display: which pixel size to use and
 // whether both rows fit. advance13 and advance12 are the horizontal pixel

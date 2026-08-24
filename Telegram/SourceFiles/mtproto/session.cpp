@@ -81,6 +81,12 @@ void SessionData::queueConnectionStateChange(int newState) {
 	});
 }
 
+void SessionData::queuePinnedServerFailure(PinnedServerFailure failure) {
+	withSession([=](not_null<Session*> session) {
+		session->pinnedServerFailure(failure);
+	});
+}
+
 void SessionData::queueResetDone() {
 	withSession([](not_null<Session*> session) {
 		session->resetDone();
@@ -342,6 +348,10 @@ void Session::needToResumeAndSend() {
 
 void Session::connectionStateChange(int newState) {
 	_instance->onStateChange(_shiftedDcId, newState);
+}
+
+void Session::pinnedServerFailure(PinnedServerFailure failure) {
+	_instance->onPinnedServerFailure(_shiftedDcId, failure);
 }
 
 void Session::resetDone() {

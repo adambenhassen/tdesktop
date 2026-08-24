@@ -198,6 +198,11 @@ private:
 	int _retryTimeout = 1;
 	qint64 _retryWillFinish = 0;
 
+	// Set when the endpoint answered the auth-key exchange with an
+	// unknown public key: a stop, not a retry. Only a corrected pin
+	// (dcOptionsChanged) clears it.
+	bool _gaveUpOnKeyMismatch = false;
+
 	base::Timer _oldConnectionTimer;
 	bool _oldConnection = true;
 

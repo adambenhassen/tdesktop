@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/timer.h"
+#include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 #include "mtproto/mtproto_proxy_data.h"
 #include "mtproto/details/mtproto_serialized_request.h"
@@ -92,6 +93,7 @@ public:
 	void queueTryToReceive();
 	void queueNeedToResumeAndSend();
 	void queueConnectionStateChange(int newState);
+	void queuePinnedServerFailure(PinnedServerFailure failure);
 	void queueResetDone();
 	void queueSendAnything(crl::time msCanWait = 0);
 
@@ -180,6 +182,7 @@ public:
 	void tryToReceive();
 	void needToResumeAndSend();
 	void connectionStateChange(int newState);
+	void pinnedServerFailure(PinnedServerFailure failure);
 	void resetDone();
 	void sendAnything(crl::time msCanWait = 0);
 

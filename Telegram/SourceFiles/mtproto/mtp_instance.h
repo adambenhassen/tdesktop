@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/details/mtproto_serialized_request.h"
+#include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
 namespace MTP {
@@ -72,6 +73,17 @@ public:
 
 	[[nodiscard]] rpl::producer<> writeKeysRequests() const;
 	[[nodiscard]] rpl::producer<> allKeysDestroyed() const;
+
+	// A pinned endpoint that failed on its face: a key the account was
+	// not given, or a server DC id different from the pin. Reported
+	// once and held until restart() clears it; fires the current value
+	// to late subscribers, so UI attached after the failure still sees
+	// it.
+	void onPinnedServerFailure(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure);
+	[[nodiscard]] auto pinnedServerFailure() const
+		-> rpl::producer<std::optional<PinnedServerFailure>>;
 
 	// Thread-safe.
 	[[nodiscard]] Config &config() const;
