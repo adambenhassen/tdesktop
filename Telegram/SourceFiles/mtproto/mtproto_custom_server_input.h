@@ -126,20 +126,22 @@ enum class PinnedServerFailure {
 		// than the one pinned for this account.
 };
 
-// What a failed auth-key exchange says about the pin. Only an endpoint
-// answering with a public key this account was not given is a pin
-// failure; every other key error is transient and keeps its existing
-// retry behaviour, and a CDN DC refuses differently (MAIN-313).
+// What a failed auth-key exchange says about the pin. Only a pinned
+// DC answering with a public key this account was not given is a pin
+// failure: on an unpinned account there is no key-identity question,
+// and every error keeps its existing retry behaviour. A CDN DC
+// refuses differently (MAIN-313), pinned or not.
 enum class AuthKeyFailureAction {
 	Retry, // Not a pin problem: keep the existing restart-on-failure
 		// behaviour for this error.
 	RequestCdnConfig, // A CDN DC missing its keys asks for CDN config.
-	ReportKeyMismatch, // The endpoint answered with an unknown public
-		// key: report and stop.
+	ReportKeyMismatch, // The pinned endpoint answered with an unknown
+		// public key: report and stop.
 };
 [[nodiscard]] AuthKeyFailureAction ClassifyAuthKeyFailure(
 	details::DcKeyError error,
-	DcType dcType);
+	DcType dcType,
+	bool customServerPinned);
 
 // What the first config response from the connected server says about
 // the endpoint pinned for this account. The server confirms the pin by

@@ -2537,7 +2537,11 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 		if (!result) {
 			releaseKeyCreationOnFail();
 			using Action = AuthKeyFailureAction;
-			switch (ClassifyAuthKeyFailure(result.error(), _realDcType)) {
+			switch (ClassifyAuthKeyFailure(
+				result.error(),
+				_realDcType,
+				_instance->dcOptions().isCustomServerPinned(
+					BareDcId(_shiftedDcId)))) {
 			case Action::RequestCdnConfig:
 				LOG(("Warning: CDN public RSA key not found"));
 				requestCDNConfig();

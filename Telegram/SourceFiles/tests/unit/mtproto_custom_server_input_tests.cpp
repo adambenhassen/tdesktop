@@ -769,20 +769,33 @@ TEST_CASE(EmptyAdvertisementIsTolerated) {
 	CHECK(CheckPinnedServerConfig(2, {}, PinnedServer(2)) == std::nullopt);
 }
 
-// ClassifyAuthKeyFailure: an unknown public key on a regular DC is the
-// key-mismatch report and stop.
-TEST_CASE(UnknownPublicKeyOnRegularDcReportsMismatch) {
+// ClassifyAuthKeyFailure: an unknown public key on a pinned regular
+// DC is the key-mismatch report and stop.
+TEST_CASE(UnknownPublicKeyOnPinnedRegularDcReportsMismatch) {
 	CHECK(ClassifyAuthKeyFailure(
 		details::DcKeyError::UnknownPublicKey,
-		DcType::Regular) == AuthKeyFailureAction::ReportKeyMismatch);
+		DcType::Regular,
+		true) == AuthKeyFailureAction::ReportKeyMismatch);
+}
+
+// ClassifyAuthKeyFailure: an unknown public key on an unpinned
+// regular DC keeps the retry path. This is the stock-account
+// regression case: there is no pin to mismatch against, and nothing
+// but a pin change could lift the stop.
+TEST_CASE(UnpinnedRegularDcKeepsRetrying) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Regular,
+		false) == AuthKeyFailureAction::Retry);
 }
 
 // ClassifyAuthKeyFailure: an unknown public key on a CDN DC asks for
-// CDN config instead (MAIN-313 owns that path).
+// CDN config instead (MAIN-313 owns that path), pinned or not.
 TEST_CASE(UnknownPublicKeyOnCdnRequestsCdnConfig) {
 	CHECK(ClassifyAuthKeyFailure(
 		details::DcKeyError::UnknownPublicKey,
-		DcType::Cdn) == AuthKeyFailureAction::RequestCdnConfig);
+		DcType::Cdn,
+		false) == AuthKeyFailureAction::RequestCdnConfig);
 }
 
 // ClassifyAuthKeyFailure: any other key error retries as before, on
@@ -790,8 +803,10 @@ TEST_CASE(UnknownPublicKeyOnCdnRequestsCdnConfig) {
 TEST_CASE(OtherKeyErrorsKeepRetrying) {
 	CHECK(ClassifyAuthKeyFailure(
 		details::DcKeyError::Other,
-		DcType::Regular) == AuthKeyFailureAction::Retry);
+		DcType::Regular,
+		true) == AuthKeyFailureAction::Retry);
 	CHECK(ClassifyAuthKeyFailure(
 		details::DcKeyError::Other,
-		DcType::Cdn) == AuthKeyFailureAction::Retry);
+		DcType::Cdn,
+		false) == AuthKeyFailureAction::Retry);
 }
