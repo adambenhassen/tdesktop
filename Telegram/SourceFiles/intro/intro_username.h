@@ -73,6 +73,7 @@ private:
 	void checkRequest();
 
 	void fail(const QString &text);
+	void describeState(const QString &text);
 
 	object_ptr<Ui::InputField> _username;
 	object_ptr<Ui::FlatLabel> _status = { nullptr };

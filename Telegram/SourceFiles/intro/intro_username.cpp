@@ -112,14 +112,22 @@ QWidget *UsernameWidget::firstTabWidget() const {
 
 void UsernameWidget::usernameChanged() {
 	hideError();
-	setAccessibleDescription(QString());
+	describeState(QString());
 }
 
 void UsernameWidget::fail(const QString &text) {
 	stopPending();
 	_username->showError();
 	showError(rpl::single(text));
+	describeState(text);
+}
+
+// The inline state of this step lives in the line below the field, so
+// both the step and the field carry it: a reader that announces role
+// plus name plus description reaches it only through the field.
+void UsernameWidget::describeState(const QString &text) {
 	setAccessibleDescription(text);
+	_username->setAccessibleDescription(text);
 }
 
 void UsernameWidget::startPending() {
@@ -129,8 +137,9 @@ void UsernameWidget::startPending() {
 	_pending = true;
 	_waitingSeconds = 0;
 	_escalated = false;
+	_reissuedOnce = false;
 	hideError();
-	setAccessibleDescription(QString());
+	describeState(QString());
 	// Read-only, not disabled: a disabled field loses its accessible
 	// text on some platforms.
 	_username->rawTextEdit()->setReadOnly(true);
@@ -157,6 +166,7 @@ void UsernameWidget::showStatus(const QString &text) {
 	}
 	_status->setText(text);
 	_status->show();
+	describeState(text);
 	announceStatus();
 }
 
@@ -173,14 +183,6 @@ void UsernameWidget::announceStatus() {
 
 void UsernameWidget::checkRequest() {
 	auto status = api().instance().state(_sentRequest);
-	if (status < 0) {
-		auto leftms = -status;
-		if (leftms >= 1000) {
-			api().request(base::take(_sentRequest)).cancel();
-			stopPending();
-			return;
-		}
-	}
 	if (!_sentRequest && status == MTP::RequestSent) {
 		_checkRequestTimer.cancel();
 		return;
@@ -189,7 +191,9 @@ void UsernameWidget::checkRequest() {
 		_escalated = true;
 		// Not a terminal error and not a cancellation: MTProto queues
 		// requests until the transport comes up, so "unreachable" is
-		// something only the server can disprove. The request goes on.
+		// something only the server can disprove. A negative state here
+		// is a transport-side wait, not an answer — the request stays
+		// alive and only the wording escalates.
 		showStatus(tr::lng_intro_still_waiting(
 			tr::now,
 			lt_server,
@@ -283,7 +287,7 @@ void UsernameWidget::requestCode() {
 	}).fail([=](const MTP::Error &error) {
 		_sentRequest = 0;
 		requestFail(error);
-	}).handleFloodErrors().send();
+	}).handleAllErrors().send();
 }
 
 void UsernameWidget::signIn() {
@@ -299,7 +303,7 @@ void UsernameWidget::signIn() {
 	}).fail([=](const MTP::Error &error) {
 		_sentRequest = 0;
 		signInFail(error);
-	}).handleFloodErrors().send();
+	}).handleAllErrors().send();
 }
 
 void UsernameWidget::sendCodeDone(const MTPauth_SentCode &result) {
@@ -398,8 +402,12 @@ void UsernameWidget::reissueAndRetry() {
 }
 
 void UsernameWidget::passwordNeeded() {
-	api().request(MTPaccount_GetPassword(
+	// Through _sentRequest like the other two round trips: the pending
+	// timer watches it, and Back through cancelled() cancels it instead
+	// of leaving a callback that would navigate a deleted step.
+	_sentRequest = api().request(MTPaccount_GetPassword(
 	)).done([=](const MTPaccount_Password &result) {
+		_sentRequest = 0;
 		result.match([&](const MTPDaccount_password &data) {
 			base::RandomAddSeed(bytes::make_span(data.vsecure_random().v));
 			getData()->pwdState = Core::ParseCloudPasswordState(data);
@@ -414,10 +422,11 @@ void UsernameWidget::passwordNeeded() {
 			goNext<PasswordCheckWidget>();
 		});
 	}).fail([=](const MTP::Error &error) {
+		_sentRequest = 0;
 		LOG(("Intro Username Error: getPassword failed with %1 (%2)"
 			).arg(error.type()).arg(error.code()));
 		fail(tr::lng_intro_server_error(tr::now));
-	}).send();
+	}).handleAllErrors().send();
 }
 
 void UsernameWidget::finished() {
