@@ -213,52 +213,63 @@ TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {
 // later write replaces the first pin. Two distinct servers hammered at
 // one DcOptions must therefore never both get accepted.
 TEST_CASE(ConcurrentSetCustomServerAcceptsOnlyOneDistinctPin) {
-	auto options = DcOptions(Environment::Production);
-
 	auto other = MakeCustomServer();
 	other.ip = "10.4.1.9";
 
-	std::atomic<int> acceptedOriginal = 0;
-	std::atomic<int> acceptedOther = 0;
+	constexpr auto kPasses = 100;
 	constexpr auto kThreads = 8;
 
-	// Every thread waits at the gate until all of them are ready, so
-	// the calls really overlap instead of serialising by accident.
-	std::atomic<int> ready = 0;
-	std::atomic<bool> go = false;
+	// A single gated pass hits the losing interleaving of the broken
+	// read-check-then-write pattern only a few percent of the time, so
+	// one pass pins nothing. The whole scenario repeats from a fresh
+	// DcOptions every pass and the invariant is asserted on each: a
+	// reintroduction has to survive a hundred fresh chances.
+	for (auto pass = 0; pass != kPasses; ++pass) {
+		auto options = DcOptions(Environment::Production);
 
-	auto threads = std::vector<std::thread>();
-	threads.reserve(kThreads);
-	for (auto i = 0; i != kThreads; ++i) {
-		const auto attemptOriginal = (i % 2) == 0;
-		// attemptOriginal is a loop-body local: it must be captured by
-		// value, the thread runs long after the iteration is over.
-		threads.emplace_back([&, attemptOriginal] {
-			++ready;
-			while (!go.load(std::memory_order_acquire)) {
-				std::this_thread::yield();
-			}
-			const auto ok = options.setCustomServer(
-				attemptOriginal ? MakeCustomServer() : other);
-			(attemptOriginal ? acceptedOriginal : acceptedOther)
-				+= (ok ? 1 : 0);
-		});
-	}
-	while (ready.load() != kThreads) {
-		std::this_thread::yield();
-	}
-	go.store(true, std::memory_order_release);
-	for (auto &thread : threads) {
-		thread.join();
-	}
+		std::atomic<int> acceptedOriginal = 0;
+		std::atomic<int> acceptedOther = 0;
 
-	CHECK((acceptedOriginal == 0) || (acceptedOther == 0));
-	CHECK((acceptedOriginal + acceptedOther) > 0);
-	const auto got = options.customServer();
-	if (acceptedOriginal > 0) {
-		CHECK_EQ(got.ip, MakeCustomServer().ip);
-	} else {
-		CHECK_EQ(got.ip, other.ip);
+		// Every thread waits at the gate until all of them are ready,
+		// so the calls really overlap instead of serialising by
+		// accident.
+		std::atomic<int> ready = 0;
+		std::atomic<bool> go = false;
+
+		auto threads = std::vector<std::thread>();
+		threads.reserve(kThreads);
+		for (auto i = 0; i != kThreads; ++i) {
+			const auto attemptOriginal = (i % 2) == 0;
+			// attemptOriginal is a loop-body local: it must be captured
+			// by value, the thread runs long after the iteration is
+			// over.
+			threads.emplace_back([&, attemptOriginal] {
+				++ready;
+				while (!go.load(std::memory_order_acquire)) {
+					std::this_thread::yield();
+				}
+				const auto ok = options.setCustomServer(
+					attemptOriginal ? MakeCustomServer() : other);
+				(attemptOriginal ? acceptedOriginal : acceptedOther)
+					+= (ok ? 1 : 0);
+			});
+		}
+		while (ready.load() != kThreads) {
+			std::this_thread::yield();
+		}
+		go.store(true, std::memory_order_release);
+		for (auto &thread : threads) {
+			thread.join();
+		}
+
+		CHECK((acceptedOriginal == 0) || (acceptedOther == 0));
+		CHECK((acceptedOriginal + acceptedOther) > 0);
+		const auto got = options.customServer();
+		if (acceptedOriginal > 0) {
+			CHECK_EQ(got.ip, MakeCustomServer().ip);
+		} else {
+			CHECK_EQ(got.ip, other.ip);
+		}
 	}
 }
 
