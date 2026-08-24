@@ -69,6 +69,28 @@ struct ServerKeyCheck {
 	const QString &typed,
 	const QString &computed);
 
+// What the key-check step's comparison field says: the outcome of
+// putting the key_id the user typed next to the identity computed from
+// the pasted key. Pass an empty `computed` when no valid key was
+// entered; nothing can then count as a match.
+enum class KeyIdCompare {
+	None, // Nothing typed yet: not a failed check, just not started.
+	Match,
+	Mismatch,
+	Unreadable, // Something typed, but it is not a readable key_id.
+};
+
+[[nodiscard]] KeyIdCompare CompareKeyId(
+	const QString &typed,
+	const QString &computed);
+
+// Whether the flow may advance for this comparison outcome. None
+// advances (the user did not start checking yet) and Match advances;
+// Mismatch blocks, and so does Unreadable: an unreadable entry means
+// the user compared nothing at all, which is the state the step exists
+// to prevent.
+[[nodiscard]] bool KeyIdCompareAllowsAdvance(KeyIdCompare compare);
+
 // Why an endpoint the user typed was refused.
 enum class ServerEndpointStatus {
 	Valid,

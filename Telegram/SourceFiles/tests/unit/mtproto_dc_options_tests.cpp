@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include <atomic>
+#include <thread>
+#include <vector>
+
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
 
@@ -141,4 +145,150 @@ TEST_CASE(BlockedConfigRefusesStoredOptions) {
 	CHECK(blocked.blocked());
 	CHECK(!blocked.hasCustomServer());
 	CHECK(blocked.refusesProductionFallback());
+}
+
+// A pin is immutable for the life of the account. Peer and message ids
+// are small server-scoped integers, so reading one server's cached ids
+// against another sends a forward for "user 12345" to an unrelated
+// person. A different pin must be refused and the original kept.
+TEST_CASE(PinnedCustomServerRefusesADifferentPin) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+
+	auto different = MakeCustomServer();
+	different.ip = "10.4.1.8";
+	CHECK(!options.setCustomServer(different));
+
+	const auto got = options.customServer();
+	CHECK_EQ(got.ip, original.ip);
+	CHECK_EQ(got.port, original.port);
+	CHECK(options.refusesProductionFallback());
+}
+
+// The key is what authenticates the server to the client, so the same
+// endpoint with a different key is still a different server.
+TEST_CASE(PinnedCustomServerRefusesADifferentKey) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+
+	auto n = MakeKey()->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	auto forged = std::make_shared<details::RSAPublicKey>(
+		n,
+		MakeKey()->getE());
+	CHECK(forged->valid());
+
+	auto different = MakeCustomServer();
+	different.key = forged;
+	CHECK(!options.setCustomServer(different));
+
+	const auto got = options.customServer();
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(qint64(got.key->fingerprint()), kProductionKeyFingerprint);
+	}
+}
+
+// Startup and config rewrites re-apply the stored pin through the same
+// setter, so the identical pin must stay allowed.
+TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+
+	CHECK(options.setCustomServer(MakeCustomServer()));
+	CHECK(options.hasCustomServer());
+	CHECK(options.refusesProductionFallback());
+
+	const auto serialized = options.serialize();
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(serialized));
+	CHECK(restored.isCustomServerPinned(MakeCustomServer().dcId));
+}
+
+// The check and the apply must be one atomic step under the write lock.
+// With the comparison in a separate read-lock scope, two concurrent
+// callers can each observe an unpinned account, both proceed, and the
+// later write replaces the first pin. Two distinct servers hammered at
+// one DcOptions must therefore never both get accepted.
+TEST_CASE(ConcurrentSetCustomServerAcceptsOnlyOneDistinctPin) {
+	auto other = MakeCustomServer();
+	other.ip = "10.4.1.9";
+
+	constexpr auto kPasses = 100;
+	constexpr auto kThreads = 8;
+
+	// A single gated pass hits the losing interleaving of the broken
+	// read-check-then-write pattern only a few percent of the time, so
+	// one pass pins nothing. The whole scenario repeats from a fresh
+	// DcOptions every pass and the invariant is asserted on each: a
+	// reintroduction has to survive a hundred fresh chances.
+	for (auto pass = 0; pass != kPasses; ++pass) {
+		auto options = DcOptions(Environment::Production);
+
+		std::atomic<int> acceptedOriginal = 0;
+		std::atomic<int> acceptedOther = 0;
+
+		// Every thread waits at the gate until all of them are ready,
+		// so the calls really overlap instead of serialising by
+		// accident.
+		std::atomic<int> ready = 0;
+		std::atomic<bool> go = false;
+
+		auto threads = std::vector<std::thread>();
+		threads.reserve(kThreads);
+		for (auto i = 0; i != kThreads; ++i) {
+			const auto attemptOriginal = (i % 2) == 0;
+			// attemptOriginal is a loop-body local: it must be captured
+			// by value, the thread runs long after the iteration is
+			// over.
+			threads.emplace_back([&, attemptOriginal] {
+				++ready;
+				while (!go.load(std::memory_order_acquire)) {
+					std::this_thread::yield();
+				}
+				const auto ok = options.setCustomServer(
+					attemptOriginal ? MakeCustomServer() : other);
+				(attemptOriginal ? acceptedOriginal : acceptedOther)
+					+= (ok ? 1 : 0);
+			});
+		}
+		while (ready.load() != kThreads) {
+			std::this_thread::yield();
+		}
+		go.store(true, std::memory_order_release);
+		for (auto &thread : threads) {
+			thread.join();
+		}
+
+		CHECK((acceptedOriginal == 0) || (acceptedOther == 0));
+		CHECK((acceptedOriginal + acceptedOther) > 0);
+		const auto got = options.customServer();
+		if (acceptedOriginal > 0) {
+			CHECK_EQ(got.ip, MakeCustomServer().ip);
+		} else {
+			CHECK_EQ(got.ip, other.ip);
+		}
+	}
+}
+
+// A refused overwrite returns before any state is touched, so it must
+// not lift or weaken the production-fallback block.
+TEST_CASE(RefusedOverwriteLeavesFallbackBlockInForce) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+	CHECK(options.refusesProductionFallback());
+
+	auto different = MakeCustomServer();
+	different.ip = "10.4.1.8";
+	CHECK(!options.setCustomServer(different));
+	CHECK(options.refusesProductionFallback());
+	CHECK(options.isCustomServerPinned(different.dcId));
+
+	// The no-key refusal keeps the same property.
+	auto keyless = MakeCustomServer();
+	keyless.key = nullptr;
+	CHECK(!options.setCustomServer(keyless));
+	CHECK(options.refusesProductionFallback());
 }
