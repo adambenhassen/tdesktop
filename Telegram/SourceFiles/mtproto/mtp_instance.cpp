@@ -291,7 +291,7 @@ private:
 	Fn<void(ShiftedDcId shiftedDcId, int32 state)> _stateChangedHandler;
 	Fn<void(ShiftedDcId shiftedDcId)> _sessionResetHandler;
 
-	rpl::variable<std::optional<PinnedServerFailureReport>> _pinnedServerFailure;
+	PinnedServerFailureChannel _pinnedServerFailure;
 
 	rpl::event_stream<mtpRequestId> _nonPremiumDelayedRequests;
 	rpl::event_stream<> _frozenErrorReceived;
@@ -1253,10 +1253,8 @@ void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 	// it. Clearing on a restart attempt would wipe the warning while
 	// the reporting session stays blocked.
 	if (state == ConnectedState
-		&& _pinnedServerFailure.current() != std::nullopt
-		&& _pinnedServerFailure.current()->shiftedDcId == dcWithShift
 		&& dcOptions().isCustomServerPinned(BareDcId(dcWithShift))) {
-		_pinnedServerFailure = std::nullopt;
+		_pinnedServerFailure.retireIfReportedBy(dcWithShift);
 	}
 }
 
@@ -1268,13 +1266,10 @@ void Instance::Private::onPinnedServerFailure(
 		).arg(failure == PinnedServerFailure::KeyMismatch
 			? "key mismatch"
 			: "dc id mismatch"));
-	auto report = PinnedServerFailureReport{
-		shiftedDcId,
-		failure
-	};
-	if (_pinnedServerFailure.current() != report) {
-		_pinnedServerFailure = report;
-	}
+	// Emits unconditionally: a repeated identical failure is a second
+	// occurrence and has to reach the UI again, which a compare-then-
+	// assign would silently swallow.
+	_pinnedServerFailure.report({ shiftedDcId, failure });
 	if (failure == PinnedServerFailure::DcIdMismatch) {
 		// Gate reconnection exactly like the key mismatch: neither
 		// class may re-enter the requestConfig / restart cycle. A
@@ -1291,7 +1286,7 @@ void Instance::Private::onPinnedServerFailure(
 
 rpl::producer<std::optional<PinnedServerFailureReport>>
 Instance::Private::pinnedServerFailureValue() const {
-	return _pinnedServerFailure.value();
+	return _pinnedServerFailure.updates();
 }
 
 void Instance::Private::onSessionReset(ShiftedDcId dcWithShift) {

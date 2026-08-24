@@ -47,6 +47,55 @@ struct PinnedServerFailureReport {
 	}
 };
 
+// Channel state for the pinned-server failure: holds the last report
+// for late subscribers and answers the two policy questions with
+// rules instead of judgement calls at call sites.
+//
+// report() emits every time, including an exact repeat of the held
+// one: an assignment that compares would swallow it, but a repeated
+// failure is a second occurrence and has to reach the UI again -
+// steps clear their error labels on navigation, so a swallowed
+// repeat reads as already handled.
+//
+// retireIfReportedBy() retires only for the reporting session's own
+// successful connection: another session of the same DC connecting
+// proves nothing about the endpoint that failed.
+class PinnedServerFailureChannel {
+public:
+	void report(PinnedServerFailureReport report) {
+		_held = report;
+		_changes.fire_copy(report);
+	}
+
+	[[nodiscard]] bool retireIfReportedBy(ShiftedDcId dcWithShift) {
+		if (!_held || (_held->shiftedDcId != dcWithShift)) {
+			return false;
+		}
+		_held.reset();
+		_changes.fire_copy(std::nullopt);
+		return true;
+	}
+
+	[[nodiscard]] const std::optional<PinnedServerFailureReport> &current()
+	const {
+		return _held;
+	}
+
+	// Fires the held value on subscribe, then every report and
+	// retirement; retirement carries an empty value.
+	[[nodiscard]] auto updates() const
+	-> rpl::producer<std::optional<PinnedServerFailureReport>> {
+		return rpl::merge(
+			rpl::single(_held),
+			_changes.events());
+	}
+
+private:
+	std::optional<PinnedServerFailureReport> _held;
+	rpl::event_stream<std::optional<PinnedServerFailureReport>> _changes;
+
+};
+
 class Instance : public QObject {
 	Q_OBJECT
 
