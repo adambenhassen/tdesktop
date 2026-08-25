@@ -7,21 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "intro/intro_password_check.h"
 
+#include "intro/intro_username_validation.h"
 #include "intro/intro_widget.h"
 #include "core/core_cloud_password.h"
-#include "ui/boxes/confirm_box.h"
-#include "boxes/abstract_box.h"
-#include "boxes/passcode_box.h"
 #include "lang/lang_keys.h"
-#include "intro/intro_signup.h"
-#include "ui/text/text_utilities.h"
-#include "ui/widgets/buttons.h"
-#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
-#include "main/main_account.h"
+#include "ui/widgets/labels.h"
 #include "base/random.h"
 #include "styles/style_intro.h"
-#include "styles/style_widgets.h"
+#include "ui/text/format_values.h"
 
 namespace Intro {
 namespace details {
@@ -32,11 +26,9 @@ PasswordCheckWidget::PasswordCheckWidget(
 	not_null<Data*> data)
 : Step(parent, account, data)
 , _passwordState(getData()->pwdState)
-, _pwdField(this, st::introPassword, tr::lng_signin_password())
+, _pwdField(this, st::introPassword, tr::lng_intro_signin_ph())
 , _pwdHint(this, st::introPasswordHint)
-, _codeField(this, st::introPassword, tr::lng_signin_code())
-, _toRecover(this, tr::lng_signin_recover(tr::now))
-, _toPassword(this, tr::lng_signin_try_password(tr::now)) {
+, _noReset(this, tr::lng_intro_signin_noreset(), st::introDescription) {
 	Expects(_passwordState.hasPassword);
 
 	Lang::Updated(
@@ -44,50 +36,58 @@ PasswordCheckWidget::PasswordCheckWidget(
 		refreshLang();
 	}, lifetime());
 
-	_toRecover->addClickHandler([=] { toRecover(); });
-	_toPassword->addClickHandler([=] { toPassword(); });
-	connect(_pwdField, &Ui::PasswordInput::changed, [=] { hideError(); });
-	_codeField->changes(
-	) | rpl::on_next([=] {
-		hideError();
-	}, _codeField->lifetime());
+	setTitleText(tr::lng_intro_signin_title());
+	setDescriptionText(tr::lng_intro_signin_desc(
+		tr::now,
+		lt_username,
+		getData()->phone));
+	setErrorCentered(false);
 
-	setTitleText(tr::lng_signin_title());
-	updateDescriptionText();
+	_pwdField->setAccessibleName(tr::lng_intro_signin_ph(tr::now));
+	connect(_pwdField, &Ui::PasswordInput::changed, [=] {
+		passwordChanged();
+	});
+	connect(_pwdField, &Ui::PasswordInput::submitted, [=] {
+		submit();
+	});
 
 	if (_passwordState.hint.isEmpty()) {
 		_pwdHint->hide();
 	} else {
-		_pwdHint->setText(tr::lng_signin_hint(
+		_pwdHint->setText(tr::lng_intro_signin_hint(
 			tr::now,
 			lt_password_hint,
 			_passwordState.hint));
 	}
-	_codeField->hide();
-	_toPassword->hide();
+	_noReset->resizeToWidth(st::introDescription.minWidth);
+	updateAccessibleDescription();
 
 	setMouseTracking(true);
 }
 
 void PasswordCheckWidget::refreshLang() {
-	if (_toRecover) {
-		_toRecover->setText(tr::lng_signin_recover(tr::now));
-	}
-	if (_toPassword) {
-		_toPassword->setText(
-			tr::lng_signin_try_password(tr::now));
-	}
+	_pwdField->setAccessibleName(tr::lng_intro_signin_ph(tr::now));
+	_noReset->setText(tr::lng_intro_signin_noreset(tr::now));
 	if (!_passwordState.hint.isEmpty()) {
-		_pwdHint->setText(tr::lng_signin_hint(
+		_pwdHint->setText(tr::lng_intro_signin_hint(
 			tr::now,
 			lt_password_hint,
 			_passwordState.hint));
 	}
+	updateAccessibleDescription();
 	updateControlsGeometry();
 }
 
 int PasswordCheckWidget::errorTop() const {
-	return contentTop() + st::introErrorBelowLinkTop;
+	return contentTop() + st::introSignInErrorTop;
+}
+
+int PasswordCheckWidget::nextButtonTop() const {
+	return contentTop() + st::introServerNextTop;
+}
+
+QWidget *PasswordCheckWidget::firstTabWidget() const {
+	return _pwdField.data();
 }
 
 void PasswordCheckWidget::resizeEvent(QResizeEvent *e) {
@@ -96,29 +96,30 @@ void PasswordCheckWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void PasswordCheckWidget::updateControlsGeometry() {
-	_pwdField->moveToLeft(contentLeft(), contentTop() + st::introPasswordTop);
-	_pwdHint->moveToLeft(contentLeft() + st::buttonRadius, contentTop() + st::introPasswordHintTop);
-	_codeField->moveToLeft(contentLeft(), contentTop() + st::introStepFieldTop);
-	auto linkTop = _codeField->y() + _codeField->height() + st::introLinkTop;
-	_toRecover->moveToLeft(contentLeft() + st::buttonRadius, linkTop);
-	_toPassword->moveToLeft(contentLeft() + st::buttonRadius, linkTop);
+	_pwdField->moveToLeft(
+		contentLeft(),
+		contentTop() + st::introStepFieldTop);
+	_pwdHint->moveToLeft(
+		contentLeft() + st::buttonRadius,
+		contentTop() + st::introSignInHintTop);
+	_noReset->moveToLeft(
+		contentLeft() + st::buttonRadius,
+		contentTop() + st::introSignInNoteTop);
 }
 
 void PasswordCheckWidget::setInnerFocus() {
-	if (_pwdField->isHidden()) {
-		_codeField->setFocusFast();
-	} else {
-		_pwdField->setFocusFast();
-	}
+	_pwdField->setFocusFast();
 }
 
 void PasswordCheckWidget::activate() {
-	if (_pwdField->isHidden() && _codeField->isHidden()) {
-		Step::activate();
-		_pwdField->show();
+	Step::activate();
+	_pwdField->show();
+	if (_passwordState.hint.isEmpty()) {
+		_pwdHint->hide();
+	} else {
 		_pwdHint->show();
-		_toRecover->show();
 	}
+	_noReset->show();
 	setInnerFocus();
 }
 
@@ -127,38 +128,39 @@ void PasswordCheckWidget::cancelled() {
 }
 
 void PasswordCheckWidget::pwdSubmitDone(
-		bool recover,
 		const MTPauth_Authorization &result) {
 	_sentRequest = 0;
-	if (recover) {
-		cSetPasswordRecovered(true);
-	}
 	finish(result);
 }
 
 void PasswordCheckWidget::pwdSubmitFail(const MTP::Error &error) {
-	if (MTP::IsFloodError(error)) {
-		_sentRequest = 0;
-		showError(tr::lng_flood_error());
-		_pwdField->showError();
-		return;
-	}
-
 	_sentRequest = 0;
 	const auto &type = error.type();
-	if (type == u"PASSWORD_HASH_INVALID"_q
-		|| type == u"SRP_PASSWORD_CHANGED"_q) {
-		showError(tr::lng_signin_bad_password());
+	switch (ClassifySigninPasswordFailure(type)) {
+	case SigninPasswordFailure::Flood:
+		showPasswordError(tr::lng_intro_signin_flood(
+			tr::now,
+			lt_duration,
+			Ui::FormatDurationWords(FloodWaitSeconds(type))));
+		return;
+	case SigninPasswordFailure::WrongPassword:
+		showPasswordError(tr::lng_intro_signin_wrong(tr::now));
 		_pwdField->selectAll();
-		_pwdField->showError();
-	} else if (type == u"PASSWORD_EMPTY"_q
-		|| type == u"AUTH_KEY_UNREGISTERED"_q) {
+		return;
+	case SigninPasswordFailure::PasswordEmpty:
+	case SigninPasswordFailure::AuthKeyUnregistered:
 		goBack();
-	} else if (type == u"SRP_ID_INVALID"_q) {
+		return;
+	case SigninPasswordFailure::SrpIdInvalid:
 		handleSrpIdInvalid();
-	} else if (!MTP::IgnoreError(error)) {
-		showError(rpl::single(type));
+		return;
+	case SigninPasswordFailure::Other:
+		LOG(("Intro Password Error: checkPassword failed with %1 (%2)")
+			.arg(type)
+			.arg(error.code()));
+		serverError();
 		_pwdField->setFocus();
+		return;
 	}
 }
 
@@ -167,7 +169,7 @@ void PasswordCheckWidget::handleSrpIdInvalid() {
 	if (_lastSrpIdInvalidTime > 0
 		&& now - _lastSrpIdInvalidTime < Core::kHandleSrpIdInvalidTimeout) {
 		_passwordState.mtp.request.id = 0;
-		showError(rpl::single(Lang::Hard::ServerError()));
+		serverError();
 	} else {
 		_lastSrpIdInvalidTime = now;
 		requestPasswordData();
@@ -207,195 +209,65 @@ void PasswordCheckWidget::passwordChecked() {
 	_sentRequest = api().request(
 		MTPauth_CheckPassword(check.result)
 	).done([=](const MTPauth_Authorization &result) {
-		pwdSubmitDone(false, result);
+		pwdSubmitDone(result);
 	}).fail([=](const MTP::Error &error) {
 		pwdSubmitFail(error);
 	}).handleFloodErrors().send();
 }
 
 void PasswordCheckWidget::serverError() {
-	showError(rpl::single(Lang::Hard::ServerError()));
+	showError(tr::lng_intro_server_error());
 }
 
-void PasswordCheckWidget::codeSubmitDone(
-		const QString &code,
-		const MTPBool &result) {
-	auto fields = PasscodeBox::CloudFields::From(_passwordState);
-	fields.fromRecoveryCode = code;
-	fields.hasRecovery = false;
-	fields.mtp.curRequest = {};
-	fields.hasPassword = false;
-	auto box = Box<PasscodeBox>(&api().instance(), nullptr, fields);
-	const auto boxShared = std::make_shared<base::weak_qptr<PasscodeBox>>();
-
-	box->newAuthorization(
-	) | rpl::on_next([=](const MTPauth_Authorization &result) {
-		if (boxShared) {
-			(*boxShared)->closeBox();
-		}
-		pwdSubmitDone(true, result);
-	}, lifetime());
-
-	*boxShared = Ui::show(std::move(box));
-}
-
-void PasswordCheckWidget::codeSubmitFail(const MTP::Error &error) {
-	if (MTP::IsFloodError(error)) {
-		showError(tr::lng_flood_error());
-		_codeField->showError();
-		return;
+void PasswordCheckWidget::updateAccessibleDescription() {
+	auto description = tr::lng_intro_signin_noreset(tr::now);
+	if (!_passwordState.hint.isEmpty()) {
+		description = tr::lng_intro_signin_hint(
+			tr::now,
+			lt_password_hint,
+			_passwordState.hint)
+			+ u' '
+			+ description;
 	}
-
-	_sentRequest = 0;
-	const auto &type = error.type();
-	if (type == u"PASSWORD_EMPTY"_q
-		|| type == u"AUTH_KEY_UNREGISTERED"_q) {
-		goBack();
-	} else if (type == u"PASSWORD_RECOVERY_NA"_q) {
-		recoverStartFail(error);
-	} else if (type == u"PASSWORD_RECOVERY_EXPIRED"_q) {
-		_emailPattern = QString();
-		toPassword();
-	} else if (type == u"CODE_INVALID"_q) {
-		showError(tr::lng_signin_wrong_code());
-		_codeField->selectAll();
-		_codeField->showError();
-	} else if (!MTP::IgnoreError(error)) {
-		showError(rpl::single(type));
-		_codeField->setFocus();
-	}
+	_pwdField->setAccessibleDescription(description);
 }
 
-void PasswordCheckWidget::recoverStarted(const MTPauth_PasswordRecovery &result) {
-	_emailPattern = qs(result.c_auth_passwordRecovery().vemail_pattern());
-	updateDescriptionText();
-}
-
-void PasswordCheckWidget::recoverStartFail(const MTP::Error &error) {
-	_pwdField->show();
-	_pwdHint->show();
-	_codeField->hide();
-	_pwdField->setFocus();
-	updateDescriptionText();
-	update();
+void PasswordCheckWidget::passwordChanged() {
 	hideError();
+	updateAccessibleDescription();
+	setAccessibleDescription(QString());
 }
 
-void PasswordCheckWidget::toRecover() {
-	if (_passwordState.hasRecovery) {
-		if (_sentRequest) {
-			api().request(base::take(_sentRequest)).cancel();
-		}
-		hideError();
-		_toRecover->hide();
-		_toPassword->show();
-		_pwdField->hide();
-		_pwdHint->hide();
-		_pwdField->setText(QString());
-		_codeField->show();
-		_codeField->setFocus();
-		updateDescriptionText();
-		if (_emailPattern.isEmpty()) {
-			api().request(
-				MTPauth_RequestPasswordRecovery()
-			).done([=](const MTPauth_PasswordRecovery &result) {
-				recoverStarted(result);
-			}).fail([=](const MTP::Error &error) {
-				recoverStartFail(error);
-			}).send();
-		}
-	} else {
-		const auto box = Ui::show(
-			Ui::MakeInformBox(tr::lng_signin_no_email_forgot()));
-		box->boxClosing(
-		) | rpl::on_next([=] {
-			showReset();
-		}, box->lifetime());
-	}
-}
-
-void PasswordCheckWidget::toPassword() {
-	const auto box = Ui::show(
-		Ui::MakeInformBox(tr::lng_signin_cant_email_forgot()));
-	box->boxClosing(
-	) | rpl::on_next([=] {
-		showReset();
-	}, box->lifetime());
-}
-
-void PasswordCheckWidget::showReset() {
-	if (_sentRequest) {
-		api().request(base::take(_sentRequest)).cancel();
-	}
-	_toRecover->show();
-	_toPassword->hide();
-	_pwdField->show();
-	_pwdHint->show();
-	_codeField->hide();
-	_codeField->setText(QString());
-	_pwdField->setFocus();
-	showResetButton();
-	updateDescriptionText();
-	update();
-}
-
-void PasswordCheckWidget::updateDescriptionText() {
-	auto pwdHidden = _pwdField->isHidden();
-	auto emailPattern = _emailPattern;
-	setDescriptionText(pwdHidden
-		? tr::lng_signin_recover_desc(
-			lt_email,
-			rpl::single(Ui::Text::WrapEmailPattern(emailPattern)),
-			tr::marked)
-		: tr::lng_signin_desc(tr::marked));
+void PasswordCheckWidget::showPasswordError(const QString &text) {
+	_pwdField->showError();
+	_pwdField->setAccessibleDescription(text);
+	setAccessibleDescription(text);
+	showError(rpl::single(text));
 }
 
 void PasswordCheckWidget::submit() {
 	if (_sentRequest) {
 		return;
 	}
-	if (_pwdField->isHidden()) {
-		auto code = _codeField->getLastText().trimmed();
-		if (code.isEmpty()) {
-			_codeField->showError();
-			return;
-		}
-		const auto send = crl::guard(this, [=] {
-			_sentRequest = api().request(MTPauth_CheckRecoveryPassword(
-				MTP_string(code)
-			)).done([=](const MTPBool &result) {
-				codeSubmitDone(code, result);
-			}).fail([=](const MTP::Error &error) {
-				codeSubmitFail(error);
-			}).handleFloodErrors().send();
-		});
-
-		if (_passwordState.notEmptyPassport) {
-			const auto confirmed = [=](Fn<void()> &&close) {
-				send();
-				close();
-			};
-			Ui::show(Ui::MakeConfirmBox({
-				.text = tr::lng_cloud_password_passport_losing(),
-				.confirmed = confirmed,
-				.confirmText = tr::lng_continue(),
-			}));
-		} else {
-			send();
-		}
-	} else {
-		hideError();
-
-		const auto password = _pwdField->getLastText().toUtf8();
-		_passwordHash = Core::ComputeCloudPasswordHash(
-			_passwordState.mtp.request.algo,
-			bytes::make_span(password));
-		checkPasswordHash();
+	const auto password = _pwdField->getLastText();
+	if (ValidateSigninPassword(password)
+		== SigninPasswordValidation::Empty) {
+		showPasswordError(tr::lng_intro_signin_empty(tr::now));
+		return;
 	}
+
+	hideError();
+	updateAccessibleDescription();
+	setAccessibleDescription(QString());
+	const auto passwordBytes = password.toUtf8();
+	_passwordHash = Core::ComputeCloudPasswordHash(
+		_passwordState.mtp.request.algo,
+		bytes::make_span(passwordBytes));
+	checkPasswordHash();
 }
 
 rpl::producer<QString> PasswordCheckWidget::nextButtonText() const {
-	return tr::lng_intro_submit();
+	return tr::lng_intro_signin_button();
 }
 
 } // namespace details

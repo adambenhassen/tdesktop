@@ -425,6 +425,7 @@ void UsernameWidget::reissueAndRetry() {
 }
 
 void UsernameWidget::passwordNeeded() {
+	getData()->phone = _sentUsername;
 	// Through _sentRequest like the other two round trips: the pending
 	// timer watches it, and Back through cancelled() cancels it instead
 	// of leaving a callback that would navigate a deleted step.

@@ -73,7 +73,6 @@ public:
 	void setGoCallback(
 		Fn<void(Step *step, StackAction action, Animate animate)> callback);
 	void setStepBelowCallback(Fn<Step*()> callback);
-	void setShowResetCallback(Fn<void()> callback);
 	void setShowTermsCallback(Fn<void()> callback);
 	void setCancelNearestDcCallback(Fn<void()> callback);
 	void setAcceptTermsCallback(
@@ -165,9 +164,6 @@ protected:
 		goReplace(new StepType(parentWidget(), _account, _data), animate);
 	}
 
-	void showResetButton() {
-		if (_showResetCallback) _showResetCallback();
-	}
 	void showTerms() {
 		if (_showTermsCallback) _showTermsCallback();
 	}
@@ -225,7 +221,6 @@ private:
 	bool _hasCover = false;
 	Fn<void(Step *step, StackAction action, Animate animate)> _goCallback;
 	Fn<Step*()> _stepBelowCallback;
-	Fn<void()> _showResetCallback;
 	Fn<void()> _showTermsCallback;
 	Fn<void()> _cancelNearestDcCallback;
 	Fn<void(Fn<void()> callback)> _acceptTermsCallback;

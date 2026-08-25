@@ -2335,11 +2335,6 @@ void MainWidget::hideAll() {
 }
 
 void MainWidget::showAll() {
-	if (cPasswordRecovered()) {
-		cSetPasswordRecovered(false);
-		_controller->show(Ui::MakeInformBox(
-			tr::lng_cloud_password_updated()));
-	}
 	if (isOneColumn()) {
 		if (_sideShadow) {
 			_sideShadow->hide();

@@ -35,6 +35,20 @@ enum class SignupPasswordUpdateFailure {
 	Other,
 };
 
+enum class SigninPasswordValidation {
+	Valid,
+	Empty,
+};
+
+enum class SigninPasswordFailure {
+	Flood,
+	WrongPassword,
+	PasswordEmpty,
+	AuthKeyUnregistered,
+	SrpIdInvalid,
+	Other,
+};
+
 // Forgiving normalisation of what the user typed: trim surrounding
 // whitespace and strip a single leading '@' (people type "@alice").
 // Neither is a keystroke filter — the field accepts anything and this
@@ -118,6 +132,12 @@ struct UsernameCodeCache {
 
 [[nodiscard]] SignupPasswordUpdateFailure
 ClassifySignupPasswordUpdateFailure(const QString &errorType);
+
+[[nodiscard]] SigninPasswordValidation ValidateSigninPassword(
+	const QString &input);
+
+[[nodiscard]] SigninPasswordFailure ClassifySigninPasswordFailure(
+	const QString &errorType);
 
 } // namespace details
 } // namespace Intro

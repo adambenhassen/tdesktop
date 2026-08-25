@@ -100,8 +100,6 @@ typedef QList<QPair<QString, ushort>> RecentHashtagPack;
 DeclareRefSetting(RecentHashtagPack, RecentWriteHashtags);
 DeclareSetting(RecentHashtagPack, RecentSearchHashtags);
 
-DeclareSetting(bool, PasswordRecovered);
-
 DeclareSetting(int32, PasscodeBadTries);
 DeclareSetting(crl::time, PasscodeLastTry);
 

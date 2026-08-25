@@ -626,10 +626,6 @@ void Step::setStepBelowCallback(Fn<Step*()> callback) {
 	_stepBelowCallback = std::move(callback);
 }
 
-void Step::setShowResetCallback(Fn<void()> callback) {
-	_showResetCallback = std::move(callback);
-}
-
 void Step::setShowTermsCallback(Fn<void()> callback) {
 	_showTermsCallback = std::move(callback);
 }
