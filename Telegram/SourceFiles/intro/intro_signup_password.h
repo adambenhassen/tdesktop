@@ -84,7 +84,6 @@ private:
 
 	rpl::variable<bool> _backAvailable = true;
 	mtpRequestId _sentRequest = 0;
-	int _passwordSaveFailures = 0;
 	bool _signupDone = false;
 	bool _reissuedOnce = false;
 };

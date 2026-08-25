@@ -108,14 +108,12 @@ void SignUpPasswordWidget::resizeEvent(QResizeEvent *e) {
 void SignUpPasswordWidget::passwordChanged() {
 	hideError();
 	_passwordHash.clear();
-	_passwordSaveFailures = 0;
 	clearErrorDescriptions();
 }
 
 void SignUpPasswordWidget::repeatChanged() {
 	hideError();
 	_passwordHash.clear();
-	_passwordSaveFailures = 0;
 	clearErrorDescriptions();
 }
 
@@ -338,7 +336,6 @@ void SignUpPasswordWidget::passwordDataDone(
 		std::get<Core::CloudPasswordAlgoModPow>(_passwordAlgo).salt1
 			= digest.salt1;
 		_passwordHash = digest.modpow;
-		_passwordSaveFailures = 0;
 		sendPasswordUpdate();
 	});
 }
@@ -409,11 +406,6 @@ void SignUpPasswordWidget::passwordUpdateFail(const MTP::Error &error) {
 }
 
 void SignUpPasswordWidget::passwordSaveFailed() {
-	if (_passwordSaveFailures == 0) {
-		++_passwordSaveFailures;
-		sendPasswordUpdate();
-		return;
-	}
 	showFormError(tr::lng_intro_signup_pwd_unsaved(tr::now));
 }
 
