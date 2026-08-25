@@ -191,6 +191,60 @@ TEST_CASE(PinnedCustomServerRefusesADifferentKey) {
 	}
 }
 
+// Before the first successful auth-key exchange nothing has been read
+// from any server, so there are no server-scoped peer ids to protect:
+// correcting the pin - a different key at the same address, the
+// mismatch-recovery path this ticket exists to enable - must succeed
+// even though a pin is already set. authKeyHeld = false says exactly
+// that no key exists yet.
+TEST_CASE(PinReplaceableBeforeAnAuthKeyExists) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer(), false));
+
+	auto n = MakeKey()->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	auto corrected = MakeCustomServer();
+	corrected.key = std::make_shared<details::RSAPublicKey>(
+		n,
+		MakeKey()->getE());
+	CHECK(corrected.key->valid());
+
+	CHECK(options.setCustomServer(corrected, false));
+
+	const auto got = options.customServer();
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(
+			qint64(got.key->fingerprint()),
+			qint64(corrected.key->fingerprint()));
+	}
+}
+
+// Once the account holds an auth key for the pinned DC the same
+// correction is refused: peer ids have been read against the old pin,
+// and replacing it would misaddress them.
+TEST_CASE(PinStillImmutableOnceAnAuthKeyIsHeld) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+
+	auto n = original.key->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	auto corrected = MakeCustomServer();
+	corrected.key = std::make_shared<details::RSAPublicKey>(
+		n,
+		original.key->getE());
+	CHECK(corrected.key->valid());
+
+	CHECK(!options.setCustomServer(corrected, true));
+
+	const auto got = options.customServer();
+	CHECK_EQ(qint64(got.key->fingerprint()), kProductionKeyFingerprint);
+	CHECK_EQ(got.ip, original.ip);
+}
+
 // Startup and config rewrites re-apply the stored pin through the same
 // setter, so the identical pin must stay allowed.
 TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {

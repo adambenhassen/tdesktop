@@ -872,7 +872,9 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 		{});
 }
 
-bool DcOptions::setCustomServer(const CustomServer &server) {
+bool DcOptions::setCustomServer(
+		const CustomServer &server,
+		bool authKeyHeld) {
 	if (const auto problem = CustomServerProblem(server)) {
 		LOG(("MTP Error: setCustomServer called with %1."
 			).arg(QString::fromUtf8(problem)));
@@ -890,18 +892,23 @@ bool DcOptions::setCustomServer(const CustomServer &server) {
 		// callers each observe an unpinned account and both proceed,
 		// the later write replacing the first pin.
 		WriteLocker lock(this);
-		if (hasCustomServerUnlocked()
+		if (authKeyHeld
+			&& hasCustomServerUnlocked()
 			&& !SameCustomServer(_customServer, server)) {
 			// A pinned account's peer and message ids are small
 			// server-scoped integers: reading them against another
 			// server sends a forward for "user 12345" to an unrelated
-			// person. A second server is a second account, never an
-			// edit of this one. The identical pin stays allowed, since
-			// startup and config rewrites go through here. Returning
-			// before applyCustomServerUnlocked() also leaves _blocked,
-			// the production-fallback block, exactly as it was.
+			// person. Once an auth key exists that has really happened,
+			// so a second server is a second account, never an edit of
+			// this one. Without an auth key nothing was read yet, and
+			// refusing here would make a wrong key at first attempt
+			// uncorrectable. The identical pin stays allowed in both
+			// states, since startup and config rewrites go through
+			// here. Returning before applyCustomServerUnlocked() also
+			// leaves _blocked, the production-fallback block, exactly
+			// as it was.
 			LOG(("MTP Error: refusing to replace pinned custom server"
-				" %1:%2 with %3:%4."
+				" %1:%2 with %3:%4 while an auth key exists."
 				).arg(QString::fromStdString(_customServer.ip)
 				).arg(_customServer.port
 				).arg(QString::fromStdString(server.ip)

@@ -145,6 +145,7 @@ public:
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure);
+	[[nodiscard]] bool hasPersistentKeyForDc(DcId dcId) const;
 	[[nodiscard]] auto pinnedServerFailureValue() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
@@ -1289,6 +1290,12 @@ Instance::Private::pinnedServerFailureValue() const {
 	return _pinnedServerFailure.updates();
 }
 
+bool Instance::Private::hasPersistentKeyForDc(DcId dcId) const {
+	// _keysForWrite is the persistent-key store; it is touched only
+	// from this thread, and so is this call.
+	return _keysForWrite.find(dcId) != _keysForWrite.cend();
+}
+
 void Instance::Private::onSessionReset(ShiftedDcId dcWithShift) {
 	if (_sessionResetHandler) {
 		_sessionResetHandler(dcWithShift);
@@ -2033,6 +2040,10 @@ Instance::pinnedServerFailure() const {
 
 void Instance::restart(ShiftedDcId shiftedDcId) {
 	_private->restart(shiftedDcId);
+}
+
+bool Instance::hasPersistentKeyForDc(DcId dcId) const {
+	return _private->hasPersistentKeyForDc(dcId);
 }
 
 int32 Instance::dcstate(ShiftedDcId shiftedDcId) {

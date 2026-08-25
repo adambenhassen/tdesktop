@@ -169,6 +169,11 @@ public:
 
 	void restart();
 	void restart(ShiftedDcId shiftedDcId);
+	// Whether a persistent auth key exists for this DC: the pin
+	// immutability question for setCustomServer. Peer and message ids
+	// are server-scoped, so their protection starts when this turns
+	// true.
+	[[nodiscard]] bool hasPersistentKeyForDc(DcId dcId) const;
 	int32 dcstate(ShiftedDcId shiftedDcId = 0);
 	QString dctransport(ShiftedDcId shiftedDcId = 0);
 	void ping();

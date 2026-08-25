@@ -71,7 +71,9 @@ public:
 	// account. While pinned, the account must never fall back to the
 	// built-in Telegram production DC table and keys. Returns false
 	// when the server carries no key.
-	[[nodiscard]] bool setCustomServer(const CustomServer &server);
+	[[nodiscard]] bool setCustomServer(
+		const CustomServer &server,
+		bool authKeyHeld = true);
 	[[nodiscard]] CustomServer customServer() const {
 		return _dcOptions.customServer();
 	}
