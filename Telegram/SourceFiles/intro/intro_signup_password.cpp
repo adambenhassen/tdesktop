@@ -188,6 +188,10 @@ void SignUpPasswordWidget::submit() {
 }
 
 void SignUpPasswordWidget::signUp() {
+	// A successful signUp creates a provisional account that cannot be
+	// recovered without this step. Do not let Back cancel the request before
+	// its outcome is known.
+	_backAvailable = false;
 	_sentRequest = api().request(MTPauth_SignUp(
 		MTP_flags(0),
 		MTP_string(getData()->phone),
@@ -216,6 +220,12 @@ void SignUpPasswordWidget::signUpDone(
 
 void SignUpPasswordWidget::signUpFail(const MTP::Error &error) {
 	const auto &type = error.type();
+	// A 4xx RPC response is a definite rejection before account creation.
+	// Keep Back withdrawn for transport and 5xx failures: the request may
+	// have reached the server and committed before the failure was reported.
+	if (error.code() >= 400 && error.code() < 500) {
+		_backAvailable = true;
+	}
 	if (type == u"INPUT_REQUEST_INVALID"_q) {
 		showFormError(tr::lng_intro_signup_closed(tr::now));
 	} else if (type == u"USERNAME_OCCUPIED"_q) {

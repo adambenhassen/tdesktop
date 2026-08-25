@@ -15,6 +15,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Intro {
 namespace details {
 
+namespace {
+
+int UnicodeScalarCount(const QString &text) {
+	auto result = 0;
+	for (auto i = 0; i != text.size(); ++i) {
+		if (text[i].isHighSurrogate()
+			&& (i + 1) < text.size()
+			&& text[i + 1].isLowSurrogate()) {
+			++i;
+		}
+		++result;
+	}
+	return result;
+}
+
+} // namespace
+
 QString NormalizeUsernameInput(const QString &input) {
 	auto result = input.trimmed();
 	if (result.startsWith('@')) {
@@ -49,7 +66,7 @@ SignupNameValidation ValidateSignupName(const QString &input) {
 	const auto normalized = NormalizeSignupNameInput(input);
 	if (normalized.isEmpty()) {
 		return SignupNameValidation::Empty;
-	} else if (normalized.size() > 60) {
+	} else if (UnicodeScalarCount(normalized) > 60) {
 		return SignupNameValidation::TooLong;
 	}
 	return SignupNameValidation::Valid;
@@ -60,7 +77,7 @@ SignupPasswordValidation ValidateSignupPassword(
 		const QString &repeat) {
 	if (password.isEmpty()) {
 		return SignupPasswordValidation::Empty;
-	} else if (password.size() < 8) {
+	} else if (UnicodeScalarCount(password) < 8) {
 		return SignupPasswordValidation::TooShort;
 	} else if (repeat.isEmpty()) {
 		return SignupPasswordValidation::RepeatEmpty;

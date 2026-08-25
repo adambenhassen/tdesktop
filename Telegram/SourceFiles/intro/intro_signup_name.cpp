@@ -34,9 +34,10 @@ SignUpNameWidget::SignUpNameWidget(
 		getData()->phone));
 	setErrorCentered(false);
 
-	// Leave one character beyond the accepted limit so submit() can show
-	// the localized length error instead of truncating it away.
-	_name->setMaxLength(61);
+	// InputField counts UTF-16 code units. Leave one scalar beyond the
+	// accepted limit so submit() can show the localized length error instead
+	// of truncating it away, including for supplementary characters.
+	_name->setMaxLength(122);
 	_name->setAccessibleName(tr::lng_intro_signup_name_ph(tr::now));
 	_name->setAccessibleDescription(tr::lng_intro_signup_note(tr::now));
 	_note->resizeToWidth(st::introDescription.minWidth);

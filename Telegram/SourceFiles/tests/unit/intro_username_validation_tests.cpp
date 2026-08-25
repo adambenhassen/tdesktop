@@ -13,6 +13,10 @@ namespace {
 
 using namespace Intro::details;
 
+QString AstralString(int count) {
+	return QString::fromUtf8("\xF0\x9F\x98\x80").repeated(count);
+}
+
 TEST_CASE(NormalizeTrimsWhitespace) {
 	CHECK_EQ(NormalizeUsernameInput(u"  alice  "_q), u"alice"_q);
 	CHECK_EQ(NormalizeUsernameInput(u"\talice\n"_q), u"alice"_q);
@@ -172,6 +176,15 @@ TEST_CASE(SignupNameValidationDoesNotImposeCompositionRules) {
 		== SignupNameValidation::Valid);
 }
 
+TEST_CASE(SignupNameValidationCountsUnicodeScalars) {
+	CHECK(
+		ValidateSignupName(AstralString(60))
+		== SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(AstralString(61))
+		== SignupNameValidation::TooLong);
+}
+
 TEST_CASE(SignupPasswordValidationReportsTheFirstFix) {
 	CHECK(
 		ValidateSignupPassword(QString(), QString())
@@ -187,6 +200,15 @@ TEST_CASE(SignupPasswordValidationReportsTheFirstFix) {
 		== SignupPasswordValidation::Mismatch);
 	CHECK(
 		ValidateSignupPassword(u"long enough"_q, u"long enough"_q)
+		== SignupPasswordValidation::Valid);
+}
+
+TEST_CASE(SignupPasswordValidationCountsUnicodeScalars) {
+	CHECK(
+		ValidateSignupPassword(AstralString(7), AstralString(7))
+		== SignupPasswordValidation::TooShort);
+	CHECK(
+		ValidateSignupPassword(AstralString(8), AstralString(8))
 		== SignupPasswordValidation::Valid);
 }
 
