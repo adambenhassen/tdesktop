@@ -55,6 +55,7 @@ private:
 
 	void handleSrpIdInvalid();
 	void requestPasswordData();
+	void passwordDataFail(const MTP::Error &error);
 	void checkPasswordHash();
 	void passwordChecked();
 	void serverError();

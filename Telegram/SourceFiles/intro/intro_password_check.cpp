@@ -194,7 +194,28 @@ void PasswordCheckWidget::requestPasswordData() {
 			_passwordState = Core::ParseCloudPasswordState(data);
 			passwordChecked();
 		});
-	}).send();
+	}).fail([=](const MTP::Error &error) {
+		passwordDataFail(error);
+	}).handleAllErrors().send();
+}
+
+void PasswordCheckWidget::passwordDataFail(const MTP::Error &error) {
+	_sentRequest = 0;
+	switch (ClassifySigninPasswordDataFailure(error.type())) {
+	case SigninPasswordDataFailure::Flood:
+		showPasswordError(tr::lng_intro_signin_flood(
+			tr::now,
+			lt_duration,
+			Ui::FormatDurationWords(FloodWaitSeconds(error.type()))));
+		return;
+	case SigninPasswordDataFailure::Other:
+		LOG(("Intro Password Error: account.getPassword failed with %1 (%2)")
+			.arg(error.type())
+			.arg(error.code()));
+		serverError();
+		_pwdField->setFocus();
+		return;
+	}
 }
 
 void PasswordCheckWidget::passwordChecked() {

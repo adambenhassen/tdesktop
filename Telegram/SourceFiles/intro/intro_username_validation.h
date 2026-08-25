@@ -49,6 +49,11 @@ enum class SigninPasswordFailure {
 	Other,
 };
 
+enum class SigninPasswordDataFailure {
+	Flood,
+	Other,
+};
+
 // Forgiving normalisation of what the user typed: trim surrounding
 // whitespace and strip a single leading '@' (people type "@alice").
 // Neither is a keystroke filter — the field accepts anything and this
@@ -138,6 +143,9 @@ ClassifySignupPasswordUpdateFailure(const QString &errorType);
 
 [[nodiscard]] SigninPasswordFailure ClassifySigninPasswordFailure(
 	const QString &errorType);
+
+[[nodiscard]] SigninPasswordDataFailure
+ClassifySigninPasswordDataFailure(const QString &errorType);
 
 } // namespace details
 } // namespace Intro

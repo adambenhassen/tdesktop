@@ -105,10 +105,18 @@ SigninPasswordValidation ValidateSigninPassword(const QString &input) {
 		: SigninPasswordValidation::Valid;
 }
 
+SigninPasswordDataFailure ClassifySigninPasswordDataFailure(
+		const QString &errorType) {
+	return errorType.startsWith(u"FLOOD_WAIT_"_q)
+		|| errorType.startsWith(u"FLOOD_PREMIUM_WAIT_"_q)
+		? SigninPasswordDataFailure::Flood
+		: SigninPasswordDataFailure::Other;
+}
+
 SigninPasswordFailure ClassifySigninPasswordFailure(
 		const QString &errorType) {
-	if (errorType.startsWith(u"FLOOD_WAIT_"_q)
-		|| errorType.startsWith(u"FLOOD_PREMIUM_WAIT_"_q)) {
+	if (ClassifySigninPasswordDataFailure(errorType)
+		== SigninPasswordDataFailure::Flood) {
 		return SigninPasswordFailure::Flood;
 	} else if (errorType == u"PASSWORD_HASH_INVALID"_q
 		|| errorType == u"SRP_PASSWORD_CHANGED"_q) {

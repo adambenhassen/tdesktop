@@ -260,4 +260,16 @@ TEST_CASE(SigninPasswordFailuresHaveExplicitFallbacks) {
 		== SigninPasswordFailure::Other);
 }
 
+TEST_CASE(SigninPasswordDataFailuresKeepFloodVisible) {
+	CHECK(
+		ClassifySigninPasswordDataFailure(u"FLOOD_WAIT_60"_q)
+		== SigninPasswordDataFailure::Flood);
+	CHECK(
+		ClassifySigninPasswordDataFailure(u"FLOOD_PREMIUM_WAIT_60"_q)
+		== SigninPasswordDataFailure::Flood);
+	CHECK(
+		ClassifySigninPasswordDataFailure(u"UNEXPECTED_ERROR"_q)
+		== SigninPasswordDataFailure::Other);
+}
+
 } // namespace
