@@ -449,6 +449,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_error"          = "The server ran into a problem. Try again.";
 "lng_intro_please_wait"           = "Please wait…";
 
+"lng_intro_signup_name_title"      = "Create your account";
+"lng_intro_signup_name_desc"       = "No account called {username} exists on this server yet. You are creating it now.";
+"lng_intro_signup_name_ph"         = "Your name";
+"lng_intro_signup_note"            = "This is the name other people will see.";
+"lng_intro_signup_name_empty"      = "Enter a name.";
+"lng_intro_signup_name_long"       = "Keep your name under 60 characters.";
+"lng_intro_signup_name_bad"        = "This server rejected that name. Try one without unusual characters.";
+
+"lng_intro_signup_pwd_title"       = "Set a password";
+"lng_intro_signup_pwd_desc"        = "This password is the only thing protecting your account. Save it somewhere safe: it can't be reset.";
+"lng_intro_signup_pwd_ph"          = "Password (at least 8 characters)";
+"lng_intro_signup_pwd_ph2"         = "Repeat password";
+"lng_intro_signup_pwd_a11y"        = "At least 8 characters. This password can't be reset.";
+"lng_intro_signup_pwd_repeat_a11y" = "Repeat the password.";
+"lng_intro_signup_create"          = "Create account";
+
+"lng_intro_signup_pwd_empty"       = "Choose a password.";
+"lng_intro_signup_pwd_short"       = "Use at least 8 characters.";
+"lng_intro_signup_pwd_repeat"      = "Type the password again to confirm.";
+"lng_intro_signup_pwd_mismatch"    = "The two passwords don't match.";
+"lng_intro_signup_closed"          = "This server isn't accepting new accounts. Ask whoever runs it for one.";
+"lng_intro_signup_taken"           = "{username} was taken while you were signing up. Go back and choose another.";
+"lng_intro_signup_expired"         = "That took too long. Go back and enter your username again.";
+"lng_intro_signup_flood"           = "Too many accounts have been created from this network. Try again in {duration}.";
+"lng_intro_signup_pwd_unsaved"     = "Your account was created but the password wasn't saved. Try again: it can't be used without one.";
+
 "lng_intro_fragment_title" = "Enter code";
 "lng_intro_fragment_about" = "Get the code for {phone_number} in the Anonymous Numbers section on Fragment.";
 "lng_intro_fragment_button" = "Open Fragment";

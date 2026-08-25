@@ -1359,6 +1359,10 @@ PRIVATE
     intro/intro_qr.h
     intro/intro_signup.cpp
     intro/intro_signup.h
+    intro/intro_signup_name.cpp
+    intro/intro_signup_name.h
+    intro/intro_signup_password.cpp
+    intro/intro_signup_password.h
     intro/intro_server.cpp
     intro/intro_server.h
     intro/intro_start.cpp

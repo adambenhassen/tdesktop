@@ -15,6 +15,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Intro {
 namespace details {
 
+enum class SignupNameValidation {
+	Valid,
+	Empty,
+	TooLong,
+};
+
+enum class SignupPasswordValidation {
+	Valid,
+	Empty,
+	TooShort,
+	RepeatEmpty,
+	Mismatch,
+};
+
 // Forgiving normalisation of what the user typed: trim surrounding
 // whitespace and strip a single leading '@' (people type "@alice").
 // Neither is a keystroke filter — the field accepts anything and this
@@ -87,6 +101,14 @@ struct UsernameCodeCache {
 // — so the digits come off the end rather than a fixed prefix length.
 // A type with no trailing digits yields 0.
 [[nodiscard]] int FloodWaitSeconds(const QString &errorType);
+
+[[nodiscard]] SignupNameValidation ValidateSignupName(
+	const QString &input);
+[[nodiscard]] QString NormalizeSignupNameInput(const QString &input);
+
+[[nodiscard]] SignupPasswordValidation ValidateSignupPassword(
+	const QString &password,
+	const QString &repeat);
 
 } // namespace details
 } // namespace Intro

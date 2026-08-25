@@ -151,4 +151,43 @@ TEST_CASE(FloodWaitSecondsReadsDigitsFromTheEnd) {
 	CHECK_EQ(FloodWaitSeconds(QString()), 0);
 }
 
+TEST_CASE(SignupNameValidationTrimsAndCapsInput) {
+	CHECK_EQ(
+		ValidateSignupName(u"  Ada Lovelace  "_q),
+		SignupNameValidation::Valid);
+	CHECK_EQ(
+		ValidateSignupName(QString(60, QChar('x'))),
+		SignupNameValidation::Valid);
+	CHECK_EQ(
+		ValidateSignupName(QString(61, QChar('x'))),
+		SignupNameValidation::TooLong);
+	CHECK_EQ(
+		ValidateSignupName(u" \t\n"_q),
+		SignupNameValidation::Empty);
+}
+
+TEST_CASE(SignupNameValidationDoesNotImposeCompositionRules) {
+	CHECK_EQ(
+		ValidateSignupName(u"  你好\u200f  "_q),
+		SignupNameValidation::Valid);
+}
+
+TEST_CASE(SignupPasswordValidationReportsTheFirstFix) {
+	CHECK_EQ(
+		ValidateSignupPassword(QString(), QString()),
+		SignupPasswordValidation::Empty);
+	CHECK_EQ(
+		ValidateSignupPassword(u"short"_q, u"short"_q),
+		SignupPasswordValidation::TooShort);
+	CHECK_EQ(
+		ValidateSignupPassword(u"long enough"_q, QString()),
+		SignupPasswordValidation::RepeatEmpty);
+	CHECK_EQ(
+		ValidateSignupPassword(u"long enough"_q, u"different"_q),
+		SignupPasswordValidation::Mismatch);
+	CHECK_EQ(
+		ValidateSignupPassword(u"long enough"_q, u"long enough"_q),
+		SignupPasswordValidation::Valid);
+}
+
 } // namespace

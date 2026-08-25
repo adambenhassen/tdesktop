@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "config.h"
 #include "intro/intro_password_check.h"
+#include "intro/intro_signup_name.h"
 #include "intro/intro_username_validation.h"
 #include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
@@ -101,6 +102,11 @@ void UsernameWidget::setInnerFocus() {
 void UsernameWidget::activate() {
 	Step::activate();
 	_username->setFocusFast();
+	if (!getData()->usernameError.isEmpty()) {
+		const auto text = getData()->usernameError;
+		getData()->usernameError.clear();
+		fail(text);
+	}
 }
 
 void UsernameWidget::resizeEvent(QResizeEvent *e) {
@@ -364,12 +370,17 @@ void UsernameWidget::signInDone(const MTPauth_Authorization &result) {
 			"step; accepting it."));
 		carryForwardAndFinish(result);
 	}, [&](const MTPDauth_authorizationSignUpRequired &data) {
-		carryForwardAndFinish(result);
+		getData()->phone = _sentUsername;
+		getData()->phoneHash = _sentHash;
+		getData()->signupName.clear();
+		getData()->usernameError.clear();
+		getData()->signupNameError.clear();
+		goNext<SignUpNameWidget>();
 	});
 }
 
-// The username and its hash travel in Data's phone fields so the stock
-// signup screen sends auth.signUp with the right identity unchanged.
+// The username and its hash travel in Data's phone fields so the custom
+// registration steps can send auth.signUp with the right identity unchanged.
 // The password step gets its SRP challenge through pwdState instead.
 void UsernameWidget::carryForwardAndFinish(
 		const MTPauth_Authorization &result) {

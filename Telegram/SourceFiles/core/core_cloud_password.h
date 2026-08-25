@@ -70,6 +70,10 @@ struct CloudPasswordResult {
 
 struct CloudPasswordDigest {
 	bytes::vector modpow;
+	// ValidateNewCloudPasswordAlgo appends client randomness to salt1.
+	// Return the salt used for the digest so callers send that exact value
+	// back in account.passwordInputSettings.
+	bytes::vector salt1;
 };
 
 bytes::vector ComputeCloudPasswordHash(

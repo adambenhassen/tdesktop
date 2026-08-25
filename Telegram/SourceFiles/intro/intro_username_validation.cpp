@@ -41,5 +41,34 @@ int FloodWaitSeconds(const QString &errorType) {
 	return base::StringViewMid(errorType, from).toInt();
 }
 
+QString NormalizeSignupNameInput(const QString &input) {
+	return input.trimmed();
+}
+
+SignupNameValidation ValidateSignupName(const QString &input) {
+	const auto normalized = NormalizeSignupNameInput(input);
+	if (normalized.isEmpty()) {
+		return SignupNameValidation::Empty;
+	} else if (normalized.size() > 60) {
+		return SignupNameValidation::TooLong;
+	}
+	return SignupNameValidation::Valid;
+}
+
+SignupPasswordValidation ValidateSignupPassword(
+		const QString &password,
+		const QString &repeat) {
+	if (password.isEmpty()) {
+		return SignupPasswordValidation::Empty;
+	} else if (password.size() < 8) {
+		return SignupPasswordValidation::TooShort;
+	} else if (repeat.isEmpty()) {
+		return SignupPasswordValidation::RepeatEmpty;
+	} else if (password != repeat) {
+		return SignupPasswordValidation::Mismatch;
+	}
+	return SignupPasswordValidation::Valid;
+}
+
 } // namespace details
 } // namespace Intro
