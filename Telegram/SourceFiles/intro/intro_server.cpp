@@ -472,8 +472,6 @@ void ServerKeyWidget::submit() {
 			: tr::lng_intro_server_check_unreadable(tr::now);
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
-		QAccessibleEvent alertEvent(this, QAccessible::Alert);
-		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 	commitAndAdvance();
