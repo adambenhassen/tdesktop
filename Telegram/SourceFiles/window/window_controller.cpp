@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/emoji_config.h"
 #include "chat_helpers/emoji_sets_manager.h"
 #include "window/window_session_controller.h"
+#include "window/window_lock_widgets.h"
 #include "window/themes/window_theme_editor.h"
 #include "ui/boxes/confirm_box.h"
 #include "data/components/promo_suggestions.h"
@@ -403,10 +404,10 @@ void Controller::clearSetupEmailLock() {
 void Controller::setupIntro(
 		Main::Account *accountBeforeIntro,
 		QPixmap oldContentCache) {
-	const auto point = Core::App().domain().maybeLastOrSomeAuthedAccount()
-		? Intro::EnterPoint::Qr
-		: Intro::EnterPoint::Start;
-	_widget.setupIntro(point, accountBeforeIntro, std::move(oldContentCache));
+	_widget.setupIntro(
+		Intro::EnterPoint::Start,
+		accountBeforeIntro,
+		std::move(oldContentCache));
 }
 
 void Controller::setupMain(

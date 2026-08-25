@@ -64,8 +64,6 @@ public:
 	[[nodiscard]] MTP::Sender &api() const;
 	void apiClear();
 
-	virtual void finishInit() {
-	}
 	virtual void setInnerFocus() {
 		setFocus();
 	}
@@ -73,11 +71,6 @@ public:
 	void setGoCallback(
 		Fn<void(Step *step, StackAction action, Animate animate)> callback);
 	void setStepBelowCallback(Fn<Step*()> callback);
-	void setShowTermsCallback(Fn<void()> callback);
-	void setCancelNearestDcCallback(Fn<void()> callback);
-	void setAcceptTermsCallback(
-		Fn<void(Fn<void()> callback)> callback);
-
 	void prepareShowAnimated(Step *after);
 	void showAnimated(Animate animate);
 	void showFast();
@@ -127,8 +120,6 @@ protected:
 	void setDescriptionText(v::text::data &&descriptionText);
 	bool paintAnimated(QPainter &p, QRect clip);
 
-	void fillSentCodeData(const MTPDauth_sentCode &type);
-
 	void showDescription();
 	void hideDescription();
 
@@ -162,18 +153,6 @@ protected:
 	template <typename StepType>
 	void goReplace(Animate animate) {
 		goReplace(new StepType(parentWidget(), _account, _data), animate);
-	}
-
-	void showTerms() {
-		if (_showTermsCallback) _showTermsCallback();
-	}
-	void acceptTerms(Fn<void()> callback) {
-		if (_acceptTermsCallback) {
-			_acceptTermsCallback(callback);
-		}
-	}
-	void cancelNearestDcRequest() {
-		if (_cancelNearestDcCallback) _cancelNearestDcCallback();
 	}
 
 	virtual int errorTop() const;
@@ -221,9 +200,6 @@ private:
 	bool _hasCover = false;
 	Fn<void(Step *step, StackAction action, Animate animate)> _goCallback;
 	Fn<Step*()> _stepBelowCallback;
-	Fn<void()> _showTermsCallback;
-	Fn<void()> _cancelNearestDcCallback;
-	Fn<void(Fn<void()> callback)> _acceptTermsCallback;
 
 	rpl::variable<QString> _titleText;
 	object_ptr<Ui::FlatLabel> _title;

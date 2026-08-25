@@ -8,12 +8,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/sender.h"
-#include "intro/intro_username_validation.h"
+#include "intro/intro_auth_validation.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
-#include "window/window_lock_widgets.h"
 #include "core/core_cloud_password.h"
 #include "media/player/media_player_float.h"
+
+namespace style {
+struct RoundButton;
+} // namespace style
 
 namespace Main {
 class Account;
@@ -37,43 +40,15 @@ class SlideAnimation;
 namespace Intro {
 namespace details {
 
-enum class CallStatus {
-	Waiting,
-	Calling,
-	Called,
-	Disabled,
-};
-
-enum class EmailStatus {
-	None,
-	SetupRequired,
-};
-
 struct Data {
-	// Required for the UserpicButton.
 	const not_null<Window::Controller*> controller;
 
 	base::weak_ptr<Main::Account> accountBeforeIntro;
 
-	QString country;
 	QString phone;
 	QByteArray phoneHash;
 
-	CallStatus callStatus = CallStatus::Disabled;
-	int callTimeout = 0;
-
-	int codeLength = 5;
-	bool codeByTelegram = false;
-	QString codeByFragmentUrl;
-
-	EmailStatus emailStatus = EmailStatus::None;
-	QString email;
-	QString emailPatternSetup;
-	QString emailPatternLogin;
-
 	Core::CloudPasswordState pwdState;
-
-	Window::TermsLock termsLock;
 
 	// Set by ServerWidget on valid input, consumed by ServerKeyWidget.
 	QString serverAddress;
@@ -92,8 +67,6 @@ struct Data {
 	QString signupName;
 	QString usernameError;
 	QString signupNameError;
-
-	rpl::event_stream<> updated;
 
 };
 
@@ -114,8 +87,6 @@ class Step;
 
 enum class EnterPoint : uchar {
 	Start,
-	Phone,
-	Qr,
 };
 
 class Widget
@@ -162,10 +133,6 @@ private:
 	void showControls();
 	void hideControls();
 
-	void showTerms();
-	void acceptTerms(Fn<void()> callback);
-	void hideAndDestroy(object_ptr<Ui::FadeWrap<Ui::RpWidget>> widget);
-
 	[[nodiscard]] details::Step *getStep(int skip = 0) const {
 		Expects(skip >= 0);
 		Expects(skip < _stepHistory.size());
@@ -179,7 +146,6 @@ private:
 		details::Animate animate);
 	void appendStep(details::Step *step);
 
-	void showTerms(Fn<void()> callback);
 
 	// FloatDelegate
 	[[nodiscard]] auto floatPlayerDelegate()
@@ -203,7 +169,6 @@ private:
 
 	const not_null<Main::Account*> _account;
 	std::optional<MTP::Sender> _api;
-	mtpRequestId _nearestDcRequestId = 0;
 
 	std::unique_ptr<Window::SlideAnimation> _showAnimation;
 
@@ -225,7 +190,6 @@ private:
 
 	object_ptr<Ui::FadeWrap<Ui::RoundButton>> _next;
 	object_ptr<Ui::FadeWrap<Ui::LinkButton>> _changeLanguage = { nullptr };
-	object_ptr<Ui::FadeWrap<Ui::FlatLabel>> _terms = { nullptr };
 
 	std::unique_ptr<Window::ConnectionState> _connecting;
 

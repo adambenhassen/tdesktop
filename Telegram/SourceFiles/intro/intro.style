@@ -26,8 +26,6 @@ introCoverIconTop: 46px;
 
 introSettingsSkip: 10px;
 
-introPhotoTop: 10px;
-
 introCoverTitle: FlatLabel(defaultFlatLabel) {
 	textFg: introTitleFg;
 	align: align(center);
@@ -61,8 +59,6 @@ introDescription: FlatLabel(defaultFlatLabel) {
 }
 introDescriptionTop: 34px;
 
-introLink: defaultLinkButton;
-
 introPlaneWidth: 48px;
 introPlaneHeight: 38px;
 introHeight: 406px;
@@ -95,7 +91,6 @@ introFragmentButton: RoundButton(introNextButton) {
 
 introStepFieldTop: 96px;
 introPhoneTop: 6px;
-introLinkTop: 24px;
 introCountry: InputField(defaultInputField) {
 	textMargins: margins(3px, 27px, 3px, 6px);
 	style: TextStyle(defaultTextStyle) {
@@ -104,15 +99,10 @@ introCountry: InputField(defaultInputField) {
 	width: 300px;
 	heightMin: 61px;
 }
-introCountryCode: InputField(introCountry) {
-	width: 64px;
-	textAlign: align(top);
-}
 introPhone: InputField(introCountry) {
 	textMargins: margins(12px, 27px, 12px, 6px);
 	width: 225px;
 }
-introQrLoginLinkTop: 368px;
 introName: introCountry;
 introPassword: introCountry;
 introSignInHintTop: 165px;
@@ -128,16 +118,10 @@ introPasswordHint: FlatLabel(introDescription) {
 	textFg: windowFg;
 }
 
-introTermsLabel: FlatLabel(defaultFlatLabel) {
-	align: align(top);
-}
-introTermsBottom: 20px;
-
 introCountryIcon: icon {{ "intro_country_dropdown", menuIconFg }};
 introCountryIconPosition: point(8px, 37px);
 
 introErrorTop: 235px;
-introErrorBelowLinkTop: 220px;
 
 introError: FlatLabel(introDescription) {
 }
@@ -157,29 +141,9 @@ introBackButton: IconButton(defaultIconButton) {
 	ripple: defaultRippleAnimationBgOver;
 }
 
-introQrTop: -18px;
 introQrPixel: 50px; // large enough
-introQrMaxSize: 180px;
 introQrBackgroundSkip: 12px;
 introQrBackgroundRadius: 8px;
-introQrLabelsWidth: 292px;
-introQrTitleWidth: 320px;
-introQrTitle: FlatLabel(defaultFlatLabel) {
-	textFg: introTitleFg;
-	align: align(top);
-	minWidth: introQrTitleWidth;
-	style: TextStyle(defaultTextStyle) {
-		font: font(20px semibold);
-	}
-}
-introQrErrorTop: 336px;
-introQrTitleTop: 196px;
-introQrStep: FlatLabel(defaultFlatLabel) {
-	minWidth: 200px;
-}
-introQrStepsTop: 232px;
-introQrStepMargins: margins(20px, 8px, 0px, 0px);
-introQrSkipTop: 360px;
 introQrCenterSize: 44px;
 introQrPlane: icon {{ "intro_qr_plane", activeButtonFg }};
 

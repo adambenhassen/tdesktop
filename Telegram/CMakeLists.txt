@@ -1347,18 +1347,10 @@ PRIVATE
     inline_bots/inline_results_inner.h
     inline_bots/inline_results_widget.cpp
     inline_bots/inline_results_widget.h
-    intro/intro_code.cpp
-    intro/intro_code.h
-    intro/intro_email.cpp
-    intro/intro_email.h
+    intro/intro_auth_validation.cpp
+    intro/intro_auth_validation.h
     intro/intro_password_check.cpp
     intro/intro_password_check.h
-    intro/intro_phone.cpp
-    intro/intro_phone.h
-    intro/intro_qr.cpp
-    intro/intro_qr.h
-    intro/intro_signup.cpp
-    intro/intro_signup.h
     intro/intro_signup_name.cpp
     intro/intro_signup_name.h
     intro/intro_signup_password.cpp
@@ -1369,8 +1361,6 @@ PRIVATE
     intro/intro_start.h
     intro/intro_username.cpp
     intro/intro_username.h
-    intro/intro_username_validation.cpp
-    intro/intro_username_validation.h
     intro/intro_step.cpp
     intro/intro_step.h
     intro/intro_widget.cpp
