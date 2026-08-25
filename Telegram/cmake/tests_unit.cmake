@@ -27,8 +27,8 @@ target_precompile_headers(test_unit PRIVATE ${src_loc}/mtproto/mtproto_pch.h)
 nice_target_sources(test_unit ${src_loc}
 PRIVATE
     tests/unit/logs_stub.cpp
-    intro/intro_username_validation.cpp
-    tests/unit/intro_username_validation_tests.cpp
+    intro/intro_auth_validation.cpp
+    tests/unit/intro_auth_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
     tests/unit/mtp_instance_tests.cpp
@@ -53,4 +53,3 @@ PRIVATE
 set_target_properties(test_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
-

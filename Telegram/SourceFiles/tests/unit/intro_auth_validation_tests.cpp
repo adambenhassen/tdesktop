@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
-#include "intro/intro_username_validation.h"
+#include "intro/intro_auth_validation.h"
 
 namespace {
 

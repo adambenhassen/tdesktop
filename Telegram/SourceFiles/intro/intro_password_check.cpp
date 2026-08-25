@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "intro/intro_password_check.h"
 
-#include "intro/intro_username_validation.h"
+#include "intro/intro_auth_validation.h"
 #include "intro/intro_widget.h"
 #include "core/core_cloud_password.h"
 #include "lang/lang_keys.h"

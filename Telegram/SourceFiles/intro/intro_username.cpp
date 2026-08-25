@@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "config.h"
 #include "intro/intro_password_check.h"
 #include "intro/intro_signup_name.h"
-#include "intro/intro_username_validation.h"
+#include "intro/intro_auth_validation.h"
 #include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
