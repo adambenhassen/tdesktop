@@ -115,8 +115,9 @@ introPhone: InputField(introCountry) {
 introQrLoginLinkTop: 368px;
 introName: introCountry;
 introPassword: introCountry;
-introPasswordTop: 74px;
-introPasswordHintTop: 151px;
+introSignInHintTop: 165px;
+introSignInNoteTop: 193px;
+introSignInErrorTop: 228px;
 
 introCodeDigitFont: font(20px);
 introCodeDigitHeight: 50px;
@@ -126,17 +127,6 @@ introCodeDigitSkip: 10px;
 introPasswordHint: FlatLabel(introDescription) {
 	textFg: windowFg;
 }
-
-introResetButton: RoundButton(defaultLightButton) {
-	textFg: attentionButtonFg;
-	textFgOver: attentionButtonFgOver;
-	textBgOver: attentionButtonBgOver;
-
-	ripple: RippleAnimation(defaultRippleAnimation) {
-		color: attentionButtonBgRipple;
-	}
-}
-introResetBottom: 20px;
 
 introTermsLabel: FlatLabel(defaultFlatLabel) {
 	align: align(top);

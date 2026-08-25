@@ -99,5 +99,29 @@ SignupPasswordUpdateFailure ClassifySignupPasswordUpdateFailure(
 	return SignupPasswordUpdateFailure::Other;
 }
 
+SigninPasswordValidation ValidateSigninPassword(const QString &input) {
+	return input.isEmpty()
+		? SigninPasswordValidation::Empty
+		: SigninPasswordValidation::Valid;
+}
+
+SigninPasswordFailure ClassifySigninPasswordFailure(
+		const QString &errorType) {
+	if (errorType.startsWith(u"FLOOD_WAIT_"_q)
+		|| errorType.startsWith(u"FLOOD_PREMIUM_WAIT_"_q)) {
+		return SigninPasswordFailure::Flood;
+	} else if (errorType == u"PASSWORD_HASH_INVALID"_q
+		|| errorType == u"SRP_PASSWORD_CHANGED"_q) {
+		return SigninPasswordFailure::WrongPassword;
+	} else if (errorType == u"PASSWORD_EMPTY"_q) {
+		return SigninPasswordFailure::PasswordEmpty;
+	} else if (errorType == u"AUTH_KEY_UNREGISTERED"_q) {
+		return SigninPasswordFailure::AuthKeyUnregistered;
+	} else if (errorType == u"SRP_ID_INVALID"_q) {
+		return SigninPasswordFailure::SrpIdInvalid;
+	}
+	return SigninPasswordFailure::Other;
+}
+
 } // namespace details
 } // namespace Intro

@@ -162,9 +162,6 @@ private:
 	void showControls();
 	void hideControls();
 
-	void showResetButton();
-	void resetAccount();
-
 	void showTerms();
 	void acceptTerms(Fn<void()> callback);
 	void hideAndDestroy(object_ptr<Ui::FadeWrap<Ui::RpWidget>> widget);
@@ -228,7 +225,6 @@ private:
 
 	object_ptr<Ui::FadeWrap<Ui::RoundButton>> _next;
 	object_ptr<Ui::FadeWrap<Ui::LinkButton>> _changeLanguage = { nullptr };
-	object_ptr<Ui::FadeWrap<Ui::RoundButton>> _resetAccount = { nullptr };
 	object_ptr<Ui::FadeWrap<Ui::FlatLabel>> _terms = { nullptr };
 
 	std::unique_ptr<Window::ConnectionState> _connecting;
@@ -236,8 +232,6 @@ private:
 	bool _backAvailable = false;
 	bool _nextShown = true;
 	Ui::Animations::Simple _nextShownAnimation;
-
-	mtpRequestId _resetRequest = 0;
 
 };
 

@@ -230,4 +230,34 @@ TEST_CASE(SignupPasswordUpdateKeepsFloodVisible) {
 		== SignupPasswordUpdateFailure::Other);
 }
 
+TEST_CASE(SigninPasswordValidationRejectsEmptyInput) {
+	CHECK(
+		ValidateSigninPassword(QString())
+		== SigninPasswordValidation::Empty);
+	CHECK(
+		ValidateSigninPassword(u"correct horse battery staple"_q)
+		== SigninPasswordValidation::Valid);
+}
+
+TEST_CASE(SigninPasswordFailuresHaveExplicitFallbacks) {
+	CHECK(
+		ClassifySigninPasswordFailure(u"PASSWORD_HASH_INVALID"_q)
+		== SigninPasswordFailure::WrongPassword);
+	CHECK(
+		ClassifySigninPasswordFailure(u"FLOOD_WAIT_60"_q)
+		== SigninPasswordFailure::Flood);
+	CHECK(
+		ClassifySigninPasswordFailure(u"FLOOD_PREMIUM_WAIT_60"_q)
+		== SigninPasswordFailure::Flood);
+	CHECK(
+		ClassifySigninPasswordFailure(u"SRP_PASSWORD_CHANGED"_q)
+		== SigninPasswordFailure::WrongPassword);
+	CHECK(
+		ClassifySigninPasswordFailure(u"SRP_ID_INVALID"_q)
+		== SigninPasswordFailure::SrpIdInvalid);
+	CHECK(
+		ClassifySigninPasswordFailure(u"UNEXPECTED_ERROR"_q)
+		== SigninPasswordFailure::Other);
+}
+
 } // namespace

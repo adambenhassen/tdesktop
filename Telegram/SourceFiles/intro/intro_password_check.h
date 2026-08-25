@@ -13,10 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 
 namespace Ui {
-class InputField;
 class PasswordInput;
-class RoundButton;
-class LinkButton;
 } // namespace Ui
 
 namespace Intro {
@@ -34,6 +31,8 @@ public:
 	void cancelled() override;
 	void submit() override;
 	rpl::producer<QString> nextButtonText() const override;
+	[[nodiscard]] int nextButtonTop() const override;
+	[[nodiscard]] QWidget *firstTabWidget() const override;
 
 	bool hasBack() const override {
 		return true;
@@ -43,24 +42,17 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
-	void toRecover();
-	void toPassword();
-
 	int errorTop() const override;
 
-	void showReset();
 	void refreshLang();
 	void updateControlsGeometry();
+	void updateAccessibleDescription();
+	void passwordChanged();
+	void showPasswordError(const QString &text);
 
-	void pwdSubmitDone(bool recover, const MTPauth_Authorization &result);
+	void pwdSubmitDone(const MTPauth_Authorization &result);
 	void pwdSubmitFail(const MTP::Error &error);
-	void codeSubmitDone(const QString &code, const MTPBool &result);
-	void codeSubmitFail(const MTP::Error &error);
-	void recoverStartFail(const MTP::Error &error);
 
-	void recoverStarted(const MTPauth_PasswordRecovery &result);
-
-	void updateDescriptionText();
 	void handleSrpIdInvalid();
 	void requestPasswordData();
 	void checkPasswordHash();
@@ -70,13 +62,10 @@ private:
 	Core::CloudPasswordState _passwordState;
 	crl::time _lastSrpIdInvalidTime = 0;
 	bytes::vector _passwordHash;
-	QString _emailPattern;
 
 	object_ptr<Ui::PasswordInput> _pwdField;
 	object_ptr<Ui::FlatLabel> _pwdHint;
-	object_ptr<Ui::InputField> _codeField;
-	object_ptr<Ui::LinkButton> _toRecover;
-	object_ptr<Ui::LinkButton> _toPassword;
+	object_ptr<Ui::FlatLabel> _noReset;
 	mtpRequestId _sentRequest = 0;
 
 };

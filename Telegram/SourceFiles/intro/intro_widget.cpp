@@ -9,10 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "intro/intro_start.h"
 #include "intro/intro_phone.h"
-#include "intro/intro_qr.h"
 #include "intro/intro_server.h"
 #include "intro/intro_code.h"
-#include "intro/intro_signup.h"
 #include "intro/intro_password_check.h"
 #include "lang/lang_keys.h"
 #include "lang/lang_instance.h"
@@ -27,13 +25,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/components/promo_suggestions.h"
 #include "countries/countries_instance.h"
-#include "ui/boxes/confirm_box.h"
-#include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/ui_utility.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/abstract_box.h"
 #include "core/update_checker.h"
 #include "core/application.h"
@@ -185,8 +182,6 @@ Widget::Widget(
 	getStep()->showFast();
 	setInnerFocus();
 
-	cSetPasswordRecovered(false);
-
 	if (!Core::UpdaterDisabled()) {
 		Core::UpdateChecker checker;
 		checker.start();
@@ -307,7 +302,7 @@ void Widget::createLanguageLink() {
 			Lang::CurrentCloudManager().switchToLanguage(languageId);
 		});
 		_changeLanguage->toggle(
-			!_resetAccount && !_terms && _nextShown,
+			!_terms && _nextShown,
 			anim::type::normal);
 		updateControlsGeometry();
 	};
@@ -416,9 +411,6 @@ void Widget::historyMove(StackAction action, Animate animate) {
 		_stepHistory.erase(_stepHistory.end() - 2);
 	}
 
-	if (_resetAccount) {
-		hideAndDestroy(std::exchange(_resetAccount, { nullptr }));
-	}
 	if (_terms) {
 		hideAndDestroy(std::exchange(_terms, { nullptr }));
 	}
@@ -453,7 +445,6 @@ void Widget::historyMove(StackAction action, Animate animate) {
 		_update->toggle(!stepHasCover, anim::type::normal);
 	}
 	setupNextButton();
-	if (_resetAccount) _resetAccount->show(anim::type::normal);
 	if (_terms) _terms->show(anim::type::normal);
 	getStep()->showAnimated(animate);
 	fixOrder();
@@ -513,9 +504,6 @@ void Widget::appendStep(Step *step) {
 	step->setStepBelowCallback([=]() -> Step* {
 		return (_stepHistory.size() > 1) ? getStep(1) : nullptr;
 	});
-	step->setShowResetCallback([=] {
-		showResetButton();
-	});
 	step->setShowTermsCallback([=] {
 		showTerms();
 	});
@@ -527,24 +515,6 @@ void Widget::appendStep(Step *step) {
 	step->setAcceptTermsCallback([=](Fn<void()> callback) {
 		acceptTerms(callback);
 	});
-}
-
-void Widget::showResetButton() {
-	if (!_resetAccount) {
-		auto entity = object_ptr<Ui::RoundButton>(
-			this,
-			tr::lng_signin_reset_account(),
-			st::introResetButton);
-		entity->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
-		_resetAccount.create(this, std::move(entity));
-		_resetAccount->hide(anim::type::instant);
-		_resetAccount->entity()->setClickedCallback([this] { resetAccount(); });
-		updateControlsGeometry();
-	}
-	_resetAccount->show(anim::type::normal);
-	if (_changeLanguage) {
-		_changeLanguage->hide(anim::type::normal);
-	}
 }
 
 void Widget::showTerms() {
@@ -567,106 +537,13 @@ void Widget::showTerms() {
 	}
 	if (_changeLanguage) {
 		_changeLanguage->toggle(
-			!_terms && !_resetAccount && _nextShown,
+			!_terms && _nextShown,
 			anim::type::normal);
 	}
 }
 
 void Widget::acceptTerms(Fn<void()> callback) {
 	showTerms(callback);
-}
-
-void Widget::resetAccount() {
-	if (_resetRequest || !_api) {
-		return;
-	}
-
-	const auto callback = crl::guard(this, [this] {
-		if (_resetRequest) {
-			return;
-		}
-		_resetRequest = _api->request(MTPaccount_DeleteAccount(
-			MTP_flags(0),
-			MTP_string("Forgot password"),
-			MTPInputCheckPasswordSRP()
-		)).done([=] {
-			_resetRequest = 0;
-
-			getData()->controller->hideLayer();
-			if (getData()->phone.isEmpty()) {
-				moveToStep(
-					new QrWidget(this, _account, getData()),
-					StackAction::Replace,
-					Animate::Back);
-			} else {
-				moveToStep(
-					new SignupWidget(this, _account, getData()),
-					StackAction::Replace,
-					Animate::Forward);
-			}
-		}).fail([=](const MTP::Error &error) {
-			_resetRequest = 0;
-
-			const auto &type = error.type();
-			if (type.startsWith(u"2FA_CONFIRM_WAIT_"_q)) {
-				const auto seconds = base::StringViewMid(
-					type,
-					u"2FA_CONFIRM_WAIT_"_q.size()).toInt();
-				const auto days = (seconds + 59) / 86400;
-				const auto hours = ((seconds + 59) % 86400) / 3600;
-				const auto minutes = ((seconds + 59) % 3600) / 60;
-				auto when = tr::lng_minutes(tr::now, lt_count, minutes);
-				if (days > 0) {
-					const auto daysCount = tr::lng_days(
-						tr::now,
-						lt_count,
-						days);
-					const auto hoursCount = tr::lng_hours(
-						tr::now,
-						lt_count,
-						hours);
-					when = tr::lng_signin_reset_in_days(
-						tr::now,
-						lt_days_count,
-						daysCount,
-						lt_hours_count,
-						hoursCount,
-						lt_minutes_count,
-						when);
-				} else if (hours > 0) {
-					const auto hoursCount = tr::lng_hours(
-						tr::now,
-						lt_count,
-						hours);
-					when = tr::lng_signin_reset_in_hours(
-						tr::now,
-						lt_hours_count,
-						hoursCount,
-						lt_minutes_count,
-						when);
-				}
-				Ui::show(Ui::MakeInformBox(tr::lng_signin_reset_wait(
-					tr::now,
-					lt_phone_number,
-					Ui::FormatPhone(getData()->phone),
-					lt_when,
-					when)));
-			} else if (type == u"2FA_RECENT_CONFIRM"_q) {
-				Ui::show(Ui::MakeInformBox(
-					tr::lng_signin_reset_cancelled()));
-			} else if (!MTP::IgnoreError(error)) {
-				getData()->controller->hideLayer();
-				getStep()->showError(rpl::single(type));
-			}
-		}).send();
-	});
-
-	Ui::show(Ui::MakeConfirmBox({
-		.text = tr::lng_signin_sure_reset(),
-		.confirmed = callback,
-		.confirmText = tr::lng_signin_reset(),
-		.confirmStyle = &st::attentionBoxButton,
-	}));
 }
 
 void Widget::showTerms(Fn<void()> callback) {
@@ -734,7 +611,7 @@ void Widget::showControls() {
 	}
 	if (_changeLanguage) {
 		_changeLanguage->toggle(
-			!_resetAccount && !_terms && _nextShown,
+			!_terms && _nextShown,
 			anim::type::instant);
 	}
 	if (_terms) {
@@ -760,7 +637,7 @@ void Widget::setupNextButton() {
 		_nextShown = visible;
 		if (_changeLanguage) {
 			_changeLanguage->toggle(
-				!_resetAccount && !_terms && _nextShown,
+				!_terms && _nextShown,
 				anim::type::normal);
 		}
 		_nextShownAnimation.start(
@@ -876,11 +753,6 @@ void Widget::updateControlsGeometry() {
 		_changeLanguage->moveToLeft(
 			(width() - _changeLanguage->width()) / 2,
 			_next->y() + _next->height() + _changeLanguage->height());
-	}
-	if (_resetAccount) {
-		_resetAccount->moveToLeft(
-			(width() - _resetAccount->width()) / 2,
-			height() - st::introResetBottom - _resetAccount->height());
 	}
 	if (_terms) {
 		_terms->moveToLeft(
