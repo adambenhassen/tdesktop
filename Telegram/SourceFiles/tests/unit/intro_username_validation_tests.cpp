@@ -152,60 +152,60 @@ TEST_CASE(FloodWaitSecondsReadsDigitsFromTheEnd) {
 }
 
 TEST_CASE(SignupNameValidationTrimsAndCapsInput) {
-	CHECK_EQ(
-		ValidateSignupName(u"  Ada Lovelace  "_q),
-		SignupNameValidation::Valid);
-	CHECK_EQ(
-		ValidateSignupName(QString(60, QChar('x'))),
-		SignupNameValidation::Valid);
-	CHECK_EQ(
-		ValidateSignupName(QString(61, QChar('x'))),
-		SignupNameValidation::TooLong);
-	CHECK_EQ(
-		ValidateSignupName(u" \t\n"_q),
-		SignupNameValidation::Empty);
+	CHECK(
+		ValidateSignupName(u"  Ada Lovelace  "_q)
+		== SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(QString(60, QChar('x')))
+		== SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(QString(61, QChar('x')))
+		== SignupNameValidation::TooLong);
+	CHECK(
+		ValidateSignupName(u" \t\n"_q)
+		== SignupNameValidation::Empty);
 }
 
 TEST_CASE(SignupNameValidationDoesNotImposeCompositionRules) {
-	CHECK_EQ(
-		ValidateSignupName(u"  你好\u200f  "_q),
-		SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(u"  你好\u200f  "_q)
+		== SignupNameValidation::Valid);
 }
 
 TEST_CASE(SignupPasswordValidationReportsTheFirstFix) {
-	CHECK_EQ(
-		ValidateSignupPassword(QString(), QString()),
-		SignupPasswordValidation::Empty);
-	CHECK_EQ(
-		ValidateSignupPassword(u"short"_q, u"short"_q),
-		SignupPasswordValidation::TooShort);
-	CHECK_EQ(
-		ValidateSignupPassword(u"long enough"_q, QString()),
-		SignupPasswordValidation::RepeatEmpty);
-	CHECK_EQ(
-		ValidateSignupPassword(u"long enough"_q, u"different"_q),
-		SignupPasswordValidation::Mismatch);
-	CHECK_EQ(
-		ValidateSignupPassword(u"long enough"_q, u"long enough"_q),
-		SignupPasswordValidation::Valid);
+	CHECK(
+		ValidateSignupPassword(QString(), QString())
+		== SignupPasswordValidation::Empty);
+	CHECK(
+		ValidateSignupPassword(u"short"_q, u"short"_q)
+		== SignupPasswordValidation::TooShort);
+	CHECK(
+		ValidateSignupPassword(u"long enough"_q, QString())
+		== SignupPasswordValidation::RepeatEmpty);
+	CHECK(
+		ValidateSignupPassword(u"long enough"_q, u"different"_q)
+		== SignupPasswordValidation::Mismatch);
+	CHECK(
+		ValidateSignupPassword(u"long enough"_q, u"long enough"_q)
+		== SignupPasswordValidation::Valid);
 }
 
 TEST_CASE(SignupPasswordUpdateKeepsFloodVisible) {
-	CHECK_EQ(
-		ClassifySignupPasswordUpdateFailure(u"FLOOD_WAIT_60"_q),
-		SignupPasswordUpdateFailure::Flood);
-	CHECK_EQ(
-		ClassifySignupPasswordUpdateFailure(u"FLOOD_PREMIUM_WAIT_60"_q),
-		SignupPasswordUpdateFailure::Flood);
-	CHECK_EQ(
-		ClassifySignupPasswordUpdateFailure(u"NEW_PASSWORD_BAD"_q),
-		SignupPasswordUpdateFailure::InvalidVerifier);
-	CHECK_EQ(
-		ClassifySignupPasswordUpdateFailure(u"NEW_SALT_INVALID"_q),
-		SignupPasswordUpdateFailure::InvalidVerifier);
-	CHECK_EQ(
-		ClassifySignupPasswordUpdateFailure(u"INTERNAL"_q),
-		SignupPasswordUpdateFailure::Other);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"FLOOD_WAIT_60"_q)
+		== SignupPasswordUpdateFailure::Flood);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"FLOOD_PREMIUM_WAIT_60"_q)
+		== SignupPasswordUpdateFailure::Flood);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"NEW_PASSWORD_BAD"_q)
+		== SignupPasswordUpdateFailure::InvalidVerifier);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"NEW_SALT_INVALID"_q)
+		== SignupPasswordUpdateFailure::InvalidVerifier);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"INTERNAL"_q)
+		== SignupPasswordUpdateFailure::Other);
 }
 
 } // namespace
