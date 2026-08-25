@@ -67,11 +67,6 @@ public:
 		return _dcOptions;
 	}
 
-	// Pin the user-entered server endpoint and RSA key for this
-	// account. While pinned, the account must never fall back to the
-	// built-in Telegram production DC table and keys. Returns false
-	// when the server carries no key.
-	[[nodiscard]] bool setCustomServer(const CustomServer &server);
 	[[nodiscard]] CustomServer customServer() const {
 		return _dcOptions.customServer();
 	}

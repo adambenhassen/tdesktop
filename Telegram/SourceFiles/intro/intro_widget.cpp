@@ -146,6 +146,27 @@ Widget::Widget(
 		handleUpdates(updates);
 	}, lifetime());
 
+	// A pinned endpoint that failed on its face. The wording must not
+	// send the user off to check their connection: a key mismatch in
+	// particular can be something on the path answering for the
+	// server, and retrying through it is the one wrong reaction.
+	_account->mtp().pinnedServerFailure(
+	) | rpl::on_next([=](
+			std::optional<MTP::PinnedServerFailureReport> report) {
+		if (!report) {
+			return;
+		}
+		const auto text = (
+			report->failure == MTP::PinnedServerFailure::KeyMismatch
+		)	? tr::lng_intro_server_key_mismatch(tr::now)
+		: tr::lng_intro_server_dc_mismatch(
+			tr::now,
+			lt_dc,
+			QString::number(
+				_account->mtp().dcOptions().customServer().dcId));
+		getStep()->showError(rpl::single(text));
+	}, lifetime());
+
 	_back->entity()->setClickedCallback([=] { backRequested(); });
 	_back->entity()->setAccessibleName(tr::lng_go_back(tr::now));
 	_back->hide(anim::type::instant);

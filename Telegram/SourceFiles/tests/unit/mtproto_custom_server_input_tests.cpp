@@ -717,6 +717,105 @@ TEST_CASE(ChooseIdentityLayoutNoFitWhenNeitherFits) {
 	CHECK(!layout.fits);
 }
 
+// CheckPinnedServerConfig: the pinned endpoint fixture, valid apart
+// from the dc id passed in.
+[[nodiscard]] CustomServer PinnedServer(int dcId) {
+	return CustomServer{
+		.dcId = dcId,
+		.ip = "203.0.113.10",
+		.port = 443,
+		.key = std::make_shared<details::RSAPublicKey>(
+			CheckServerKey(QString::fromLatin1(kRsa2048Spki)).key),
+	};
+}
+
+// CheckPinnedServerConfig: nothing pinned means nothing to contradict.
+TEST_CASE(NoPinMeansNoConfigFailure) {
+	CHECK(CheckPinnedServerConfig(2, {}, CustomServer{}) == std::nullopt);
+}
+
+// CheckPinnedServerConfig: a server reporting the pinned dc id, with
+// it advertised, passes.
+TEST_CASE(MatchingConfigDcIsNoFailure) {
+	CHECK(CheckPinnedServerConfig(2, {2}, PinnedServer(2)) == std::nullopt);
+}
+
+// CheckPinnedServerConfig: a server naming another dc id than the pin
+// is a mismatch. This is the telegramd-with-non-default-TG_DC_ID case:
+// without the report the account loses its only endpoint in silence.
+TEST_CASE(DifferentConfigDcIsMismatch) {
+	const auto failure = CheckPinnedServerConfig(3, {3}, PinnedServer(2));
+	CHECK(failure == PinnedServerFailure::DcIdMismatch);
+}
+
+// CheckPinnedServerConfig: an advertisement that omits the pinned id
+// is a mismatch even while this_dc still agrees — the server has
+// stopped confirming the DC this account is pinned to.
+TEST_CASE(AdvertisedListWithoutPinIsMismatch) {
+	const auto failure = CheckPinnedServerConfig(2, {3}, PinnedServer(2));
+	CHECK(failure == PinnedServerFailure::DcIdMismatch);
+}
+
+// CheckPinnedServerConfig: a list that carries the pin alongside other
+// ids is no failure; the pin only needs confirming, not exclusivity.
+TEST_CASE(AdvertisedListWithPinPasses) {
+	CHECK(CheckPinnedServerConfig(2, {2, 3}, PinnedServer(2)) == std::nullopt);
+}
+
+// CheckPinnedServerConfig: an empty advertisement is tolerated. A
+// minimal server may send config without dc options and still be the
+// right one; absence of a list cannot contradict the pin.
+TEST_CASE(EmptyAdvertisementIsTolerated) {
+	CHECK(CheckPinnedServerConfig(2, {}, PinnedServer(2)) == std::nullopt);
+}
+
+// ClassifyAuthKeyFailure: an unknown public key on a pinned regular
+// DC is the key-mismatch report and stop.
+TEST_CASE(UnknownPublicKeyOnPinnedRegularDcReportsMismatch) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Regular,
+		true) == AuthKeyFailureAction::ReportKeyMismatch);
+}
+
+// ClassifyAuthKeyFailure: an unknown public key on an unpinned
+// regular DC keeps the retry path. This is the stock-account
+// regression case: there is no pin to mismatch against, and nothing
+// but a pin change could lift the stop.
+TEST_CASE(UnpinnedRegularDcKeepsRetrying) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Regular,
+		false) == AuthKeyFailureAction::Retry);
+}
+
+// ClassifyAuthKeyFailure: an unknown public key on a CDN DC asks for
+// CDN config instead (MAIN-313 owns that path), pinned or not - both
+// pinned states are asserted so the comment stays true.
+TEST_CASE(UnknownPublicKeyOnCdnRequestsCdnConfig) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Cdn,
+		false) == AuthKeyFailureAction::RequestCdnConfig);
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::UnknownPublicKey,
+		DcType::Cdn,
+		true) == AuthKeyFailureAction::RequestCdnConfig);
+}
+
+// ClassifyAuthKeyFailure: any other key error retries as before, on
+// both regular and CDN DCs.
+TEST_CASE(OtherKeyErrorsKeepRetrying) {
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::Other,
+		DcType::Regular,
+		true) == AuthKeyFailureAction::Retry);
+	CHECK(ClassifyAuthKeyFailure(
+		details::DcKeyError::Other,
+		DcType::Cdn,
+		false) == AuthKeyFailureAction::Retry);
+}
+
 // CompareKeyId: an empty comparison is None, not a failed check, and it
 // advances — the user has not started verifying yet.
 TEST_CASE(CompareKeyIdEmptyIsNoneAndAdvances) {

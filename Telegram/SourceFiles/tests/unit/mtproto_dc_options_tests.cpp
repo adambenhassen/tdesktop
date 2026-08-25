@@ -79,7 +79,7 @@ TEST_CASE(RsaPublicKeySurvivesTheBytePairRoundTrip) {
 	CHECK_EQ(qint64(restored.fingerprint()), kProductionKeyFingerprint);
 }
 
-// The kVersion 3 block. Endpoint identity and key bytes are written;
+// The custom-server block. Endpoint identity and key bytes are written;
 // the fingerprint is recomputed on load. Every field matters: without
 // dcId the CDN-shadowing refusal matches nothing and the pin is
 // silently ineffective.
@@ -155,6 +155,7 @@ TEST_CASE(PinnedCustomServerRefusesADifferentPin) {
 	auto options = DcOptions(Environment::Production);
 	const auto original = MakeCustomServer();
 	CHECK(options.setCustomServer(original));
+	CHECK(options.markAuthorized(original.dcId));
 
 	auto different = MakeCustomServer();
 	different.ip = "10.4.1.8";
@@ -170,7 +171,9 @@ TEST_CASE(PinnedCustomServerRefusesADifferentPin) {
 // endpoint with a different key is still a different server.
 TEST_CASE(PinnedCustomServerRefusesADifferentKey) {
 	auto options = DcOptions(Environment::Production);
-	CHECK(options.setCustomServer(MakeCustomServer()));
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+	CHECK(options.markAuthorized(original.dcId));
 
 	auto n = MakeKey()->getN();
 	n.back() = bytes::type(
@@ -189,6 +192,92 @@ TEST_CASE(PinnedCustomServerRefusesADifferentKey) {
 	if (got.key) {
 		CHECK_EQ(qint64(got.key->fingerprint()), kProductionKeyFingerprint);
 	}
+}
+
+// Before authorization, a pin is replaceable even when an auth key was
+// already created for the first handshake.
+TEST_CASE(PinReplaceableForNeverAuthorizedAccountAfterKeyExists) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(MakeCustomServer()));
+
+	auto n = MakeKey()->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	auto corrected = MakeCustomServer();
+	corrected.key = std::make_shared<details::RSAPublicKey>(
+		n,
+		MakeKey()->getE());
+	CHECK(corrected.key->valid());
+
+	CHECK(options.setCustomServer(corrected));
+
+	const auto got = options.customServer();
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(
+			qint64(got.key->fingerprint()),
+			qint64(corrected.key->fingerprint()));
+	}
+}
+
+// The first config response can report a different DC after the
+// handshake. Before authorization, correcting that pin is still allowed.
+TEST_CASE(PinReplaceableForNeverAuthorizedAccountAfterDcIdMismatch) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+
+	auto corrected = MakeCustomServer();
+	corrected.dcId = 3;
+	corrected.ip = "10.4.1.8";
+
+	CHECK(options.setCustomServer(corrected));
+
+	const auto got = options.customServer();
+	CHECK_EQ(got.dcId, corrected.dcId);
+}
+
+TEST_CASE(AuthorizedAccountStillRefusesADifferentPin) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+	CHECK(options.markAuthorized(original.dcId));
+
+	auto different = MakeCustomServer();
+	different.ip = "10.4.1.8";
+	different.dcId = 3;
+	CHECK(!options.setCustomServer(different));
+}
+
+// Authorization is independent of the mutable auth-key store. It remains
+// present after a config round trip, which models relaunch and key churn.
+TEST_CASE(AuthorizationMarkerSurvivesKeyRemoval) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+	CHECK(options.markAuthorized(original.dcId));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.isAuthorized(original.dcId));
+
+	auto different = MakeCustomServer();
+	different.ip = "10.4.1.8";
+	different.dcId = 3;
+	CHECK(!restored.setCustomServer(different));
+}
+
+TEST_CASE(FullAccountResetClearsAuthorizationMarker) {
+	auto options = DcOptions(Environment::Production);
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+	CHECK(options.markAuthorized(original.dcId));
+	CHECK(options.clearAuthorized());
+	CHECK(!options.isAuthorized(original.dcId));
+
+	auto replacement = MakeCustomServer();
+	replacement.ip = "10.4.1.8";
+	CHECK(options.setCustomServer(replacement));
 }
 
 // Startup and config rewrites re-apply the stored pin through the same
@@ -226,6 +315,7 @@ TEST_CASE(ConcurrentSetCustomServerAcceptsOnlyOneDistinctPin) {
 	// reintroduction has to survive a hundred fresh chances.
 	for (auto pass = 0; pass != kPasses; ++pass) {
 		auto options = DcOptions(Environment::Production);
+		CHECK(options.markAuthorized(2));
 
 		std::atomic<int> acceptedOriginal = 0;
 		std::atomic<int> acceptedOther = 0;
@@ -277,7 +367,9 @@ TEST_CASE(ConcurrentSetCustomServerAcceptsOnlyOneDistinctPin) {
 // not lift or weaken the production-fallback block.
 TEST_CASE(RefusedOverwriteLeavesFallbackBlockInForce) {
 	auto options = DcOptions(Environment::Production);
-	CHECK(options.setCustomServer(MakeCustomServer()));
+	const auto original = MakeCustomServer();
+	CHECK(options.setCustomServer(original));
+	CHECK(options.markAuthorized(original.dcId));
 	CHECK(options.refusesProductionFallback());
 
 	auto different = MakeCustomServer();

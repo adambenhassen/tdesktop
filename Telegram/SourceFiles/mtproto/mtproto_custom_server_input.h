@@ -7,9 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "mtproto/details/mtproto_dc_key_creator.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
+#include "mtproto/mtproto_dc_options.h"
 
 #include <QtCore/QString>
+#include <optional>
 #include <string>
 
 namespace MTP {
@@ -132,6 +135,46 @@ struct ServerEndpointCheck {
 // value (stripping surrounding quotes if present); otherwise return
 // text.trimmed(). Lets the user paste a whole server log line.
 [[nodiscard]] QString ExtractKeyId(const QString &text);
+
+// Why a pinned endpoint failed after the connection came up. Neither
+// value is a transient network problem and neither fixes itself on
+// retry, so both have to reach the user instead of a reconnect loop.
+// Each is a different message and a different thing to do about it.
+enum class PinnedServerFailure {
+	KeyMismatch, // The endpoint answered the auth-key exchange with an
+		// RSA public key this account was not given: either the pasted
+		// key is wrong or something on the path answers for the server.
+	DcIdMismatch, // The connected server reports a different DC id
+		// than the one pinned for this account.
+};
+
+// What a failed auth-key exchange says about the pin. Only a pinned
+// DC answering with a public key this account was not given is a pin
+// failure: on an unpinned account there is no key-identity question,
+// and every error keeps its existing retry behaviour. A CDN DC
+// refuses differently (MAIN-313), pinned or not.
+enum class AuthKeyFailureAction {
+	Retry, // Not a pin problem: keep the existing restart-on-failure
+		// behaviour for this error.
+	RequestCdnConfig, // A CDN DC missing its keys asks for CDN config.
+	ReportKeyMismatch, // The pinned endpoint answered with an unknown
+		// public key: report and stop.
+};
+[[nodiscard]] AuthKeyFailureAction ClassifyAuthKeyFailure(
+	details::DcKeyError error,
+	DcType dcType,
+	bool customServerPinned);
+
+// What the first config response from the connected server says about
+// the endpoint pinned for this account. The server confirms the pin by
+// naming it as its own DC (thisDc) and, when it advertises any dc
+// options at all, by listing the pinned id among them; either refusal
+// means the account would drop its only endpoint once the advertised
+// id took over. Nothing pinned returns empty.
+[[nodiscard]] std::optional<PinnedServerFailure> CheckPinnedServerConfig(
+	int thisDc,
+	const std::vector<int> &advertisedDcs,
+	const CustomServer &pinned);
 
 // Layout decision for the identity display: which pixel size to use and
 // whether both rows fit. advance13 and advance12 are the horizontal pixel

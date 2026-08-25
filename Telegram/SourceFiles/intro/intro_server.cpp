@@ -446,13 +446,14 @@ void ServerKeyWidget::commitAndAdvance() {
 	}
 	const auto key = std::make_shared<MTP::details::RSAPublicKey>(
 		_keyCheck.key);
-	if (!account().mtp().dcOptions().setCustomServer(MTP::CustomServer{
+	const auto server = MTP::CustomServer{
 		.dcId = 2,
 		.ip = _endpoint.host,
 		.port = _endpoint.port,
 		.ipv6 = _endpoint.ipv6,
 		.key = key,
-	})) {
+	};
+	if (!account().mtp().dcOptions().setCustomServer(server)) {
 		const auto setFailedMsg = tr::lng_intro_server_set_failed(tr::now);
 		showError(rpl::single(setFailedMsg));
 		setAccessibleDescription(setFailedMsg);

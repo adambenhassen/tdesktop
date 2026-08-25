@@ -350,8 +350,14 @@ int32 SessionPrivate::getShiftedDcId() const {
 }
 
 void SessionPrivate::dcOptionsChanged() {
+	_gaveUpOnPinnedFailure = false;
 	_retryTimeout = 1;
 	connectToServer(true);
+}
+
+void SessionPrivate::stopUntilPinChange() {
+	_gaveUpOnPinnedFailure = true;
+	doDisconnect();
 }
 
 int32 SessionPrivate::getState() const {
@@ -1009,6 +1015,13 @@ void SessionPrivate::restartNow() {
 }
 
 void SessionPrivate::connectToServer(bool afterConfig) {
+	// A pin failure is answered once and then waited out: retrying
+	// cannot change the key the endpoint answers with, nor the DC id
+	// it reports. A corrected pin arrives through dcOptionsChanged(),
+	// which passes afterConfig.
+	if (_gaveUpOnPinnedFailure && !afterConfig) {
+		return;
+	}
 	if (afterConfig && (!_testConnections.empty() || _connection)) {
 		return;
 	}
@@ -2523,13 +2536,38 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 	delegate.unboundReady = [=](base::expected<Result, Error> result) {
 		if (!result) {
 			releaseKeyCreationOnFail();
-			if (result.error() == Error::UnknownPublicKey) {
-				if (_realDcType == DcType::Cdn) {
-					LOG(("Warning: CDN public RSA key not found"));
-					requestCDNConfig();
-					return;
+			using Action = AuthKeyFailureAction;
+			switch (ClassifyAuthKeyFailure(
+				result.error(),
+				_realDcType,
+				_instance->dcOptions().isCustomServerPinned(
+					BareDcId(_shiftedDcId)))) {
+			case Action::RequestCdnConfig:
+				LOG(("Warning: CDN public RSA key not found"));
+				requestCDNConfig();
+				return;
+			case Action::ReportKeyMismatch: {
+				// The endpoint answered our auth-key exchange with a
+				// public key this account was not given. Either the
+				// pasted PEM is wrong, or something on the network path
+				// is answering for the server - the second is exactly
+				// the attack key pinning exists to catch. Asking again
+				// reaches the same answer, so report it and wait for a
+				// corrected pin instead of looping.
+				LOG(("AuthKey Error: public key mismatch, "
+					"stopping until the endpoint is corrected"));
+				_sessionData->queuePinnedServerFailure(
+					PinnedServerFailure::KeyMismatch);
+				stopUntilPinChange();
+				return;
+			}
+			case Action::Retry:
+				// Upstream logged this on the unknown-key path; the
+				// unpinned account still runs that path.
+				if (result.error() == Error::UnknownPublicKey) {
+					LOG(("AuthKey Error: could not choose public RSA key"));
 				}
-				LOG(("AuthKey Error: could not choose public RSA key"));
+				break;
 			}
 			restart();
 			return;

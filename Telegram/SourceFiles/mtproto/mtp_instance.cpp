@@ -142,6 +142,11 @@ public:
 
 	void onStateChange(ShiftedDcId shiftedDcId, int32 state);
 	void onSessionReset(ShiftedDcId shiftedDcId);
+	void onPinnedServerFailure(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure);
+	[[nodiscard]] auto pinnedServerFailureValue() const
+		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
 	// return true if need to clean request data
 	bool rpcErrorOccured(
@@ -285,6 +290,8 @@ private:
 	Fn<void(const Error&, const Response&)> _globalFailHandler;
 	Fn<void(ShiftedDcId shiftedDcId, int32 state)> _stateChangedHandler;
 	Fn<void(ShiftedDcId shiftedDcId)> _sessionResetHandler;
+
+	PinnedServerFailureChannel _pinnedServerFailure;
 
 	rpl::event_stream<mtpRequestId> _nonPremiumDelayedRequests;
 	rpl::event_stream<> _frozenErrorReceived;
@@ -931,6 +938,28 @@ void Instance::Private::configLoadDone(const MTPConfig &result) {
 	const auto &data = result.c_config();
 	_config->apply(data);
 
+	// The first config response is where a wrong pin becomes visible:
+	// the server names its own DC here and lists what it advertises.
+	// A pin the server does not confirm ends the account's
+	// connectivity in silence on every start; report it instead.
+	if (hasMainDcId()
+		&& (mtpIsTrue(data.vtest_mode())
+			== _config->dcOptions().isTestMode())) {
+		auto advertised = std::vector<int>();
+		advertised.reserve(data.vdc_options().v.size());
+		for (const auto &option : data.vdc_options().v) {
+			if (option.type() == mtpc_dcOption) {
+				advertised.push_back(option.c_dcOption().vid().v);
+			}
+		}
+		if (const auto failure = CheckPinnedServerConfig(
+				data.vthis_dc().v,
+				advertised,
+				_config->dcOptions().customServer())) {
+			onPinnedServerFailure(mainDcId(), *failure);
+		}
+	}
+
 	const auto lang = qs(data.vsuggested_lang_code().value_or_empty());
 	Lang::CurrentCloudManager().setSuggestedLanguage(lang);
 	Lang::CurrentCloudManager().setCurrentVersions(
@@ -1215,6 +1244,49 @@ void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 	if (_stateChangedHandler) {
 		_stateChangedHandler(dcWithShift, state);
 	}
+	// A successful connection is the only proof a corrected pin works,
+	// so only it retires the reported failure - and only for the
+	// session that reported: another session of the same DC reaching
+	// ConnectedState proves nothing about the endpoint that failed.
+	// ConnectedState here means the auth-key exchange completed under
+	// the current pin - an endpoint with the wrong key never reaches
+	// it. Clearing on a restart attempt would wipe the warning while
+	// the reporting session stays blocked.
+	if (state == ConnectedState
+		&& dcOptions().isCustomServerPinned(BareDcId(dcWithShift))) {
+		_pinnedServerFailure.retireIfReportedBy(dcWithShift);
+	}
+}
+
+void Instance::Private::onPinnedServerFailure(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure) {
+	LOG(("MTP Error: pinned server failure on dc %1: %2"
+		).arg(shiftedDcId
+		).arg(failure == PinnedServerFailure::KeyMismatch
+			? "key mismatch"
+			: "dc id mismatch"));
+	// Emits unconditionally: a repeated identical failure is a second
+	// occurrence and has to reach the UI again, which a compare-then-
+	// assign would silently swallow.
+	_pinnedServerFailure.report({ shiftedDcId, failure });
+	if (failure == PinnedServerFailure::DcIdMismatch) {
+		// Gate reconnection exactly like the key mismatch: neither
+		// class may re-enter the requestConfig / restart cycle. A
+		// corrected pin arrives through dcOptionsChanged(), which
+		// clears both the report and the sessions' give-up state.
+		const auto dcId = BareDcId(shiftedDcId);
+		for (const auto &[shifted, session] : _sessions) {
+			if (BareDcId(shifted) == dcId) {
+				session->stopUntilPinChange();
+			}
+		}
+	}
+}
+
+rpl::producer<std::optional<PinnedServerFailureReport>>
+Instance::Private::pinnedServerFailureValue() const {
+	return _pinnedServerFailure.updates();
 }
 
 void Instance::Private::onSessionReset(ShiftedDcId dcWithShift) {
@@ -1946,6 +2018,17 @@ void Instance::requestCDNConfig() {
 
 void Instance::restart() {
 	_private->restart();
+}
+
+void Instance::onPinnedServerFailure(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure) {
+	_private->onPinnedServerFailure(shiftedDcId, failure);
+}
+
+rpl::producer<std::optional<PinnedServerFailureReport>>
+Instance::pinnedServerFailure() const {
+	return _private->pinnedServerFailureValue();
 }
 
 void Instance::restart(ShiftedDcId shiftedDcId) {

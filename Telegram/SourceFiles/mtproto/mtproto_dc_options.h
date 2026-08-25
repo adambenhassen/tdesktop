@@ -131,12 +131,17 @@ public:
 	// built-in table and keys for this account. Returns false when the
 	// server carries no key, so a caller with an endpoint but no key
 	// can report the failure instead of silently pinning nothing.
-	// Returns false as well when a *different* server is already
-	// pinned: a pin is immutable for the life of the account, a
-	// second server is a second account, never an edit of the first.
-	// Re-applying the identical pin succeeds, so startup and config
-	// rewrites go through.
+	// Returns false as well when a *different* server is already pinned
+	// after this account was authorized for that pin. Peer and message
+	// ids are server-scoped, so once they can exist a second server is a
+	// second account, never an edit of the first. Before authorization,
+	// correcting the pin succeeds, including replacing its key at the
+	// same address. Re-applying the identical pin succeeds in both
+	// states, so startup and config rewrites go through.
 	[[nodiscard]] bool setCustomServer(const CustomServer &server);
+	[[nodiscard]] bool markAuthorized(DcId dcId);
+	[[nodiscard]] bool isAuthorized(DcId dcId) const;
+	[[nodiscard]] bool clearAuthorized();
 	[[nodiscard]] CustomServer customServer() const;
 	[[nodiscard]] bool hasCustomServer() const;
 	// True when the pinned key is the only RSA key this account may
@@ -164,6 +169,7 @@ private:
 	// Callers must hold one of the lockers.
 	void applyCustomServerUnlocked(const CustomServer &server);
 	[[nodiscard]] bool hasCustomServerUnlocked() const;
+	[[nodiscard]] bool isAuthorizedUnlocked(DcId dcId) const;
 	[[nodiscard]] bool isCustomServerPinnedUnlocked(DcId dcId) const;
 	// While a custom server is pinned it is the only endpoint this
 	// account may use, so no other DC's addresses may enter the table
@@ -210,6 +216,7 @@ private:
 		DcId,
 		base::flat_map<uint64, details::RSAPublicKey>> _cdnPublicKeys;
 	CustomServer _customServer;
+	base::flat_set<DcId> _authorizedDcIds;
 	mutable QReadWriteLock _useThroughLockers;
 
 	rpl::event_stream<DcId> _changed;

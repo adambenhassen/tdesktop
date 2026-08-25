@@ -298,10 +298,6 @@ rpl::producer<> Config::updates() const {
 	return _updates.events();
 }
 
-bool Config::setCustomServer(const CustomServer &server) {
-	return _dcOptions.setCustomServer(server);
-}
-
 void Config::setChatSizeMax(int value) {
 	_fields.chatSizeMax = value;
 }

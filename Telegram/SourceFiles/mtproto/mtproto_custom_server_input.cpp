@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/mtproto_custom_server_input.h"
 
+#include "base/algorithm.h"
 #include "base/openssl_help.h"
 
 #include <QtNetwork/QHostAddress>
@@ -433,6 +434,50 @@ IdentityLayout ChooseIdentityLayout(
 	if (advance13 <= innerWidth) return {.pixelSize = 13, .fits = true};
 	if (advance12 <= innerWidth) return {.pixelSize = 12, .fits = true};
 	return {.pixelSize = 12, .fits = false};
+}
+
+AuthKeyFailureAction ClassifyAuthKeyFailure(
+		details::DcKeyError error,
+		DcType dcType,
+		bool customServerPinned) {
+	if (dcType == DcType::Cdn) {
+		// A CDN DC missing its keys asks for CDN config, it does not
+		// fail the pin (MAIN-313 owns CDN key handling). This holds
+		// whether or not the account pins a server.
+		return (error == details::DcKeyError::UnknownPublicKey)
+			? AuthKeyFailureAction::RequestCdnConfig
+			: AuthKeyFailureAction::Retry;
+	}
+	if (!customServerPinned) {
+		// Without a pin there is no key-identity question: the account
+		// talks to the built-in DCs with the built-in keys, so an
+		// unknown public key is transient and keeps the existing
+		// restart-and-retry behaviour. Stopping here would strand a
+		// stock account, and nothing but a pin change could unstick it.
+		return AuthKeyFailureAction::Retry;
+	}
+	return (error == details::DcKeyError::UnknownPublicKey)
+		? AuthKeyFailureAction::ReportKeyMismatch
+		: AuthKeyFailureAction::Retry;
+}
+
+std::optional<PinnedServerFailure> CheckPinnedServerConfig(
+		int thisDc,
+		const std::vector<int> &advertisedDcs,
+		const CustomServer &pinned) {
+	if (pinned.empty()) {
+		return std::nullopt;
+	}
+	if (thisDc != pinned.dcId) {
+		return std::make_optional(PinnedServerFailure::DcIdMismatch);
+	}
+	// A server may omit dc options entirely and still be the right
+	// one; an advertisement that exists has to carry the pin.
+	if (!advertisedDcs.empty()
+		&& !base::contains(advertisedDcs, pinned.dcId)) {
+		return std::make_optional(PinnedServerFailure::DcIdMismatch);
+	}
+	return std::nullopt;
 }
 
 } // namespace MTP

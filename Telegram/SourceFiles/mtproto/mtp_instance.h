@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/details/mtproto_serialized_request.h"
+#include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
 namespace MTP {
@@ -27,6 +28,72 @@ class AuthKey;
 using AuthKeyPtr = std::shared_ptr<AuthKey>;
 using AuthKeysList = std::vector<AuthKeyPtr>;
 enum class Environment : uchar;
+
+// A pinned endpoint failure together with the session that reported
+// it. The report is retired only by a successful connection of that
+// same session: any other session of the DC reaching ConnectedState
+// proves nothing about the endpoint that failed - after a stop, a
+// fresh session can still connect on an existing auth key while the
+// reporting one waits for a corrected pin.
+struct PinnedServerFailureReport {
+	ShiftedDcId shiftedDcId = 0;
+	PinnedServerFailure failure = PinnedServerFailure::KeyMismatch;
+
+	friend inline bool operator==(
+			const PinnedServerFailureReport &a,
+			const PinnedServerFailureReport &b) {
+		return (a.shiftedDcId == b.shiftedDcId)
+			&& (a.failure == b.failure);
+	}
+};
+
+// Channel state for the pinned-server failure: holds the last report
+// for late subscribers and answers the two policy questions with
+// rules instead of judgement calls at call sites.
+//
+// report() emits every time, including an exact repeat of the held
+// one: an assignment that compares would swallow it, but a repeated
+// failure is a second occurrence and has to reach the UI again -
+// steps clear their error labels on navigation, so a swallowed
+// repeat reads as already handled.
+//
+// retireIfReportedBy() retires only for the reporting session's own
+// successful connection: another session of the same DC connecting
+// proves nothing about the endpoint that failed.
+class PinnedServerFailureChannel {
+public:
+	void report(PinnedServerFailureReport report) {
+		_held = report;
+		_changes.fire_copy(report);
+	}
+
+	void retireIfReportedBy(ShiftedDcId dcWithShift) {
+		if (!_held || (_held->shiftedDcId != dcWithShift)) {
+			return;
+		}
+		_held.reset();
+		_changes.fire_copy(std::nullopt);
+	}
+
+	[[nodiscard]] const std::optional<PinnedServerFailureReport> &current()
+	const {
+		return _held;
+	}
+
+	// Fires the held value on subscribe, then every report and
+	// retirement; retirement carries an empty value.
+	[[nodiscard]] auto updates() const
+	-> rpl::producer<std::optional<PinnedServerFailureReport>> {
+		return rpl::merge(
+			rpl::single(_held),
+			_changes.events());
+	}
+
+private:
+	std::optional<PinnedServerFailureReport> _held;
+	rpl::event_stream<std::optional<PinnedServerFailureReport>> _changes;
+
+};
 
 class Instance : public QObject {
 	Q_OBJECT
@@ -72,6 +139,17 @@ public:
 
 	[[nodiscard]] rpl::producer<> writeKeysRequests() const;
 	[[nodiscard]] rpl::producer<> allKeysDestroyed() const;
+
+	// A pinned endpoint that failed on its face: a key the account was
+	// not given, or a server DC id that does not confirm the pin.
+	// Reported once and held until the session that reported it
+	// connects successfully; fires the current value to late
+	// subscribers, so UI attached after the failure still sees it.
+	void onPinnedServerFailure(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure);
+	[[nodiscard]] auto pinnedServerFailure() const
+		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
 	// Thread-safe.
 	[[nodiscard]] Config &config() const;

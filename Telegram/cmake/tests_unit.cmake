@@ -31,6 +31,7 @@ PRIVATE
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
+    tests/unit/mtp_instance_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
 )
