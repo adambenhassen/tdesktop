@@ -247,6 +247,12 @@ TEST_CASE(SigninPasswordFailuresHaveExplicitFallbacks) {
 		ClassifySigninPasswordFailure(u"FLOOD_WAIT_60"_q)
 		== SigninPasswordFailure::Flood);
 	CHECK(
+		ClassifySigninPasswordFailure(u"FLOOD_PREMIUM_WAIT_60"_q)
+		== SigninPasswordFailure::Flood);
+	CHECK(
+		ClassifySigninPasswordFailure(u"SRP_PASSWORD_CHANGED"_q)
+		== SigninPasswordFailure::WrongPassword);
+	CHECK(
 		ClassifySigninPasswordFailure(u"SRP_ID_INVALID"_q)
 		== SigninPasswordFailure::SrpIdInvalid);
 	CHECK(
