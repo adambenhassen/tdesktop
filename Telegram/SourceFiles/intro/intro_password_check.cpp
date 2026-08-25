@@ -232,7 +232,7 @@ void PasswordCheckWidget::passwordChecked() {
 		pwdSubmitDone(result);
 	}).fail([=](const MTP::Error &error) {
 		pwdSubmitFail(error);
-	}).handleFloodErrors().send();
+	}).handleAllErrors().send();
 }
 
 void PasswordCheckWidget::serverError() {
