@@ -1363,6 +1363,10 @@ PRIVATE
     intro/intro_server.h
     intro/intro_start.cpp
     intro/intro_start.h
+    intro/intro_username.cpp
+    intro/intro_username.h
+    intro/intro_username_validation.cpp
+    intro/intro_username_validation.h
     intro/intro_step.cpp
     intro/intro_step.h
     intro/intro_widget.cpp

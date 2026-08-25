@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_server.h"
 
 #include "intro/intro_widget.h"
-#include "intro/intro_phone.h"
+#include "intro/intro_username.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -190,8 +190,6 @@ void ServerWidget::submit() {
 		_address->showError();
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
-		QAccessibleEvent alertEvent(this, QAccessible::Alert);
-		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 
@@ -232,8 +230,6 @@ void ServerWidget::submit() {
 		_key->showError();
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
-		QAccessibleEvent alertEvent(this, QAccessible::Alert);
-		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 
@@ -460,12 +456,10 @@ void ServerKeyWidget::commitAndAdvance() {
 		const auto setFailedMsg = tr::lng_intro_server_set_failed(tr::now);
 		showError(rpl::single(setFailedMsg));
 		setAccessibleDescription(setFailedMsg);
-		QAccessibleEvent alertEvent(this, QAccessible::Alert);
-		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 	account().mtp().restart();
-	goNext<PhoneWidget>();
+	goNext<UsernameWidget>();
 }
 
 void ServerKeyWidget::submit() {
@@ -478,8 +472,6 @@ void ServerKeyWidget::submit() {
 			: tr::lng_intro_server_check_unreadable(tr::now);
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
-		QAccessibleEvent alertEvent(this, QAccessible::Alert);
-		QAccessible::updateAccessibility(&alertEvent);
 		return;
 	}
 	commitAndAdvance();

@@ -195,6 +195,7 @@ introQrPlane: icon {{ "intro_qr_plane", activeButtonFg }};
 
 introServerNextTop: 320px;
 introServerErrorTop: 253px;
+introUsernameErrorTop: 172px;
 introServerKeyField: InputField(introCountry) {
 	textMargins: margins(12px, 22px, 12px, 6px);
 	style: TextStyle(defaultTextStyle) {

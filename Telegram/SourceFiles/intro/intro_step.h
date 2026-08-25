@@ -106,6 +106,11 @@ public:
 	// override in steps where Back must be withdrawn at a runtime event.
 	[[nodiscard]] virtual rpl::producer<bool> backAvailable() const;
 
+	// The widget tab focus should land on first for this step, or null
+	// to keep the default order. Used by Widget::fixOrder to put the
+	// field ahead of Next, Back and Settings.
+	[[nodiscard]] virtual QWidget *firstTabWidget() const;
+
 	[[nodiscard]] int contentLeft() const;
 	[[nodiscard]] int contentTop() const;
 
