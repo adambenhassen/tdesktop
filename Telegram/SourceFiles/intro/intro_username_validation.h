@@ -29,6 +29,12 @@ enum class SignupPasswordValidation {
 	Mismatch,
 };
 
+enum class SignupPasswordUpdateFailure {
+	Flood,
+	InvalidVerifier,
+	Other,
+};
+
 // Forgiving normalisation of what the user typed: trim surrounding
 // whitespace and strip a single leading '@' (people type "@alice").
 // Neither is a keystroke filter — the field accepts anything and this
@@ -109,6 +115,9 @@ struct UsernameCodeCache {
 [[nodiscard]] SignupPasswordValidation ValidateSignupPassword(
 	const QString &password,
 	const QString &repeat);
+
+[[nodiscard]] SignupPasswordUpdateFailure
+ClassifySignupPasswordUpdateFailure(const QString &errorType);
 
 } // namespace details
 } // namespace Intro

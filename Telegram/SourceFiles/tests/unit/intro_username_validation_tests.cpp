@@ -190,4 +190,22 @@ TEST_CASE(SignupPasswordValidationReportsTheFirstFix) {
 		SignupPasswordValidation::Valid);
 }
 
+TEST_CASE(SignupPasswordUpdateKeepsFloodVisible) {
+	CHECK_EQ(
+		ClassifySignupPasswordUpdateFailure(u"FLOOD_WAIT_60"_q),
+		SignupPasswordUpdateFailure::Flood);
+	CHECK_EQ(
+		ClassifySignupPasswordUpdateFailure(u"FLOOD_PREMIUM_WAIT_60"_q),
+		SignupPasswordUpdateFailure::Flood);
+	CHECK_EQ(
+		ClassifySignupPasswordUpdateFailure(u"NEW_PASSWORD_BAD"_q),
+		SignupPasswordUpdateFailure::InvalidVerifier);
+	CHECK_EQ(
+		ClassifySignupPasswordUpdateFailure(u"NEW_SALT_INVALID"_q),
+		SignupPasswordUpdateFailure::InvalidVerifier);
+	CHECK_EQ(
+		ClassifySignupPasswordUpdateFailure(u"INTERNAL"_q),
+		SignupPasswordUpdateFailure::Other);
+}
+
 } // namespace

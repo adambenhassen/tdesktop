@@ -70,5 +70,17 @@ SignupPasswordValidation ValidateSignupPassword(
 	return SignupPasswordValidation::Valid;
 }
 
+SignupPasswordUpdateFailure ClassifySignupPasswordUpdateFailure(
+		const QString &errorType) {
+	if (errorType.startsWith(u"FLOOD_WAIT_"_q)
+		|| errorType.startsWith(u"FLOOD_PREMIUM_WAIT_"_q)) {
+		return SignupPasswordUpdateFailure::Flood;
+	} else if (errorType == u"NEW_PASSWORD_BAD"_q
+		|| errorType == u"NEW_SALT_INVALID"_q) {
+		return SignupPasswordUpdateFailure::InvalidVerifier;
+	}
+	return SignupPasswordUpdateFailure::Other;
+}
+
 } // namespace details
 } // namespace Intro

@@ -333,10 +333,8 @@ void SignUpPasswordWidget::passwordDataDone(
 			showFormError(tr::lng_intro_retry(tr::now));
 			return;
 		}
-		// ParseCloudPasswordState validated the server algorithm and appended
-		// the client-side random salt1 suffix. Keep that derived algorithm for
-		// account.passwordInputSettings; sending the raw new_algo would make
-		// the verifier impossible to reproduce at sign-in.
+		// Serialize the exact salt returned with the digest, keeping the
+		// verifier and KDF algorithm coupled if the digest path changes.
 		std::get<Core::CloudPasswordAlgoModPow>(_passwordAlgo).salt1
 			= digest.salt1;
 		_passwordHash = digest.modpow;
@@ -394,11 +392,19 @@ void SignUpPasswordWidget::passwordUpdateDone(const MTPBool &result) {
 void SignUpPasswordWidget::passwordUpdateFail(const MTP::Error &error) {
 	LOG(("Intro Sign-up Error: account.updatePasswordSettings failed with "
 		"%1 (%2)").arg(error.type()).arg(error.code()));
-	if (error.type() == u"NEW_PASSWORD_BAD"_q
-		|| error.type() == u"NEW_SALT_INVALID"_q) {
+	switch (ClassifySignupPasswordUpdateFailure(error.type())) {
+	case SignupPasswordUpdateFailure::Flood:
+		showFormError(tr::lng_intro_signup_flood(
+			tr::now,
+			lt_duration,
+			Ui::FormatDurationWords(FloodWaitSeconds(error.type()))));
+		return;
+	case SignupPasswordUpdateFailure::InvalidVerifier:
 		showFormError(tr::lng_intro_retry(tr::now));
-	} else {
+		return;
+	case SignupPasswordUpdateFailure::Other:
 		passwordSaveFailed();
+		return;
 	}
 }
 
