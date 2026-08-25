@@ -457,15 +457,7 @@ void ServerKeyWidget::commitAndAdvance() {
 		.ipv6 = _endpoint.ipv6,
 		.key = key,
 	};
-	// An auth key for this DC means peer ids were already read against
-	// the old pin, and MAIN-518 keeps that replacement refused. No
-	// auth key means nothing was read yet: correcting a key that came
-	// back as a mismatch must go through.
-	const auto authKeyHeld = account().mtp().hasPersistentKeyForDc(
-		server.dcId);
-	if (!account().mtp().dcOptions().setCustomServer(
-			server,
-			authKeyHeld)) {
+	if (!account().mtp().dcOptions().setCustomServer(server)) {
 		const auto setFailedMsg = tr::lng_intro_server_set_failed(tr::now);
 		showError(rpl::single(setFailedMsg));
 		setAccessibleDescription(setFailedMsg);

@@ -320,6 +320,13 @@ void Account::createSession(
 		local().readSelf(_session.get(), serialized, streamVersion);
 	}
 	_sessionValue = _session.get();
+	const auto customServer = _mtp->dcOptions().customServer();
+	const auto authorizedDcId = customServer.key
+		? customServer.dcId
+		: _mtp->mainDcId();
+	if (_mtp->dcOptions().markAuthorized(authorizedDcId)) {
+		local().writeMtpConfig();
+	}
 
 	Ensures(_session != nullptr);
 }
@@ -670,6 +677,9 @@ void Account::loggedOut() {
 	Media::Player::mixer()->stopAndClear();
 	destroySession(DestroyReason::LoggedOut);
 	local().reset();
+	if (_mtp && _mtp->dcOptions().clearAuthorized()) {
+		local().writeMtpConfig();
+	}
 	cSetOtherOnline(0);
 }
 

@@ -428,7 +428,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_check_unreadable"  = "That is not a key_id. Copy the value after key_id= in your server's startup line.";
 "lng_intro_server_check_match"       = "Match. This is the key your server printed.";
 "lng_intro_server_check_mismatch"    = "No match. This is not the key your server printed.";
-"lng_intro_server_set_failed"        = "The server configuration could not be saved. Restart the client without the endpoint override.";
+"lng_intro_server_set_failed"        = "This account's server pin is fixed and cannot be changed.";
 "lng_intro_server_key_mismatch"      = "The server did not identify itself with the key saved for this account. Either the saved key is wrong, or something between you and the server is answering in its place. Do not retry past this warning: go back and correct the key first.";
 "lng_intro_server_dc_mismatch"       = "The server reports a data center other than #{dc}. This account only works with the data center it was set up for: match the server's DC id, then go back and save the address again.";
 "lng_intro_server_check_value_a11y"  = "Key identity, 16 groups: {groups}";

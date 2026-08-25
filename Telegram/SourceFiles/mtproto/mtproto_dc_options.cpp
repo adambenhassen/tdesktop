@@ -18,7 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace {
 
-constexpr auto kVersion = 3;
+constexpr auto kVersion = 4;
 
 using namespace details;
 
@@ -169,6 +169,7 @@ DcOptions::DcOptions(const DcOptions &other)
 	_publicKeys = other._publicKeys;
 	_cdnPublicKeys = other._cdnPublicKeys;
 	_customServer = other._customServer;
+	_authorizedDcIds = other._authorizedDcIds;
 	_immutable = other._immutable;
 	_blocked = other._blocked;
 }
@@ -185,6 +186,10 @@ bool DcOptions::ValidateSecret(bytes::const_span secret) {
 
 bool DcOptions::hasCustomServerUnlocked() const {
 	return !_customServer.empty();
+}
+
+bool DcOptions::isAuthorizedUnlocked(DcId dcId) const {
+	return _authorizedDcIds.contains(dcId);
 }
 
 bool DcOptions::isCustomServerPinnedUnlocked(DcId dcId) const {
@@ -542,6 +547,7 @@ QByteArray DcOptions::serialize() const {
 		size += Serialize::bytesSize(customKeyN)
 			+ Serialize::bytesSize(customKeyE);
 	}
+	size += sizeof(qint32) + _authorizedDcIds.size() * sizeof(qint32);
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -588,6 +594,11 @@ QByteArray DcOptions::serialize() const {
 				<< Serialize::bytes(customKeyN)
 				<< Serialize::bytes(customKeyE);
 		}
+
+		stream << qint32(_authorizedDcIds.size());
+		for (const auto dcId : _authorizedDcIds) {
+			stream << qint32(dcId);
+		}
 	}
 	return result;
 }
@@ -619,6 +630,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		return false;
 	}
 	_data.clear();
+	_authorizedDcIds.clear();
 	for (auto i = 0; i != count; ++i) {
 		qint32 id = 0, flags = 0, port = 0, ipSize = 0;
 		stream >> id >> flags >> port >> ipSize;
@@ -763,6 +775,26 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 			applyCustomServerUnlocked(restored);
 		}
 	}
+	if (version > 3) {
+		auto authorizedCount = qint32(0);
+		stream >> authorizedCount;
+		constexpr auto kMaxAuthorizedDcIds = 100;
+		if (authorizedCount < 0
+			|| authorizedCount > kMaxAuthorizedDcIds
+			|| stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Bad data for authorized DCs in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		for (auto i = 0; i != authorizedCount; ++i) {
+			qint32 dcId = 0;
+			stream >> dcId;
+			if (dcId <= 0 || stream.status() != QDataStream::Ok) {
+				LOG(("MTP Error: Bad authorized DC in DcOptions::constructFromSerialized()"));
+				return false;
+			}
+			_authorizedDcIds.emplace(DcId(dcId));
+		}
+	}
 	return true;
 }
 
@@ -873,8 +905,7 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 }
 
 bool DcOptions::setCustomServer(
-		const CustomServer &server,
-		bool authKeyHeld) {
+		const CustomServer &server) {
 	if (const auto problem = CustomServerProblem(server)) {
 		LOG(("MTP Error: setCustomServer called with %1."
 			).arg(QString::fromUtf8(problem)));
@@ -892,23 +923,21 @@ bool DcOptions::setCustomServer(
 		// callers each observe an unpinned account and both proceed,
 		// the later write replacing the first pin.
 		WriteLocker lock(this);
-		if (authKeyHeld
-			&& hasCustomServerUnlocked()
+		if (hasCustomServerUnlocked()
+			&& isAuthorizedUnlocked(_customServer.dcId)
 			&& !SameCustomServer(_customServer, server)) {
 			// A pinned account's peer and message ids are small
 			// server-scoped integers: reading them against another
 			// server sends a forward for "user 12345" to an unrelated
-			// person. Once an auth key exists that has really happened,
-			// so a second server is a second account, never an edit of
-			// this one. Without an auth key nothing was read yet, and
-			// refusing here would make a wrong key at first attempt
-			// uncorrectable. The identical pin stays allowed in both
-			// states, since startup and config rewrites go through
-			// here. Returning before applyCustomServerUnlocked() also
-			// leaves _blocked, the production-fallback block, exactly
-			// as it was.
+			// person. Once this account was authorized, a second server
+			// is a second account, never an edit of this one. Before
+			// authorization no server-scoped ids exist yet, so correcting
+			// a pin remains possible. The identical pin stays allowed in both
+			// states, since startup and config rewrites go through here.
+			// Returning before applyCustomServerUnlocked() also leaves
+			// _blocked, the production-fallback block, exactly as it was.
 			LOG(("MTP Error: refusing to replace pinned custom server"
-				" %1:%2 with %3:%4 while an auth key exists."
+				" %1:%2 with %3:%4 for an authorized account."
 				).arg(QString::fromStdString(_customServer.ip)
 				).arg(_customServer.port
 				).arg(QString::fromStdString(server.ip)
@@ -918,8 +947,30 @@ bool DcOptions::setCustomServer(
 		applyCustomServerUnlocked(server);
 	}
 	// Main::Account::startMtp() writes the config to tdata on this, and
-	// that write is what puts the pinned key in the kVersion 3 blob.
+	// that write is what puts the pinned key in the serialized blob.
 	_changed.fire_copy(server.dcId);
+	return true;
+}
+
+bool DcOptions::markAuthorized(DcId dcId) {
+	if (!dcId) {
+		return false;
+	}
+	WriteLocker lock(this);
+	return _authorizedDcIds.emplace(dcId).second;
+}
+
+bool DcOptions::isAuthorized(DcId dcId) const {
+	ReadLocker lock(this);
+	return isAuthorizedUnlocked(dcId);
+}
+
+bool DcOptions::clearAuthorized() {
+	WriteLocker lock(this);
+	if (_authorizedDcIds.empty()) {
+		return false;
+	}
+	_authorizedDcIds.clear();
 	return true;
 }
 
