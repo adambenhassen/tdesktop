@@ -15,6 +15,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Intro {
 namespace details {
 
+namespace {
+
+int UnicodeScalarCount(const QString &text) {
+	auto result = 0;
+	for (auto i = 0; i != text.size(); ++i) {
+		if (text[i].isHighSurrogate()
+			&& (i + 1) < text.size()
+			&& text[i + 1].isLowSurrogate()) {
+			++i;
+		}
+		++result;
+	}
+	return result;
+}
+
+} // namespace
+
 QString NormalizeUsernameInput(const QString &input) {
 	auto result = input.trimmed();
 	if (result.startsWith('@')) {
@@ -39,6 +56,47 @@ int FloodWaitSeconds(const QString &errorType) {
 		--from;
 	}
 	return base::StringViewMid(errorType, from).toInt();
+}
+
+QString NormalizeSignupNameInput(const QString &input) {
+	return input.trimmed();
+}
+
+SignupNameValidation ValidateSignupName(const QString &input) {
+	const auto normalized = NormalizeSignupNameInput(input);
+	if (normalized.isEmpty()) {
+		return SignupNameValidation::Empty;
+	} else if (UnicodeScalarCount(normalized) > 60) {
+		return SignupNameValidation::TooLong;
+	}
+	return SignupNameValidation::Valid;
+}
+
+SignupPasswordValidation ValidateSignupPassword(
+		const QString &password,
+		const QString &repeat) {
+	if (password.isEmpty()) {
+		return SignupPasswordValidation::Empty;
+	} else if (UnicodeScalarCount(password) < 8) {
+		return SignupPasswordValidation::TooShort;
+	} else if (repeat.isEmpty()) {
+		return SignupPasswordValidation::RepeatEmpty;
+	} else if (password != repeat) {
+		return SignupPasswordValidation::Mismatch;
+	}
+	return SignupPasswordValidation::Valid;
+}
+
+SignupPasswordUpdateFailure ClassifySignupPasswordUpdateFailure(
+		const QString &errorType) {
+	if (errorType.startsWith(u"FLOOD_WAIT_"_q)
+		|| errorType.startsWith(u"FLOOD_PREMIUM_WAIT_"_q)) {
+		return SignupPasswordUpdateFailure::Flood;
+	} else if (errorType == u"NEW_PASSWORD_BAD"_q
+		|| errorType == u"NEW_SALT_INVALID"_q) {
+		return SignupPasswordUpdateFailure::InvalidVerifier;
+	}
+	return SignupPasswordUpdateFailure::Other;
 }
 
 } // namespace details

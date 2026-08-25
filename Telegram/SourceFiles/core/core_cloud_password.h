@@ -70,6 +70,9 @@ struct CloudPasswordResult {
 
 struct CloudPasswordDigest {
 	bytes::vector modpow;
+	// Keep the salt used by the digest alongside the verifier so callers
+	// serialize the exact algorithm that produced it.
+	bytes::vector salt1;
 };
 
 bytes::vector ComputeCloudPasswordHash(

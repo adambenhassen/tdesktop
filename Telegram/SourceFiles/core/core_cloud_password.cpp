@@ -80,7 +80,7 @@ CloudPasswordDigest ComputeDigest(
 		LOG(("API Error: Failed to count g_x in cloud password creation!"));
 		return {};
 	}
-	return { BigNumForHash(value) };
+	return { BigNumForHash(value), algo.salt1 };
 }
 
 CloudPasswordResult ComputeCheck(

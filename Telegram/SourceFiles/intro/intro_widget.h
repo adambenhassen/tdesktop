@@ -87,6 +87,12 @@ struct Data {
 	// window. See UsernameCodeCache.
 	UsernameCodeCache usernameCode;
 
+	// Registration values shared by the two custom steps. The server pair
+	// and the username hash are already committed before the name step.
+	QString signupName;
+	QString usernameError;
+	QString signupNameError;
+
 	rpl::event_stream<> updated;
 
 };

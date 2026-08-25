@@ -13,6 +13,10 @@ namespace {
 
 using namespace Intro::details;
 
+QString AstralString(int count) {
+	return QString::fromUtf8("\xF0\x9F\x98\x80").repeated(count);
+}
+
 TEST_CASE(NormalizeTrimsWhitespace) {
 	CHECK_EQ(NormalizeUsernameInput(u"  alice  "_q), u"alice"_q);
 	CHECK_EQ(NormalizeUsernameInput(u"\talice\n"_q), u"alice"_q);
@@ -149,6 +153,81 @@ TEST_CASE(FloodWaitSecondsReadsDigitsFromTheEnd) {
 	// No trailing digits at all degrades to 0 rather than misreading.
 	CHECK_EQ(FloodWaitSeconds(u"FLOOD_WAIT_"_q), 0);
 	CHECK_EQ(FloodWaitSeconds(QString()), 0);
+}
+
+TEST_CASE(SignupNameValidationTrimsAndCapsInput) {
+	CHECK(
+		ValidateSignupName(u"  Ada Lovelace  "_q)
+		== SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(QString(60, QChar('x')))
+		== SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(QString(61, QChar('x')))
+		== SignupNameValidation::TooLong);
+	CHECK(
+		ValidateSignupName(u" \t\n"_q)
+		== SignupNameValidation::Empty);
+}
+
+TEST_CASE(SignupNameValidationDoesNotImposeCompositionRules) {
+	CHECK(
+		ValidateSignupName(u"  你好\u200f  "_q)
+		== SignupNameValidation::Valid);
+}
+
+TEST_CASE(SignupNameValidationCountsUnicodeScalars) {
+	CHECK(
+		ValidateSignupName(AstralString(60))
+		== SignupNameValidation::Valid);
+	CHECK(
+		ValidateSignupName(AstralString(61))
+		== SignupNameValidation::TooLong);
+}
+
+TEST_CASE(SignupPasswordValidationReportsTheFirstFix) {
+	CHECK(
+		ValidateSignupPassword(QString(), QString())
+		== SignupPasswordValidation::Empty);
+	CHECK(
+		ValidateSignupPassword(u"short"_q, u"short"_q)
+		== SignupPasswordValidation::TooShort);
+	CHECK(
+		ValidateSignupPassword(u"long enough"_q, QString())
+		== SignupPasswordValidation::RepeatEmpty);
+	CHECK(
+		ValidateSignupPassword(u"long enough"_q, u"different"_q)
+		== SignupPasswordValidation::Mismatch);
+	CHECK(
+		ValidateSignupPassword(u"long enough"_q, u"long enough"_q)
+		== SignupPasswordValidation::Valid);
+}
+
+TEST_CASE(SignupPasswordValidationCountsUnicodeScalars) {
+	CHECK(
+		ValidateSignupPassword(AstralString(7), AstralString(7))
+		== SignupPasswordValidation::TooShort);
+	CHECK(
+		ValidateSignupPassword(AstralString(8), AstralString(8))
+		== SignupPasswordValidation::Valid);
+}
+
+TEST_CASE(SignupPasswordUpdateKeepsFloodVisible) {
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"FLOOD_WAIT_60"_q)
+		== SignupPasswordUpdateFailure::Flood);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"FLOOD_PREMIUM_WAIT_60"_q)
+		== SignupPasswordUpdateFailure::Flood);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"NEW_PASSWORD_BAD"_q)
+		== SignupPasswordUpdateFailure::InvalidVerifier);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"NEW_SALT_INVALID"_q)
+		== SignupPasswordUpdateFailure::InvalidVerifier);
+	CHECK(
+		ClassifySignupPasswordUpdateFailure(u"INTERNAL"_q)
+		== SignupPasswordUpdateFailure::Other);
 }
 
 } // namespace
