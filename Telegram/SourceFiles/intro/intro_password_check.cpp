@@ -38,9 +38,8 @@ PasswordCheckWidget::PasswordCheckWidget(
 
 	setTitleText(tr::lng_intro_signin_title());
 	setDescriptionText(tr::lng_intro_signin_desc(
-		tr::now,
 		lt_username,
-		getData()->phone));
+		rpl::single(getData()->phone)));
 	setErrorCentered(false);
 
 	_pwdField->setAccessibleName(tr::lng_intro_signin_ph(tr::now));
