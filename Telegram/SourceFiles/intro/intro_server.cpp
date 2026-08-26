@@ -161,6 +161,15 @@ void ServerWidget::submit() {
 	const auto endpointCheck = MTP::CheckServerEndpoint(addressText);
 	if (!endpointCheck) {
 		QString msg;
+		// Common options disable switch warnings; keep this status-to-copy
+		// map exhaustive as the enum grows.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wswitch-enum"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wswitch-enum"
+#endif
 		switch (endpointCheck.status) {
 		case MTP::ServerEndpointStatus::Empty:
 			msg = tr::lng_intro_server_address_empty(tr::now);
@@ -183,10 +192,18 @@ void ServerWidget::submit() {
 		case MTP::ServerEndpointStatus::UnbracketedIPv6:
 			msg = tr::lng_intro_server_address_ipv6(tr::now);
 			break;
-		default:
+		case MTP::ServerEndpointStatus::Valid:
+			// No default branch on purpose: adding a status must fail
+			// the build until its message exists. This branch is not
+			// reachable: !endpointCheck means the status is not Valid.
 			msg = tr::lng_intro_server_address_invalid(tr::now);
 			break;
 		}
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 		_address->showError();
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
