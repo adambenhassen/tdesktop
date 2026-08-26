@@ -203,12 +203,14 @@ void ServerWidget::submit() {
 		// not by review. Only that diagnostic can fire here; every other case
 		// has a branch. The pragma is compiler-specific: -Wswitch on GCC and
 		// Clang, C4062 on MSVC (the GCC form is an unknown-pragma C4068
-		// there, which the Windows build rejects).
+		// there, which the Windows build rejects). C4062 is off by default,
+		// so enable it at level 4 before promoting it to an error.
 #if defined __GNUC__ || defined __clang__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic error "-Wswitch"
 #elif defined _MSC_VER
 #pragma warning(push)
+#pragma warning(4:4062)
 #pragma warning(error:4062)
 #endif // __GNUC__ || __clang__ || _MSC_VER
 		switch (keyCheck.status) {
