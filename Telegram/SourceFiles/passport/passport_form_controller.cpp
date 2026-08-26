@@ -735,6 +735,15 @@ std::vector<not_null<const Value*>> FormController::submitGetErrors() {
 	const auto credentialsEncryptedSecret = EncryptCredentialsSecret(
 		credentialsEncryptedData.secret,
 		bytes::make_span(_request.publicKey.toUtf8()));
+	if (!credentialsEncryptedSecret) {
+		// The public key arrived with the authorization request, so an
+		// unreadable key, a readable key that is not RSA, or a failed
+		// encryption is a failed submit. Nothing derived from an
+		// unusable key may reach the server, and the failure goes
+		// through the same presentation the network submit errors do.
+		_view->showCriticalError(Lang::Hard::SecureAcceptError());
+		return {};
+	}
 
 	_submitRequestId = _api.request(MTPaccount_AcceptAuthorization(
 		MTP_long(_request.botId.bare),
@@ -744,7 +753,7 @@ std::vector<not_null<const Value*>> FormController::submitGetErrors() {
 		MTP_secureCredentialsEncrypted(
 			MTP_bytes(credentialsEncryptedData.bytes),
 			MTP_bytes(credentialsEncryptedData.hash),
-			MTP_bytes(credentialsEncryptedSecret))
+			MTP_bytes(*credentialsEncryptedSecret))
 	)).done([=] {
 		_submitRequestId = 0;
 		_submitSuccess = true;
