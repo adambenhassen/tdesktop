@@ -430,11 +430,19 @@ uint64 CountSecureSecretId(bytes::const_span secret) {
 	return *reinterpret_cast<const uint64*>(full.data());
 }
 
-bytes::vector EncryptCredentialsSecret(
+std::optional<bytes::vector> EncryptCredentialsSecret(
 		bytes::const_span secret,
 		bytes::const_span publicKey) {
 	const auto key = MTP::details::RSAPublicKey(publicKey);
-	return key.encryptOAEPpadding(secret);
+	if (!key.valid()) {
+		// The key text is request-derived, so an unreadable block or a
+		// readable key that is not RSA is a failed submit, not an
+		// impossible state. Nothing derived from it may reach the
+		// credentials field.
+		return std::nullopt;
+	}
+	const auto result = key.encryptOAEPpadding(secret);
+	return result.empty() ? std::nullopt : std::optional<bytes::vector>(result);
 }
 
 } // namespace Passport

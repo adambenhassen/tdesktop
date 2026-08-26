@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <optional>
+
 namespace Passport {
 
 bytes::vector GenerateSecretBytes();
@@ -65,7 +67,12 @@ bytes::vector DecryptValueSecret(
 
 uint64 CountSecureSecretId(bytes::const_span secret);
 
-bytes::vector EncryptCredentialsSecret(
+// The key text comes from an authorization request, so a request that
+// names an unreadable key, or a readable key that is not RSA, is a
+// failed submit rather than an assertion. Encryption failure is
+// reported the same way: the optional stays empty and no credentials
+// payload is built.
+std::optional<bytes::vector> EncryptCredentialsSecret(
 	bytes::const_span secret,
 	bytes::const_span publicKey);
 
