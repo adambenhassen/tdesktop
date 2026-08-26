@@ -198,11 +198,19 @@ void ServerWidget::submit() {
 		QString msg;
 		// The repository's common warning options carry -Wno-switch, which
 		// would let a future ServerKeyStatus compile through silently. Promote
-		// -Wswitch to an error for this mapping alone so the "no default
-		// branch" guarantee below is enforced by the compiler, not by review.
-		// Only -Wswitch can fire here; every other case has a branch.
+		// the unhandled-enum diagnostic to an error for this mapping alone so
+		// the "no default branch" guarantee below is enforced by the compiler,
+		// not by review. Only that diagnostic can fire here; every other case
+		// has a branch. The pragma is compiler-specific: -Wswitch on GCC and
+		// Clang, C4062 on MSVC (the GCC form is an unknown-pragma C4068
+		// there, which the Windows build rejects).
+#if defined __GNUC__ || defined __clang__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic error "-Wswitch"
+#elif defined _MSC_VER
+#pragma warning(push)
+#pragma warning(error:4062)
+#endif // __GNUC__ || __clang__ || _MSC_VER
 		switch (keyCheck.status) {
 		case MTP::ServerKeyStatus::Empty:
 			msg = tr::lng_intro_server_key_empty(tr::now);
@@ -234,7 +242,11 @@ void ServerWidget::submit() {
 			msg = tr::lng_intro_server_key_invalid(tr::now);
 			break;
 		}
+#if defined __GNUC__ || defined __clang__
 #pragma GCC diagnostic pop
+#elif defined _MSC_VER
+#pragma warning(pop)
+#endif // __GNUC__ || __clang__ || _MSC_VER
 		_key->showError();
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
