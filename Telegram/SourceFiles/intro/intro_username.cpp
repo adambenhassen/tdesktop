@@ -218,9 +218,9 @@ rpl::producer<QString> UsernameWidget::nextButtonText() const {
 	return _pending.value(
 	) | rpl::map([](bool pending) {
 		return pending
-			? tr::lng_intro_please_wait(tr::now)
-			: tr::lng_intro_next(tr::now);
-	});
+			? tr::lng_intro_please_wait()
+			: tr::lng_intro_next();
+	}) | rpl::flatten_latest();
 }
 
 void UsernameWidget::submit() {
