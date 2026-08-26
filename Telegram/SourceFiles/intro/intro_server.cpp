@@ -196,6 +196,13 @@ void ServerWidget::submit() {
 	const auto keyCheck = MTP::CheckServerKey(keyText);
 	if (!keyCheck) {
 		QString msg;
+		// The repository's common warning options carry -Wno-switch, which
+		// would let a future ServerKeyStatus compile through silently. Promote
+		// -Wswitch to an error for this mapping alone so the "no default
+		// branch" guarantee below is enforced by the compiler, not by review.
+		// Only -Wswitch can fire here; every other case has a branch.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wswitch"
 		switch (keyCheck.status) {
 		case MTP::ServerKeyStatus::Empty:
 			msg = tr::lng_intro_server_key_empty(tr::now);
@@ -227,6 +234,7 @@ void ServerWidget::submit() {
 			msg = tr::lng_intro_server_key_invalid(tr::now);
 			break;
 		}
+#pragma GCC diagnostic pop
 		_key->showError();
 		showError(rpl::single(msg));
 		setAccessibleDescription(msg);
