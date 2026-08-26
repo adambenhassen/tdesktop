@@ -33,9 +33,10 @@ H8lbzYIhPc0hFKVSY7Aeq2Go60su+icoIMxaZs2fkSpTCGm3PrerftMYZpmtBV9I\n\
 GQIDAQAB\n\
 -----END PUBLIC KEY-----";
 
-// A readable RSA key whose modulus is 64 bytes. The credentials secret
-// is 256 bytes, so the RSA operation cannot succeed with it: the key
-// parses, the encryption fails, and the result must be a failure.
+// A readable RSA key whose modulus is 64 bytes. OAEP with SHA-1
+// leaves 22 bytes for plaintext at that key size, so the 32-byte
+// secret below exceeds it: the key parses, the encryption fails, and
+// the result must be a failure.
 const char kRsa512Spki[] = "\
 -----BEGIN PUBLIC KEY-----\n\
 MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMCQIEy1bSOHTVRDejkObrOyasRbJOPm\n\

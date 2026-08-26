@@ -739,9 +739,10 @@ std::vector<not_null<const Value*>> FormController::submitGetErrors() {
 		// The public key arrived with the authorization request, so an
 		// unreadable key, a readable key that is not RSA, or a failed
 		// encryption is a failed submit. Nothing derived from an
-		// unusable key may reach the server, and the failure goes
-		// through the same presentation the network submit errors do.
-		_view->showCriticalError(Lang::Hard::SecureAcceptError());
+		// unusable key may reach the server. The failure goes through
+		// the same dismissible box the network submit errors do, so
+		// the form stays navigable after it is closed.
+		_view->show(Ui::MakeInformBox(Lang::Hard::SecureAcceptError()));
 		return {};
 	}
 
