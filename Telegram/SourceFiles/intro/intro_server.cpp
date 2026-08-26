@@ -183,7 +183,10 @@ void ServerWidget::submit() {
 		case MTP::ServerEndpointStatus::UnbracketedIPv6:
 			msg = tr::lng_intro_server_address_ipv6(tr::now);
 			break;
-		default:
+		case MTP::ServerEndpointStatus::Valid:
+			// No default branch on purpose: adding a status must fail
+			// the build until its message exists. This branch is not
+			// reachable: !endpointCheck means the status is not Valid.
 			msg = tr::lng_intro_server_address_invalid(tr::now);
 			break;
 		}
