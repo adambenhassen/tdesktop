@@ -144,6 +144,7 @@ public:
 	[[nodiscard]] bool clearAuthorized();
 	[[nodiscard]] CustomServer customServer() const;
 	[[nodiscard]] bool hasCustomServer() const;
+	[[nodiscard]] bool usesPermanentAuthKey(ShiftedDcId dcWithShift) const;
 	// True when the pinned key is the only RSA key this account may
 	// use for that DC id, so a CDN key for it must be refused.
 	[[nodiscard]] bool isCustomServerPinned(DcId dcId) const;

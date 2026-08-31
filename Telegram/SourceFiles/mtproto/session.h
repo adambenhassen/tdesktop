@@ -101,12 +101,17 @@ public:
 	[[nodiscard]] AuthKeyPtr getPersistentKey() const;
 	[[nodiscard]] AuthKeyPtr getTemporaryKey(TemporaryKeyType type) const;
 	[[nodiscard]] CreatingKeyType acquireKeyCreation(DcType type);
+	[[nodiscard]] CreatingKeyType acquirePersistentKeyCreation();
 	[[nodiscard]] bool releaseKeyCreationOnDone(
 		const AuthKeyPtr &temporaryKey,
 		const AuthKeyPtr &persistentKeyUsedForBind);
+	[[nodiscard]] bool releasePersistentKeyCreationOnDone(
+		const AuthKeyPtr &persistentKey);
 	[[nodiscard]] bool releaseCdnKeyCreationOnDone(
 		const AuthKeyPtr &temporaryKey);
 	void releaseKeyCreationOnFail();
+	void releasePersistentKeyCreationOnFail();
+	void destroyPersistentKey(uint64 keyId);
 	void destroyTemporaryKey(uint64 keyId);
 
 	void detach();
@@ -164,11 +169,16 @@ public:
 
 	// SessionPrivate thread.
 	[[nodiscard]] CreatingKeyType acquireKeyCreation(DcType type);
+	[[nodiscard]] CreatingKeyType acquirePersistentKeyCreation();
 	[[nodiscard]] bool releaseKeyCreationOnDone(
 		const AuthKeyPtr &temporaryKey,
 		const AuthKeyPtr &persistentKeyUsedForBind);
+	[[nodiscard]] bool releasePersistentKeyCreationOnDone(
+		const AuthKeyPtr &persistentKey);
 	[[nodiscard]] bool releaseCdnKeyCreationOnDone(const AuthKeyPtr &temporaryKey);
 	void releaseKeyCreationOnFail();
+	void releasePersistentKeyCreationOnFail();
+	void destroyPersistentKey(uint64 keyId);
 	void destroyTemporaryKey(uint64 keyId);
 
 	void notifyDcConnectionInited();

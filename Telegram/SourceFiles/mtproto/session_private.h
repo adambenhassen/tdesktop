@@ -46,6 +46,7 @@ public:
 	[[nodiscard]] QString transport() const;
 
 	void updateAuthKey();
+	void updatePermanentAuthKey();
 	void restartNow();
 	void sendPingForce();
 	void tryToSend();
@@ -69,6 +70,7 @@ private:
 		Ignored,
 		RestartConnection,
 		ResetSession,
+		DestroyPersistentKey,
 		DestroyTemporaryKey,
 		ParseError,
 	};
@@ -169,9 +171,11 @@ private:
 	void checkAuthKey();
 	void authKeyChecked();
 	void destroyTemporaryKey();
+	void destroyPersistentKey();
 	void clearUnboundKeyCreator();
 	void releaseKeyCreationOnFail();
 	void applyAuthKey(AuthKeyPtr &&encryptionKey);
+	[[nodiscard]] bool usesPermanentAuthKey() const;
 	[[nodiscard]] bool noMediaKeyWithExistingRegularKey() const;
 	bool destroyOldEnoughPersistentKey();
 
@@ -243,6 +247,7 @@ private:
 	base::flat_map<mtpMsgId, SentContainer> _sentContainers;
 
 	std::unique_ptr<BoundKeyCreator> _keyCreator;
+	bool _permanentKeyCreation = false;
 	mtpMsgId _bindMsgId = 0;
 	crl::time _bindMessageSent = 0;
 

@@ -118,6 +118,54 @@ TEST_CASE(UnpinnedConfigSurvivesSerialization) {
 	CHECK(!restored.refusesProductionFallback());
 }
 
+TEST_CASE(PermanentAuthKeyGateComesOnlyFromPersistedPin) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(!options.usesPermanentAuthKey(2));
+
+	const auto server = MakeCustomServer();
+	CHECK(options.setCustomServer(server));
+	CHECK(options.usesPermanentAuthKey(server.dcId));
+	CHECK(!options.usesPermanentAuthKey(server.dcId + 1));
+	CHECK(options.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kConfigDcShift)));
+	CHECK(options.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kBaseDownloadDcShift)));
+	CHECK(options.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kBaseUploadDcShift)));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.usesPermanentAuthKey(server.dcId));
+	CHECK(!restored.usesPermanentAuthKey(server.dcId + 1));
+	CHECK(restored.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kConfigDcShift)));
+	CHECK(restored.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kBaseDownloadDcShift)));
+	CHECK(restored.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kBaseUploadDcShift)));
+
+	auto blocked = DcOptions(Environment::Production);
+	blocked.constructBlocked();
+	CHECK(!blocked.usesPermanentAuthKey(server.dcId));
+}
+
+TEST_CASE(ServerSuppliedOptionsCannotEnablePermanentAuthKey) {
+	auto options = DcOptions(Environment::Production);
+	options.constructAddOne(
+		2,
+		DcOptions::Flag::f_static,
+		"10.4.1.7",
+		8443,
+		{});
+
+	CHECK(!options.hasCustomServer());
+	CHECK(!options.usesPermanentAuthKey(2));
+	CHECK(!options.usesPermanentAuthKey(
+		ShiftDcId(2, kConfigDcShift)));
+	CHECK(!options.usesPermanentAuthKey(
+		ShiftDcId(2, kBaseDownloadDcShift)));
+}
+
 // A pin is all-or-nothing: a server with no key leaves an account that
 // looks pinned but is not, so it has to be refused outright.
 TEST_CASE(CustomServerWithoutAKeyIsRefused) {
