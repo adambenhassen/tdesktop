@@ -69,6 +69,7 @@ private:
 		Ignored,
 		RestartConnection,
 		ResetSession,
+		DestroyPersistentKey,
 		DestroyTemporaryKey,
 		ParseError,
 	};
@@ -168,10 +169,13 @@ private:
 	void resetSession();
 	void checkAuthKey();
 	void authKeyChecked();
+	void updatePermanentAuthKey();
 	void destroyTemporaryKey();
+	void destroyPersistentKey();
 	void clearUnboundKeyCreator();
 	void releaseKeyCreationOnFail();
 	void applyAuthKey(AuthKeyPtr &&encryptionKey);
+	[[nodiscard]] bool usesPermanentAuthKey() const;
 	[[nodiscard]] bool noMediaKeyWithExistingRegularKey() const;
 	bool destroyOldEnoughPersistentKey();
 

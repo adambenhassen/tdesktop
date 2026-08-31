@@ -984,6 +984,14 @@ bool DcOptions::hasCustomServer() const {
 	return hasCustomServerUnlocked();
 }
 
+bool DcOptions::usesPermanentAuthKey(ShiftedDcId dcWithShift) const {
+	if (GetDcIdShift(dcWithShift) != 0) {
+		return false;
+	}
+	ReadLocker lock(this);
+	return isCustomServerPinnedUnlocked(BareDcId(dcWithShift));
+}
+
 bool DcOptions::isCustomServerPinned(DcId dcId) const {
 	ReadLocker lock(this);
 	return isCustomServerPinnedUnlocked(dcId);

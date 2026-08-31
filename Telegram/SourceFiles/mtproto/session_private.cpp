@@ -602,7 +602,7 @@ void SessionPrivate::tryToSend() {
 		_pingIdToSend = base::RandomValue<mtpPingId>();
 	}
 	const auto forceNewMsgId = sendAll && markSessionAsStarted();
-	if (forceNewMsgId && _keyCreator) {
+	if (forceNewMsgId && _keyCreator && !usesPermanentAuthKey()) {
 		_keyCreator->restartBinder();
 	}
 
@@ -662,7 +662,10 @@ void SessionPrivate::tryToSend() {
 			httpWaitRequest = SerializedRequest::Serialize(MTPHttpWait(
 				MTP_http_wait(MTP_int(100), MTP_int(30), MTP_int(25000))));
 		}
-		if (!_bindMsgId && _keyCreator && _keyCreator->readyToBind()) {
+		if (!usesPermanentAuthKey()
+			&& !_bindMsgId
+			&& _keyCreator
+			&& _keyCreator->readyToBind()) {
 			bindDcKeyRequest = _keyCreator->prepareBindRequest(
 				_encryptionKey,
 				_sessionId);
@@ -1027,6 +1030,9 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 	}
 
 	destroyAllConnections();
+	if (_keyCreator && usesPermanentAuthKey()) {
+		releaseKeyCreationOnFail();
+	}
 
 	if (realDcTypeChanged() && _keyCreator) {
 		destroyTemporaryKey();
@@ -1442,7 +1448,9 @@ void SessionPrivate::handleReceived() {
 		}
 
 		if (res != HandleResult::Success && res != HandleResult::Ignored) {
-			if (res == HandleResult::DestroyTemporaryKey) {
+			if (res == HandleResult::DestroyPersistentKey) {
+				destroyPersistentKey();
+			} else if (res == HandleResult::DestroyTemporaryKey) {
 				destroyTemporaryKey();
 			} else if (res == HandleResult::ResetSession) {
 				_needSessionReset = true;
@@ -1872,7 +1880,9 @@ SessionPrivate::HandleResult SessionPrivate::handleOneReceived(
 		}
 		if (typeId == mtpc_rpc_error) {
 			if (IsDestroyedTemporaryKeyError(response)) {
-				return HandleResult::DestroyTemporaryKey;
+				return usesPermanentAuthKey()
+					? HandleResult::DestroyPersistentKey
+					: HandleResult::DestroyTemporaryKey;
 			}
 			// An error could be some RPC_CALL_FAIL or other error inside
 			// the initConnection, so we're not sure yet that it was inited.
@@ -2404,7 +2414,16 @@ void SessionPrivate::removeTestConnection(
 }
 
 void SessionPrivate::checkAuthKey() {
-	if (_keyId) {
+	if (usesPermanentAuthKey()) {
+		const auto persistent = _sessionData->getPersistentKey();
+		if (_keyId
+			&& persistent
+			&& (_keyId == persistent->keyId())) {
+			authKeyChecked();
+		} else {
+			applyAuthKey(std::move(persistent));
+		}
+	} else if (_keyId) {
 		authKeyChecked();
 	} else if (_instance->isKeysDestroyer()) {
 		applyAuthKey(_sessionData->getPersistentKey());
@@ -2423,6 +2442,17 @@ void SessionPrivate::updateAuthKey() {
 		).arg(_shiftedDcId));
 	applyAuthKey(_sessionData->getTemporaryKey(
 		TemporaryKeyTypeByDcType(_currentDcType)));
+}
+
+void SessionPrivate::updatePermanentAuthKey() {
+	if (_instance->isKeysDestroyer() || _keyCreator || !_connection) {
+		return;
+	}
+	applyAuthKey(_sessionData->getPersistentKey());
+}
+
+bool SessionPrivate::usesPermanentAuthKey() const {
+	return _instance->dcOptions().usesPermanentAuthKey(_shiftedDcId);
 }
 
 void SessionPrivate::setCurrentKeyId(uint64 newKeyId) {
@@ -2525,7 +2555,12 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 		return _realDcType;
 	}
 
-	const auto acquired = _sessionData->acquireKeyCreation(_realDcType);
+	const auto permanent = usesPermanentAuthKey();
+	const auto acquired = permanent
+		? (_sessionData->getPersistentKey()
+			? CreatingKeyType::None
+			: _sessionData->acquirePersistentKeyCreation())
+		: _sessionData->acquireKeyCreation(_realDcType);
 	if (acquired == CreatingKeyType::None) {
 		return _realDcType;
 	}
@@ -2583,6 +2618,24 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 			).arg(result->temporaryServerSalt
 			).arg(result->persistentServerSalt));
 
+		if (permanent) {
+			auto key = std::move(result->persistentKey);
+			if (!key) {
+				releaseKeyCreationOnFail();
+				restart();
+				return;
+			}
+			_sessionSalt = result->persistentServerSalt;
+			if (!_sessionData->releasePersistentKeyCreationOnDone(key)) {
+				_keyCreator = nullptr;
+				restart();
+				return;
+			}
+			_keyCreator = nullptr;
+			applyAuthKey(std::move(key));
+			return;
+		}
+
 		_sessionSalt = result->temporaryServerSalt;
 		result->temporaryKey->setExpiresAt(base::unixtime::now()
 			+ kTemporaryExpiresIn
@@ -2616,8 +2669,9 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 	};
 
 	auto request = DcKeyRequest();
-	request.persistentNeeded = (acquired == CreatingKeyType::Persistent);
-	request.temporaryExpiresIn = kTemporaryExpiresIn;
+	request.persistentNeeded = permanent
+		|| (acquired == CreatingKeyType::Persistent);
+	request.temporaryExpiresIn = permanent ? 0 : kTemporaryExpiresIn;
 	_keyCreator = std::make_unique<BoundKeyCreator>(
 		request,
 		std::move(delegate));
@@ -2664,7 +2718,11 @@ void SessionPrivate::handleError(int errorCode) {
 	_waitForConnectedTimer.cancel();
 
 	if (errorCode == -404) {
-		destroyTemporaryKey();
+		if (usesPermanentAuthKey()) {
+			destroyPersistentKey();
+		} else {
+			destroyTemporaryKey();
+		}
 	} else {
 		MTP_LOG(_shiftedDcId, ("Restarting after error in connection, error code: %1...").arg(errorCode));
 		return restart();
@@ -2681,6 +2739,21 @@ void SessionPrivate::destroyTemporaryKey() {
 	releaseKeyCreationOnFail();
 	if (_encryptionKey) {
 		_sessionData->destroyTemporaryKey(_encryptionKey->keyId());
+	}
+	applyAuthKey(nullptr);
+	restart();
+}
+
+void SessionPrivate::destroyPersistentKey() {
+	if (_instance->isKeysDestroyer()) {
+		LOG(("MTP Info: -404 error received in destroyer %1, assuming key was destroyed.").arg(_shiftedDcId));
+		_instance->keyWasPossiblyDestroyed(_shiftedDcId);
+		return;
+	}
+	LOG(("MTP Info: -404 error received in %1 with persistent key, assuming it was destroyed.").arg(_shiftedDcId));
+	releaseKeyCreationOnFail();
+	if (_encryptionKey) {
+		_sessionData->destroyPersistentKey(_encryptionKey->keyId());
 	}
 	applyAuthKey(nullptr);
 	restart();

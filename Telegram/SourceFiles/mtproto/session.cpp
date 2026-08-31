@@ -119,6 +119,13 @@ CreatingKeyType SessionData::acquireKeyCreation(DcType type) {
 	return _owner ? _owner->acquireKeyCreation(type) : CreatingKeyType::None;
 }
 
+CreatingKeyType SessionData::acquirePersistentKeyCreation() {
+	QMutexLocker lock(&_ownerMutex);
+	return _owner
+		? _owner->acquirePersistentKeyCreation()
+		: CreatingKeyType::None;
+}
+
 bool SessionData::releaseKeyCreationOnDone(
 		const AuthKeyPtr &temporaryKey,
 		const AuthKeyPtr &persistentKeyUsedForBind) {
@@ -127,6 +134,14 @@ bool SessionData::releaseKeyCreationOnDone(
 		? _owner->releaseKeyCreationOnDone(
 			temporaryKey,
 			persistentKeyUsedForBind)
+		: false;
+}
+
+bool SessionData::releasePersistentKeyCreationOnDone(
+		const AuthKeyPtr &persistentKey) {
+	QMutexLocker lock(&_ownerMutex);
+	return _owner
+		? _owner->releasePersistentKeyCreationOnDone(persistentKey)
 		: false;
 }
 
@@ -149,6 +164,13 @@ void SessionData::destroyTemporaryKey(uint64 keyId) {
 	QMutexLocker lock(&_ownerMutex);
 	if (_owner) {
 		_owner->destroyTemporaryKey(keyId);
+	}
+}
+
+void SessionData::destroyPersistentKey(uint64 keyId) {
+	QMutexLocker lock(&_ownerMutex);
+	if (_owner) {
+		_owner->destroyPersistentKey(keyId);
 	}
 }
 
@@ -185,15 +207,21 @@ Session::~Session() {
 void Session::watchDcKeyChanges() {
 	_instance->dcTemporaryKeyChanged(
 	) | rpl::filter([=](DcId dcId) {
-		return (dcId == _shiftedDcId) || (dcId == BareDcId(_shiftedDcId));
+		return ((dcId == _shiftedDcId)
+			|| (dcId == BareDcId(_shiftedDcId)));
 	}) | rpl::on_next([=] {
-		DEBUG_LOG(("AuthKey Info: dcTemporaryKeyChanged in Session %1"
-			).arg(_shiftedDcId));
 		if (const auto captured = _private) {
 			InvokeQueued(captured, [=] {
-				DEBUG_LOG(("AuthKey Info: calling Connection::updateAuthKey in Session %1"
-					).arg(_shiftedDcId));
-				captured->updateAuthKey();
+				if (_instance->dcOptions().usesPermanentAuthKey(
+					_shiftedDcId)) {
+					DEBUG_LOG(("AuthKey Info: calling permanent key update "
+						"in Session %1").arg(_shiftedDcId));
+					captured->updatePermanentAuthKey();
+				} else {
+					DEBUG_LOG(("AuthKey Info: calling Connection::updateAuthKey "
+						"in Session %1").arg(_shiftedDcId));
+					captured->updateAuthKey();
+				}
 			});
 		}
 	}, _lifetime);
@@ -465,6 +493,13 @@ CreatingKeyType Session::acquireKeyCreation(DcType type) {
 	return _myKeyCreation;
 }
 
+CreatingKeyType Session::acquirePersistentKeyCreation() {
+	Expects(_myKeyCreation == CreatingKeyType::None);
+
+	_myKeyCreation = _dc->acquirePersistentKeyCreation();
+	return _myKeyCreation;
+}
+
 bool Session::releaseKeyCreationOnDone(
 		const AuthKeyPtr &temporaryKey,
 		const AuthKeyPtr &persistentKeyUsedForBind) {
@@ -474,6 +509,31 @@ bool Session::releaseKeyCreationOnDone(
 	return releaseGenericKeyCreationOnDone(
 		temporaryKey,
 		persistentKeyUsedForBind);
+}
+
+bool Session::releasePersistentKeyCreationOnDone(
+		const AuthKeyPtr &persistentKey) {
+	Expects(_myKeyCreation == CreatingKeyType::Persistent);
+	Expects(persistentKey != nullptr);
+
+	_myKeyCreation = CreatingKeyType::None;
+	const auto result = _dc->releasePersistentKeyCreationOnDone(
+		persistentKey);
+	if (!result) {
+		DEBUG_LOG(("AuthKey Info: Persistent key changed while creating, "
+			"dcWithShift %1").arg(_shiftedDcId));
+		return false;
+	}
+
+	DEBUG_LOG(("AuthKey Info: Session persistent key created, "
+		"setting, dcWithShift %1").arg(_shiftedDcId));
+
+	const auto dcId = _dc->id();
+	const auto instance = _instance;
+	InvokeQueued(instance, [=] {
+		instance->dcPersistentKeyChanged(dcId, persistentKey);
+	});
+	return true;
 }
 
 bool Session::releaseCdnKeyCreationOnDone(
@@ -539,6 +599,17 @@ void Session::destroyTemporaryKey(uint64 keyId) {
 	const auto instance = _instance;
 	InvokeQueued(instance, [=] {
 		instance->dcTemporaryKeyChanged(dcId);
+	});
+}
+
+void Session::destroyPersistentKey(uint64 keyId) {
+	if (!_dc->destroyPersistentKey(keyId)) {
+		return;
+	}
+	const auto dcId = _dc->id();
+	const auto instance = _instance;
+	InvokeQueued(instance, [=] {
+		instance->dcPersistentKeyChanged(dcId, nullptr);
 	});
 }
 

@@ -42,11 +42,15 @@ public:
 	[[nodiscard]] AuthKeyPtr getPersistentKey() const;
 	[[nodiscard]] AuthKeyPtr getTemporaryKey(TemporaryKeyType type) const;
 	[[nodiscard]] CreatingKeyType acquireKeyCreation(DcType type);
+	[[nodiscard]] CreatingKeyType acquirePersistentKeyCreation();
 	bool releaseKeyCreationOnDone(
 		CreatingKeyType type,
 		const AuthKeyPtr &temporaryKey,
 		const AuthKeyPtr &persistentKeyUsedForBind);
+	bool releasePersistentKeyCreationOnDone(
+		const AuthKeyPtr &persistentKey);
 	void releaseKeyCreationOnFail(CreatingKeyType type);
+	bool destroyPersistentKey(uint64 keyId);
 	bool destroyTemporaryKey(uint64 keyId);
 	bool destroyConfirmedForgottenKey(uint64 keyId);
 

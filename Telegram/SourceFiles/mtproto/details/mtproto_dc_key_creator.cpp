@@ -388,7 +388,7 @@ DcKeyCreator::DcKeyCreator(
 , _protocolDcId(protocolDcId)
 , _request(request)
 , _delegate(std::move(delegate)) {
-	Expects(_request.temporaryExpiresIn > 0);
+	Expects((_request.temporaryExpiresIn > 0) || _request.persistentNeeded);
 	Expects(_delegate.done != nullptr);
 
 	QObject::connect(_connection, &AbstractConnection::receivedData, [=] {
@@ -818,19 +818,23 @@ void DcKeyCreator::failed(DcKeyError error) {
 }
 
 void DcKeyCreator::done() {
-	if (_temporary.stage == Stage::None) {
+	if (_request.temporaryExpiresIn > 0
+		&& _temporary.stage == Stage::None) {
 		pqSend(&_temporary, _request.temporaryExpiresIn);
 		return;
 	}
-	Assert(_temporary.stage == Stage::Ready);
+	Assert(_request.temporaryExpiresIn == 0
+		|| _temporary.stage == Stage::Ready);
 	Assert(_persistent.stage == Stage::Ready || _persistent.stage == Stage::None);
 
 	auto result = DcKeyResult();
-	result.temporaryKey = std::make_shared<AuthKey>(
-		AuthKey::Type::Temporary,
-		_dcId,
-		_temporary.authKey);
-	result.temporaryServerSalt = _temporary.data.doneSalt;
+	if (_temporary.stage == Stage::Ready) {
+		result.temporaryKey = std::make_shared<AuthKey>(
+			AuthKey::Type::Temporary,
+			_dcId,
+			_temporary.authKey);
+		result.temporaryServerSalt = _temporary.data.doneSalt;
+	}
 	if (_persistent.stage == Stage::Ready) {
 		result.persistentKey = std::make_shared<AuthKey>(
 			AuthKey::Type::Generated,

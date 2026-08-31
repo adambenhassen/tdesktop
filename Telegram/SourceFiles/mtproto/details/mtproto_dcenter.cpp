@@ -128,6 +128,19 @@ CreatingKeyType Dcenter::acquireKeyCreation(DcType type) {
 		: CreatingKeyType::TemporaryRegular;
 }
 
+CreatingKeyType Dcenter::acquirePersistentKeyCreation() {
+	QReadLocker lock(&_mutex);
+	if (_persistentKey) {
+		return CreatingKeyType::None;
+	}
+
+	auto expected = false;
+	const auto regular = IndexByType(TemporaryKeyType::Regular);
+	return !_creatingKeys[regular].compare_exchange_strong(expected, true)
+		? CreatingKeyType::None
+		: CreatingKeyType::Persistent;
+}
+
 bool Dcenter::releaseKeyCreationOnDone(
 		CreatingKeyType type,
 		const AuthKeyPtr &temporaryKey,
@@ -155,11 +168,38 @@ bool Dcenter::releaseKeyCreationOnDone(
 	return true;
 }
 
+bool Dcenter::releasePersistentKeyCreationOnDone(
+		const AuthKeyPtr &persistentKey) {
+	Expects(persistentKey != nullptr);
+
+	const auto regular = IndexByType(TemporaryKeyType::Regular);
+	QWriteLocker lock(&_mutex);
+	if (_persistentKey) {
+		_creatingKeys[regular] = false;
+		return false;
+	}
+	_persistentKey = persistentKey;
+	_creatingKeys[regular] = false;
+	_connectionInited = false;
+	return true;
+}
+
 void Dcenter::releaseKeyCreationOnFail(CreatingKeyType type) {
 	Expects(_creatingKeys[IndexByType(type)]);
-	Expects(_temporaryKeys[IndexByType(type)] == nullptr);
+	Expects(type == CreatingKeyType::Persistent
+		|| _temporaryKeys[IndexByType(type)] == nullptr);
 
 	_creatingKeys[IndexByType(type)] = false;
+}
+
+bool Dcenter::destroyPersistentKey(uint64 keyId) {
+	QWriteLocker lock(&_mutex);
+	if (!_persistentKey || _persistentKey->keyId() != keyId) {
+		return false;
+	}
+	_persistentKey = nullptr;
+	_connectionInited = false;
+	return true;
 }
 
 } // namespace details

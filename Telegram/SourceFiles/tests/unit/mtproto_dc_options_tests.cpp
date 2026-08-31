@@ -118,6 +118,27 @@ TEST_CASE(UnpinnedConfigSurvivesSerialization) {
 	CHECK(!restored.refusesProductionFallback());
 }
 
+TEST_CASE(PermanentAuthKeyGateComesOnlyFromPersistedPin) {
+	auto options = DcOptions(Environment::Production);
+	CHECK(!options.usesPermanentAuthKey(2));
+
+	const auto server = MakeCustomServer();
+	CHECK(options.setCustomServer(server));
+	CHECK(options.usesPermanentAuthKey(server.dcId));
+	CHECK(!options.usesPermanentAuthKey(server.dcId + 1));
+	CHECK(!options.usesPermanentAuthKey(
+		ShiftDcId(server.dcId, kConfigDcShift)));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.usesPermanentAuthKey(server.dcId));
+	CHECK(!restored.usesPermanentAuthKey(server.dcId + 1));
+
+	auto blocked = DcOptions(Environment::Production);
+	blocked.constructBlocked();
+	CHECK(!blocked.usesPermanentAuthKey(server.dcId));
+}
+
 // A pin is all-or-nothing: a server with no key leaves an account that
 // looks pinned but is not, so it has to be refused outright.
 TEST_CASE(CustomServerWithoutAKeyIsRefused) {
