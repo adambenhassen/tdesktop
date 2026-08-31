@@ -2415,7 +2415,7 @@ void SessionPrivate::removeTestConnection(
 
 void SessionPrivate::checkAuthKey() {
 	if (usesPermanentAuthKey()) {
-		const auto persistent = _sessionData->getPersistentKey();
+		auto persistent = _sessionData->getPersistentKey();
 		if (_keyId
 			&& persistent
 			&& (_keyId == persistent->keyId())) {

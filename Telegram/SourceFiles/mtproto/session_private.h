@@ -46,6 +46,7 @@ public:
 	[[nodiscard]] QString transport() const;
 
 	void updateAuthKey();
+	void updatePermanentAuthKey();
 	void restartNow();
 	void sendPingForce();
 	void tryToSend();
@@ -169,7 +170,6 @@ private:
 	void resetSession();
 	void checkAuthKey();
 	void authKeyChecked();
-	void updatePermanentAuthKey();
 	void destroyTemporaryKey();
 	void destroyPersistentKey();
 	void clearUnboundKeyCreator();
