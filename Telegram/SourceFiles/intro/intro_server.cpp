@@ -145,6 +145,8 @@ void ServerWidget::setInnerFocus() {
 
 void ServerWidget::activate() {
 	Step::activate();
+	_address->show();
+	_key->show();
 	_address->setFocusFast();
 }
 
