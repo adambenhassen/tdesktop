@@ -985,7 +985,7 @@ bool DcOptions::hasCustomServer() const {
 }
 
 bool DcOptions::usesPermanentAuthKey(ShiftedDcId dcWithShift) const {
-	if (GetDcIdShift(dcWithShift) != 0) {
+	if (dcType(dcWithShift) != DcType::Regular) {
 		return false;
 	}
 	ReadLocker lock(this);

@@ -186,10 +186,15 @@ bool Dcenter::releasePersistentKeyCreationOnDone(
 
 void Dcenter::releaseKeyCreationOnFail(CreatingKeyType type) {
 	Expects(_creatingKeys[IndexByType(type)]);
-	Expects(type == CreatingKeyType::Persistent
-		|| _temporaryKeys[IndexByType(type)] == nullptr);
+	Expects(_temporaryKeys[IndexByType(type)] == nullptr);
 
 	_creatingKeys[IndexByType(type)] = false;
+}
+
+void Dcenter::releasePersistentKeyCreationOnFail() {
+	const auto regular = IndexByType(TemporaryKeyType::Regular);
+	Expects(_creatingKeys[regular]);
+	_creatingKeys[regular] = false;
 }
 
 bool Dcenter::destroyPersistentKey(uint64 keyId) {

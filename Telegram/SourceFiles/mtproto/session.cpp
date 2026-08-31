@@ -160,6 +160,13 @@ void SessionData::releaseKeyCreationOnFail() {
 	}
 }
 
+void SessionData::releasePersistentKeyCreationOnFail() {
+	QMutexLocker lock(&_ownerMutex);
+	if (_owner) {
+		_owner->releasePersistentKeyCreationOnFail();
+	}
+}
+
 void SessionData::destroyTemporaryKey(uint64 keyId) {
 	QMutexLocker lock(&_ownerMutex);
 	if (_owner) {
@@ -212,8 +219,9 @@ void Session::watchDcKeyChanges() {
 	}) | rpl::on_next([=] {
 		if (const auto captured = _private) {
 			InvokeQueued(captured, [=] {
-				if (_instance->dcOptions().usesPermanentAuthKey(
-					_shiftedDcId)) {
+				if (!_instance->isKeysDestroyer()
+					&& _instance->dcOptions().usesPermanentAuthKey(
+						_shiftedDcId)) {
 					DEBUG_LOG(("AuthKey Info: calling permanent key update "
 						"in Session %1").arg(_shiftedDcId));
 					captured->updatePermanentAuthKey();
@@ -583,6 +591,13 @@ void Session::releaseKeyCreationOnFail() {
 		_myKeyCreation,
 		CreatingKeyType::None);
 	_dc->releaseKeyCreationOnFail(wasKeyCreation);
+}
+
+void Session::releasePersistentKeyCreationOnFail() {
+	Expects(_myKeyCreation == CreatingKeyType::Persistent);
+
+	_myKeyCreation = CreatingKeyType::None;
+	_dc->releasePersistentKeyCreationOnFail();
 }
 
 void Session::notifyDcConnectionInited() {

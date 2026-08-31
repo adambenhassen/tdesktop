@@ -50,6 +50,7 @@ public:
 	bool releasePersistentKeyCreationOnDone(
 		const AuthKeyPtr &persistentKey);
 	void releaseKeyCreationOnFail(CreatingKeyType type);
+	void releasePersistentKeyCreationOnFail();
 	bool destroyPersistentKey(uint64 keyId);
 	bool destroyTemporaryKey(uint64 keyId);
 	bool destroyConfirmedForgottenKey(uint64 keyId);

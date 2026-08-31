@@ -247,6 +247,7 @@ private:
 	base::flat_map<mtpMsgId, SentContainer> _sentContainers;
 
 	std::unique_ptr<BoundKeyCreator> _keyCreator;
+	bool _permanentKeyCreation = false;
 	mtpMsgId _bindMsgId = 0;
 	crl::time _bindMessageSent = 0;
 

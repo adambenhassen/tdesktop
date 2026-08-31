@@ -110,6 +110,7 @@ public:
 	[[nodiscard]] bool releaseCdnKeyCreationOnDone(
 		const AuthKeyPtr &temporaryKey);
 	void releaseKeyCreationOnFail();
+	void releasePersistentKeyCreationOnFail();
 	void destroyPersistentKey(uint64 keyId);
 	void destroyTemporaryKey(uint64 keyId);
 
@@ -176,6 +177,7 @@ public:
 		const AuthKeyPtr &persistentKey);
 	[[nodiscard]] bool releaseCdnKeyCreationOnDone(const AuthKeyPtr &temporaryKey);
 	void releaseKeyCreationOnFail();
+	void releasePersistentKeyCreationOnFail();
 	void destroyPersistentKey(uint64 keyId);
 	void destroyTemporaryKey(uint64 keyId);
 

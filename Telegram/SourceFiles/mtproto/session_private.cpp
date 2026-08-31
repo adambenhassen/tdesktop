@@ -1030,7 +1030,7 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 	}
 
 	destroyAllConnections();
-	if (_keyCreator && usesPermanentAuthKey()) {
+	if (_keyCreator && (_permanentKeyCreation || usesPermanentAuthKey())) {
 		releaseKeyCreationOnFail();
 	}
 
@@ -2452,7 +2452,8 @@ void SessionPrivate::updatePermanentAuthKey() {
 }
 
 bool SessionPrivate::usesPermanentAuthKey() const {
-	return _instance->dcOptions().usesPermanentAuthKey(_shiftedDcId);
+	return !_instance->isKeysDestroyer()
+		&& _instance->dcOptions().usesPermanentAuthKey(_shiftedDcId);
 }
 
 void SessionPrivate::setCurrentKeyId(uint64 newKeyId) {
@@ -2564,6 +2565,7 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 	if (acquired == CreatingKeyType::None) {
 		return _realDcType;
 	}
+	_permanentKeyCreation = permanent;
 
 	using Result = DcKeyResult;
 	using Error = DcKeyError;
@@ -2627,10 +2629,12 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 			}
 			_sessionSalt = result->persistentServerSalt;
 			if (!_sessionData->releasePersistentKeyCreationOnDone(key)) {
+				_permanentKeyCreation = false;
 				_keyCreator = nullptr;
 				restart();
 				return;
 			}
+			_permanentKeyCreation = false;
 			_keyCreator = nullptr;
 			applyAuthKey(std::move(key));
 			return;
@@ -2854,8 +2858,14 @@ void SessionPrivate::releaseKeyCreationOnFail() {
 	if (!_keyCreator) {
 		return;
 	}
+	const auto permanent = _permanentKeyCreation;
 	_keyCreator = nullptr;
-	_sessionData->releaseKeyCreationOnFail();
+	_permanentKeyCreation = false;
+	if (permanent) {
+		_sessionData->releasePersistentKeyCreationOnFail();
+	} else {
+		_sessionData->releaseKeyCreationOnFail();
+	}
 }
 
 } // namespace details
