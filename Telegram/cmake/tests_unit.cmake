@@ -33,6 +33,7 @@ PRIVATE
 )
 target_link_libraries(test_unit_mtproto
 PRIVATE
+    desktop-app::lib_base
     desktop-app::external_zlib
 )
 
