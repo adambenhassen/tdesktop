@@ -186,23 +186,13 @@ jobs:
           set -euo pipefail
           notes=$(printf 'Tag: %s\nCommit: %s\n\nThis app is unsigned and must be opened once via right-click > Open.' "$RELEASE_TAG" "$RELEASE_SHA")
           release_repo="$GITHUB_REPOSITORY"
-          release_api="repos/$release_repo/releases/tags/$RELEASE_TAG"
           is_prerelease=false
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             is_prerelease=true
           fi
 
-          if gh release view "$RELEASE_TAG" --repo "$release_repo" >/dev/null 2>&1; then
-            # A rerun updates the existing release and replaces the asset by name.
-            gh api --method PATCH "$release_api" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              -f "name=$RELEASE_TAG" \
-              -f "body=$notes" \
-              -F "draft=false" \
-              -F "prerelease=$is_prerelease" \
-              >/dev/null
-          else
-            create_args=(--verify-tag)
+          if ! gh release view "$RELEASE_TAG" --repo "$release_repo" >/dev/null 2>&1; then
+            create_args=(--verify-tag --draft)
             if [[ "$is_prerelease" == true ]]; then
               create_args+=(--prerelease)
             fi
@@ -213,6 +203,13 @@ jobs:
               "${create_args[@]}"
           fi
 
+          # Upload before publishing so an interrupted run leaves only a draft.
           gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" \
             --repo "$release_repo" \
             --clobber
+          gh release edit "$RELEASE_TAG" \
+            --repo "$release_repo" \
+            --title "$RELEASE_TAG" \
+            --notes "$notes" \
+            --draft=false \
+            --prerelease="$is_prerelease"
