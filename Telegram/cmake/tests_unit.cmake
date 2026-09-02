@@ -18,6 +18,25 @@ init_target(test_unit "(tests)")
 
 target_include_directories(test_unit PRIVATE ${src_loc})
 
+# Xcode links every object from an object-library dependency into each
+# consumer. Keep the test executable's link selective: some mtproto objects
+# refer to application-only implementations that are deliberately absent
+# from this console harness.
+add_library(test_unit_mtproto STATIC
+    $<TARGET_OBJECTS:td_mtproto>
+)
+init_target(test_unit_mtproto "(tests)")
+target_include_directories(test_unit_mtproto PRIVATE ${src_loc})
+nice_target_sources(test_unit_mtproto ${src_loc}
+PRIVATE
+    tests/unit/logs_stub.cpp
+)
+target_link_libraries(test_unit_mtproto
+PRIVATE
+    desktop-app::lib_base
+    desktop-app::external_zlib
+)
+
 # The mtproto headers are written expecting this prelude — scheme.h, rpl,
 # crl — because every target that compiles them has it precompiled. A test
 # including mtproto_dc_options.h without it fails on MTPDdcOption. Reuse
@@ -29,7 +48,6 @@ PRIVATE
     # Compiled in the application target only, so the test links it
     # directly: the code under test is the shipped code.
     passport/passport_encryption.cpp
-    tests/unit/logs_stub.cpp
     intro/intro_username_validation.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
@@ -42,7 +60,7 @@ PRIVATE
 
 target_link_libraries(test_unit
 PRIVATE
-    tdesktop::td_mtproto
+    test_unit_mtproto
     tdesktop::td_scheme
     desktop-app::lib_base
     desktop-app::lib_tl
@@ -57,4 +75,3 @@ PRIVATE
 set_target_properties(test_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
-
