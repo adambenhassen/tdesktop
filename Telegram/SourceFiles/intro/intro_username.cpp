@@ -101,6 +101,7 @@ void UsernameWidget::setInnerFocus() {
 
 void UsernameWidget::activate() {
 	Step::activate();
+	_username->show();
 	_username->setFocusFast();
 	if (!getData()->usernameError.isEmpty()) {
 		const auto text = getData()->usernameError;
