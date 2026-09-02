@@ -4877,7 +4877,9 @@ void InnerWidget::refreshEmpty() {
 		? ((_communityViewable.empty() && !_communityRequestableCount)
 			? EmptyState::Loading
 			: EmptyState::None)
-		: (!_filterId && data->contactsLoaded().current())
+		: (!_filterId
+			&& (data->contactsLoaded().current()
+				|| data->chatsList()->loaded()))
 		? EmptyState::NoContacts
 		: (_filterId > 0) && data->chatsList()->loaded()
 		? EmptyState::EmptyFolder
