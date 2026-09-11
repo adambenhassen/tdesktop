@@ -313,7 +313,7 @@ env HOME="$HOME_ROOT" "$OFFICIAL_EXE" -noupdate -debug > "$EVIDENCE_DIR/official
 OFFICIAL_PID=$!
 wait_for_process "$OFFICIAL_PID" 30 || { echo "official process did not stay alive" >&2; exit 1; }
 printf '%s\n' "$OFFICIAL_PID" > "$EVIDENCE_DIR/official-pid.txt"
-osascript -e "tell application id \"$OFFICIAL_BUNDLE_ID\" to activate" > "$EVIDENCE_DIR/official-activate.txt" 2>&1
+osascript -e "tell application \"System Events\" to set frontmost of (first application process whose unix id is $OFFICIAL_PID) to true" > "$EVIDENCE_DIR/official-activate.txt" 2>&1
 FRONTMOST_BEFORE="$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')" \
 	|| unavailable "System Events cannot report the frontmost application"
 printf '%s\n' "$FRONTMOST_BEFORE" > "$EVIDENCE_DIR/frontmost-before.txt"
