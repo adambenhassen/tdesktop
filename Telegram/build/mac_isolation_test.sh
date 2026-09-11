@@ -292,7 +292,7 @@ MOUNT_PATH="$RUN_ROOT/mount"
 mkdir -p "$MOUNT_PATH"
 hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_PATH" "$OFFICIAL_DMG" > "$EVIDENCE_DIR/mount.txt"
 MOUNTED=1
-OFFICIAL_SOURCE="$(find "$MOUNT_PATH" -maxdepth 2 -type d -name '*.app' -print -quit)"
+OFFICIAL_SOURCE="$(find "$MOUNT_PATH" -maxdepth 2 -type d -name '*.app' -print -quit 2>/dev/null || true)"
 [ -n "$OFFICIAL_SOURCE" ] || { echo "official app missing from DMG" >&2; exit 1; }
 OFFICIAL_APP="$RUN_ROOT/Official Telegram.app"
 ditto "$OFFICIAL_SOURCE" "$OFFICIAL_APP"

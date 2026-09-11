@@ -37,3 +37,4 @@ test -x "$ISOLATION_FILE" || test -f "$ISOLATION_FILE"
 test -f "$PARSER_FILE"
 grep -F 'fs_usage' "$ISOLATION_FILE" >/dev/null
 grep -F -- '--self-test' "$ISOLATION_FILE" >/dev/null
+grep -F "OFFICIAL_SOURCE=\"\$(find \"\$MOUNT_PATH\" -maxdepth 2 -type d -name '*.app' -print -quit 2>/dev/null || true)\"" "$ISOLATION_FILE" >/dev/null
