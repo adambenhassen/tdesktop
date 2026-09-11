@@ -49,6 +49,9 @@ jobs:
           submodules: recursive
           path: ${{ env.REPO_NAME }}
 
+      - name: Verify Telegramd identity contract.
+        run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME"
+
       - name: First set up.
         run: |
           sudo chown -R `whoami`:admin /usr/local/share
@@ -102,7 +105,7 @@ jobs:
             ThirdParty
           key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
 
-      - name: Telegram Desktop build.
+      - name: Telegramd build.
         if: env.ONLY_CACHE == 'false'
         run: |
           cd $REPO_NAME/Telegram
@@ -111,9 +114,9 @@ jobs:
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
             echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Telegram-macOS-arm64 ${{ matrix.defines }}" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Telegramd-macOS-arm64 ${{ matrix.defines }}" >> $GITHUB_ENV
           else
-            echo "ARTIFACT_NAME=Telegram-macOS-arm64" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Telegramd-macOS-arm64" >> $GITHUB_ENV
           fi
 
           # cmake/validate_special_target.cmake defaults this to "x86_64;arm64",
@@ -126,17 +129,34 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
           -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
           -D TDESKTOP_API_TEST=ON \
-          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
+          -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
           $DEFINE
 
+          grep -F 'DESKTOP_APP_DISABLE_AUTOUPDATE:BOOL=ON' ../out/CMakeCache.txt
           cmake --build ../out --config Debug --parallel
 
       - name: Verify artifact architecture.
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           cd $REPO_NAME/out/Debug
-          for binary in Telegram.app/Contents/MacOS/Telegram Updater; do
+          mkdir -p evidence
+          grep -F 'DESKTOP_APP_DISABLE_AUTOUPDATE:BOOL=ON' ../CMakeCache.txt | tee evidence/cmake-cache-autoupdate.txt
+          app=Telegramd.app
+          plist="$app/Contents/Info.plist"
+          executable="$app/Contents/MacOS/Telegramd"
+          plutil -p "$plist" | tee evidence/plist.txt
+          test "$(plutil -extract CFBundleExecutable raw -o - "$plist")" = Telegramd
+          test "$(plutil -extract CFBundleName raw -o - "$plist")" = Telegramd
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = com.adambenhassen.telegramd
+          if plutil -extract CFBundleURLTypes xml1 -o - "$plist" >/dev/null 2>&1; then
+            echo "CFBundleURLTypes must be absent from $plist"
+            exit 1
+          fi
+          test ! -e "$app/Contents/Frameworks/Updater"
+          test ! -e Updater
+          test ! -e "$app/Contents/Helpers/Updater"
+          for binary in "$executable"; do
             echo "== $binary"
             file "$binary"
             archs=$(lipo -archs "$binary")
@@ -145,20 +165,39 @@ jobs:
               echo "::error::$binary is '$archs', expected arm64."
               exit 1
             }
-          done
+          done | tee evidence/architecture-static.txt
+          python3 "$REPO_NAME/Telegram/build/check_mac_fs_usage.py" \
+            --self-test | tee evidence/observer-sensitivity.txt
+
+      - name: Run Telegramd isolation gate.
+        if: env.UPLOAD_ARTIFACT == 'true'
+        run: |
+          mkdir -p "$REPO_NAME/out/Debug/evidence"
+          "$REPO_NAME/Telegram/build/mac_isolation_test.sh" \
+            "$REPO_NAME/out/Debug/Telegramd.app" \
+            "$REPO_NAME/out/Debug/evidence"
+
+      - name: Save Telegramd evidence.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegramd-macOS-arm64-evidence
+          path: ${{ env.REPO_NAME }}/out/Debug/evidence/
+          if-no-files-found: warn
 
       - name: Move artifact.
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: always() && env.UPLOAD_ARTIFACT == 'true'
         run: |
           cd $REPO_NAME/out/Debug
           mkdir artifact
-          mv Telegram.app artifact/
-          mv Updater artifact/
+          if [ -d Telegramd.app ]; then
+            mv Telegramd.app artifact/
+          fi
       - uses: actions/upload-artifact@v7
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: always() && env.UPLOAD_ARTIFACT == 'true'
         name: Upload artifact.
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: Telegramd-macOS-arm64
           path: ${{ env.REPO_NAME }}/out/Debug/artifact/
 
       - name: Package release asset.
@@ -169,10 +208,10 @@ jobs:
           set -euo pipefail
           artifact_dir="$REPO_NAME/out/Debug/artifact"
           asset_tag="${RELEASE_TAG//\//-}"
-          asset_name="Telegram-macOS-arm64-${asset_tag}.zip"
+          asset_name="Telegramd-macOS-arm64-${asset_tag}.zip"
           (
             cd "$artifact_dir"
-            zip -r "../$asset_name" Telegram.app Updater
+            zip -r "../$asset_name" Telegramd.app
           )
           echo "RELEASE_ASSET=$REPO_NAME/out/Debug/$asset_name" >> "$GITHUB_ENV"
 

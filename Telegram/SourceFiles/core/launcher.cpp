@@ -336,7 +336,11 @@ void Launcher::init() {
 	prepareSettings();
 	initQtMessageLogging();
 
+#ifdef TDESKTOP_TELEGRAMD
+	QApplication::setApplicationName(u"Telegramd"_q);
+#else // TDESKTOP_TELEGRAMD
 	QApplication::setApplicationName(u"TelegramDesktop"_q);
+#endif // TDESKTOP_TELEGRAMD
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	// fallback session management is useless for tdesktop since it doesn't have

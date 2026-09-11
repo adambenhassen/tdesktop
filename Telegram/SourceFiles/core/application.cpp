@@ -432,9 +432,13 @@ void Application::run() {
 }
 
 void Application::autoRegisterUrlScheme() {
+#ifdef TDESKTOP_TELEGRAMD
+	return;
+#else // TDESKTOP_TELEGRAMD
 	if (!OptionSkipUrlSchemeRegister.value()) {
 		InvokeQueued(this, [] { RegisterUrlScheme(); });
 	}
+#endif // TDESKTOP_TELEGRAMD
 }
 
 void Application::showAccount(not_null<Main::Account*> account) {
@@ -1929,6 +1933,9 @@ void Application::startShortcuts() {
 }
 
 void Application::RegisterUrlScheme() {
+#ifdef TDESKTOP_TELEGRAMD
+	return;
+#else // TDESKTOP_TELEGRAMD
 	const auto arguments = Launcher::Instance().customWorkingDir()
 		? u"-workdir \"%1\""_q.arg(cWorkingDir())
 		: QString();
@@ -1954,6 +1961,7 @@ void Application::RegisterUrlScheme() {
 		.displayAppName = AppName.utf16(),
 		.displayAppDescription = AppName.utf16(),
 	});
+#endif // TDESKTOP_TELEGRAMD
 }
 
 bool IsAppLaunched() {
