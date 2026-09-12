@@ -27,6 +27,8 @@ CONTROL_RESULT=""
 CONTROL_PID=""
 CONTROL_CHILD_PID=""
 CONTROL_TRACE=""
+OBSERVER_LAUNCH_PID=""
+PYTHON3=""
 SPAWN_CONTROL_HELPER_PID=""
 SPAWN_CONTROL_OBSERVER_PID=""
 SPAWN_CONTROL_PID=""
@@ -107,6 +109,29 @@ process_alive() {
 	esac
 }
 
+process_present() {
+	local state
+	[ -n "$1" ] || return 1
+	state="$(ps -p "$1" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+	case "$state" in
+		""|Z*) return 1 ;;
+	esac
+}
+
+start_privileged_observer() {
+	local executable="$1"
+	shift
+	sudo -n "$PYTHON3" -c '
+import os
+import signal
+import sys
+
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execv(sys.argv[1], sys.argv[1:])
+' "$executable" "$@" &
+	OBSERVER_LAUNCH_PID=$!
+}
+
 wait_for_process() {
 	local pid="$1"
 	local seconds="$2"
@@ -132,6 +157,20 @@ wait_for_exit() {
 			return 0
 		fi
 		sleep 1
+	done
+	return 1
+}
+
+wait_for_observer_exit() {
+	local owner_pid="$1"
+	local tracer_pid="$2"
+	local seconds="$3"
+	local i
+	for i in $(seq 1 $((seconds * 10))); do
+		if ! process_alive "$owner_pid" && ! process_present "$tracer_pid"; then
+			return 0
+		fi
+		sleep 0.1
 	done
 	return 1
 }
@@ -195,10 +234,15 @@ stop_observer_process() {
 	local label="$1"
 	local pid="$2"
 	local expected_fragment="$3"
+	local trace_path="${4:-}"
 	local signal_pid="$pid"
+	local tracer_pid="$pid"
 	local child_pid
 	local child_command
 	local command
+	local tracer_found=0
+	local signal_result=FAIL
+	local flush_result=FAIL
 	local forced_kill=0
 	local wait_status=0
 	local result=PASS
@@ -230,28 +274,36 @@ stop_observer_process() {
 		child_command="$(process_command "$child_pid")"
 		if [ -n "$child_command" ] && [[ "$child_command" == *"$expected_fragment"* ]]; then
 			signal_pid="$child_pid"
+			tracer_pid="$child_pid"
+			tracer_found=1
 			break
 		fi
 	done < <(ps -axo pid=,ppid= | awk -v parent="$pid" '$2 == parent { print $1 }')
-	if ! sudo -n kill -INT "$signal_pid" 2>/dev/null && ! kill -INT "$signal_pid" 2>/dev/null; then
+	if [ "$tracer_found" -eq 0 ]; then
 		result=FAIL
-		detail=interrupt-failed
+		detail=tracer-not-found
 		forced_kill=1
-		if ! sudo -n kill -KILL "$signal_pid" 2>/dev/null && ! kill -KILL "$signal_pid" 2>/dev/null; then
-			detail=interrupt-and-kill-failed
-		elif ! wait_for_exit "$signal_pid" 5; then
-			detail=interrupt-failed-and-process-still-alive
-		fi
-	else
-		if ! wait_for_exit "$pid" 10; then
+	fi
+	if [ "$tracer_found" -eq 1 ] && (sudo -n kill -INT "$signal_pid" 2>/dev/null || kill -INT "$signal_pid" 2>/dev/null); then
+		signal_result=PASS
+		if ! wait_for_observer_exit "$pid" "$tracer_pid" 10; then
 			forced_kill=1
 			result=FAIL
 			detail=forced-kill-after-interrupt-timeout
 			if ! sudo -n kill -KILL "$signal_pid" 2>/dev/null && ! kill -KILL "$signal_pid" 2>/dev/null; then
 				detail=interrupt-timeout-and-kill-failed
-			elif ! wait_for_exit "$pid" 5; then
+			elif ! wait_for_observer_exit "$pid" "$tracer_pid" 5; then
 				detail=interrupt-timeout-and-process-still-alive
 			fi
+		fi
+	else
+		result=FAIL
+		[ "$tracer_found" -eq 1 ] && detail=interrupt-failed
+		forced_kill=1
+		if ! sudo -n kill -KILL "$signal_pid" 2>/dev/null && ! kill -KILL "$signal_pid" 2>/dev/null; then
+			detail=interrupt-and-kill-failed
+		elif ! wait_for_observer_exit "$pid" "$tracer_pid" 5; then
+			detail=interrupt-failed-and-process-still-alive
 		fi
 	fi
 	if process_alive "$pid"; then
@@ -274,8 +326,33 @@ stop_observer_process() {
 	if [ "$forced_kill" -eq 1 ]; then
 		result=FAIL
 	fi
-	printf 'label=%s pid=%s forced_kill=%s wait_status=%s result=%s detail=%s\n' \
-		"$label" "$pid" "$forced_kill" "$wait_status" "$result" "$detail" >> "$OBSERVER_SHUTDOWN_FILE"
+	if [ "$tracer_pid" != "$pid" ] && process_present "$tracer_pid"; then
+		forced_kill=1
+		result=FAIL
+		detail=tracer-still-alive-after-interrupt
+		if ! sudo -n kill -KILL "$tracer_pid" 2>/dev/null && ! kill -KILL "$tracer_pid" 2>/dev/null; then
+			detail=tracer-still-alive-and-kill-failed
+		elif ! wait_for_observer_exit "$pid" "$tracer_pid" 5; then
+			detail=tracer-still-alive-after-kill
+		fi
+	fi
+	if [ "$forced_kill" -eq 0 ] && [ "$signal_result" = PASS ] && \
+		! process_alive "$pid" && ! process_present "$tracer_pid"; then
+		if [ -z "$trace_path" ] || {
+			[ -e "$trace_path" ] &&
+			! grep -Ei '^dtrace: (failed|error)' "$trace_path" >/dev/null 2>&1;
+		}; then
+			flush_result=PASS
+		else
+			result=FAIL
+			detail=trace-incomplete-or-observer-error
+		fi
+	fi
+	if [ "$flush_result" != PASS ]; then
+		result=FAIL
+	fi
+	printf 'label=%s owner_pid=%s tracer_pid=%s signal=SIGINT forced_kill=%s wait_status=%s flush_result=%s result=%s detail=%s\n' \
+		"$label" "$pid" "$tracer_pid" "$forced_kill" "$wait_status" "$flush_result" "$result" "$detail" >> "$OBSERVER_SHUTDOWN_FILE"
 	[ "$result" = PASS ]
 }
 
@@ -351,7 +428,7 @@ stop_helper_process() {
 stop_lifecycle_observer_control() {
 	local stop_failed=0
 	if [ -n "$CONTROL_DTRACE_PID" ]; then
-		stop_observer_process "lifecycle-dtrace" "$CONTROL_DTRACE_PID" "dtrace" || stop_failed=1
+		stop_observer_process "lifecycle-dtrace" "$CONTROL_DTRACE_PID" "dtrace" "$CONTROL_TRACE" || stop_failed=1
 	fi
 	stop_helper_process "lifecycle-control" "$CONTROL_HELPER_PID" "python" || stop_failed=1
 	CONTROL_DTRACE_PID=""
@@ -362,7 +439,7 @@ stop_lifecycle_observer_control() {
 stop_spawn_observer_control() {
 	local stop_failed=0
 	if [ -n "$SPAWN_CONTROL_OBSERVER_PID" ]; then
-		stop_observer_process "spawn-fs-usage" "$SPAWN_CONTROL_OBSERVER_PID" "fs_usage" || stop_failed=1
+		stop_observer_process "spawn-fs-usage" "$SPAWN_CONTROL_OBSERVER_PID" "fs_usage" "$SPAWN_CONTROL_TRACE" || stop_failed=1
 	fi
 	stop_helper_process "spawn-control-child" "$SPAWN_CONTROL_CHILD_PID" "sleep" || stop_failed=1
 	stop_helper_process "spawn-control" "$SPAWN_CONTROL_HELPER_PID" "python" || stop_failed=1
@@ -385,7 +462,6 @@ run_lifecycle_observer_control() {
 	local dtrace_program
 	local helper_status=0
 	local child_pid
-	local fork_event_seen=0
 	CONTROL_READY="$RUN_ROOT/observer-control-ready"
 	CONTROL_RELEASE="$RUN_ROOT/observer-control-release"
 	CONTROL_RESULT="$RUN_ROOT/observer-control-result"
@@ -432,8 +508,8 @@ PY
 		echo "parent_pid=$CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
 	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
-	sudo -n /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1 &
-	CONTROL_DTRACE_PID=$!
+	start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1
+	CONTROL_DTRACE_PID=$OBSERVER_LAUNCH_PID
 	if ! wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" "observer-ready" 10; then
 		control_observer_unavailable "fork observer control did not report dtrace readiness"
 	fi
@@ -452,14 +528,13 @@ PY
 	if [ "$helper_status" -ne 0 ]; then
 		control_observer_unavailable "fork observer control helper failed"
 	fi
-	if wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
-		"fork parent=$CONTROL_PID child=$child_pid" 10; then
-		fork_event_seen=1
-	fi
+	wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
+		"fork parent=$CONTROL_PID child=$child_pid" 10 || true
 	if ! stop_lifecycle_observer_control; then
 		control_observer_unavailable "fork observer shutdown or flush failed"
 	fi
-	if [ "$fork_event_seen" -eq 0 ] && ! grep -F -- "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1; then
+	if ! grep -F -- "observer-ready" "$CONTROL_TRACE" >/dev/null 2>&1 || \
+		! grep -F -- "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1; then
 		control_observer_unavailable "fork observer missed a short-lived fork-only child"
 	fi
 	{
@@ -530,8 +605,8 @@ PY
 		echo "parent_pid=$SPAWN_CONTROL_PID"
 		echo "fs_usage_filter=/usr/bin/fs_usage -w -F -f exec $SPAWN_CONTROL_PID"
 	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
-	sudo -n /usr/bin/fs_usage -w -F -f exec "$SPAWN_CONTROL_PID" > "$SPAWN_CONTROL_TRACE" 2>&1 &
-	SPAWN_CONTROL_OBSERVER_PID=$!
+	start_privileged_observer /usr/bin/fs_usage -w -F -f exec "$SPAWN_CONTROL_PID" > "$SPAWN_CONTROL_TRACE" 2>&1
+	SPAWN_CONTROL_OBSERVER_PID=$OBSERVER_LAUNCH_PID
 	sleep 1
 	if ! process_alive "$SPAWN_CONTROL_OBSERVER_PID"; then
 		spawn_observer_unavailable "exec observer control could not start fs_usage"
@@ -599,13 +674,13 @@ start_pid_observer() {
 		record "PID-filtered lifecycle observer could not attach to exited pid=$target_pid"
 		return 1
 	fi
-	sudo -n /usr/bin/fs_usage -w -F -f filesys "$target_pid" > "$trace" 2>&1 &
-	observer_pid=$!
-	sudo -n /usr/bin/fs_usage -w -F -f exec "$target_pid" > "$exec_trace" 2>&1 &
-	exec_observer_pid=$!
+	start_privileged_observer /usr/bin/fs_usage -w -F -f filesys "$target_pid" > "$trace" 2>&1
+	observer_pid=$OBSERVER_LAUNCH_PID
+	start_privileged_observer /usr/bin/fs_usage -w -F -f exec "$target_pid" > "$exec_trace" 2>&1
+	exec_observer_pid=$OBSERVER_LAUNCH_PID
 	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
-	sudo -n /usr/sbin/dtrace -q -n "$fork_program" > "$fork_trace" 2>&1 &
-	fork_observer_pid=$!
+	start_privileged_observer /usr/sbin/dtrace -q -n "$fork_program" > "$fork_trace" 2>&1
+	fork_observer_pid=$OBSERVER_LAUNCH_PID
 	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
 		record "PID-filtered lifecycle observer could not record pid=$target_pid"
 		return 1
@@ -705,9 +780,9 @@ stop_pid_observers() {
 	local stop_failed=0
 	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$observer_pid" ] || continue
-		stop_observer_process "filesystem-pid-$target_pid" "$observer_pid" "fs_usage" || stop_failed=1
-		stop_observer_process "exec-pid-$target_pid" "$exec_observer_pid" "fs_usage" || stop_failed=1
-		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" || stop_failed=1
+		stop_observer_process "filesystem-pid-$target_pid" "$observer_pid" "fs_usage" "$TARGET_TRACE_DIR/$target_pid.txt" || stop_failed=1
+		stop_observer_process "exec-pid-$target_pid" "$exec_observer_pid" "fs_usage" "$TARGET_EXEC_DIR/$target_pid.txt" || stop_failed=1
+		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$TARGET_FORK_DIR/$target_pid.txt" || stop_failed=1
 	done < "$TARGET_OBSERVER_FILE"
 	if [ "$stop_failed" -ne 0 ]; then
 		record "PID-filtered observers did not complete clean intentional shutdown"
@@ -1428,6 +1503,7 @@ trap cleanup EXIT
 
 [ "$(uname -m)" = "arm64" ] || unavailable "runner is not arm64"
 require_tool python3
+PYTHON3="$(command -v python3)"
 require_tool sw_vers
 require_tool xcodebuild
 require_tool brew
