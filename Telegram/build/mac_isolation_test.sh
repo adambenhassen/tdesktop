@@ -197,6 +197,7 @@ stop_observer_process() {
 	local expected_fragment="$3"
 	local signal_pid="$pid"
 	local child_pid
+	local child_command
 	local command
 	local forced_kill=0
 	local wait_status=0
@@ -226,7 +227,8 @@ stop_observer_process() {
 	esac
 	while read -r child_pid; do
 		[ -n "$child_pid" ] || continue
-		if process_alive "$child_pid" && [[ "$(process_command "$child_pid")" == *"$expected_fragment"* ]]; then
+		child_command="$(process_command "$child_pid")"
+		if [ -n "$child_command" ] && [[ "$child_command" == *"$expected_fragment"* ]]; then
 			signal_pid="$child_pid"
 			break
 		fi
