@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "storage/storage_account.h"
+#include "core/application.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
@@ -481,20 +482,20 @@ void ServerWidget::layoutContent() {
 
 QWidget *ServerWidget::firstTabWidget() const {
 	return _readOnly
-		? _savedAddress
-		: _enrollment;
+		? static_cast<QWidget*>(_savedAddress)
+		: static_cast<QWidget*>(_enrollment);
 }
 
 QWidget *ServerWidget::lastTabWidget() const {
 	return _readOnly
-		? _addAccount
-		: _review;
+		? static_cast<QWidget*>(_addAccount)
+		: static_cast<QWidget*>(_review);
 }
 
 QWidget *ServerWidget::nextButtonFocusWidget() const {
 	return _readOnly
-		? _addAccount
-		: _review;
+		? static_cast<QWidget*>(_addAccount)
+		: static_cast<QWidget*>(_review);
 }
 
 rpl::producer<QString> ServerWidget::nextButtonText() const {
@@ -615,7 +616,7 @@ void ServerWidget::clearEnrollmentStatus() {
 }
 
 void ServerWidget::announceStatus() {
-	const auto event = QAccessibleEvent(this, QAccessible::Alert);
+	auto event = QAccessibleEvent(this, QAccessible::Alert);
 	QAccessible::updateAccessibility(&event);
 }
 
@@ -683,7 +684,7 @@ ServerKeyWidget::ServerKeyWidget(
 		tr::lng_intro_server_replace(tr::now));
 	_confirm = Ui::CreateChild<Ui::RoundButton>(
 		_content,
-		tr::lng_intro_server_confirm(tr::now),
+		tr::lng_intro_server_confirm(),
 		st::introNextButton);
 
 	_endpoint->setSelectable(true);
@@ -998,7 +999,7 @@ void ServerKeyWidget::showSaveFailure() {
 }
 
 void ServerKeyWidget::announceVerdict() {
-	const auto event = QAccessibleEvent(_verdict, QAccessible::Alert);
+	auto event = QAccessibleEvent(_verdict, QAccessible::Alert);
 	QAccessible::updateAccessibility(&event);
 }
 
