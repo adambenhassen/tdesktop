@@ -47,6 +47,27 @@ TEST_CASE(UnconfirmedEnrollmentDoesNotAllowNetwork) {
 	const auto resumed = gate.resume();
 	CHECK(resumed.resumed);
 	CHECK(!resumed.wasStarted);
+	// Clearing the pause does not create a session. The owning instance
+	// starts it only after the confirmed pin has been persisted.
+	CHECK(!gate.networkAllowed());
+}
+
+TEST_CASE(ConfirmedEnrollmentStartsNetworkAfterPinPersistence) {
+	ServerEnrollmentGate gate(true);
+	auto persisted = false;
+	const auto committed = CommitServerEnrollment(
+		[] { return true; },
+		[&] { persisted = true; },
+		[&] {
+			const auto resumed = gate.resume();
+			CHECK(resumed.resumed);
+			CHECK(!resumed.wasStarted);
+			CHECK(persisted);
+			CHECK(gate.start());
+		});
+
+	CHECK(committed);
+	CHECK(persisted);
 	CHECK(gate.networkAllowed());
 }
 
