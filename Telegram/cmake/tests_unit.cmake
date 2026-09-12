@@ -38,11 +38,13 @@ PRIVATE
     desktop-app::external_zlib
 )
 
-# The mtproto headers are written expecting this prelude — scheme.h, rpl,
-# crl — because every target that compiles them has it precompiled. A test
-# including mtproto_dc_options.h without it fails on MTPDdcOption. Reuse
-# td_mtproto's own header rather than adding includes to app files.
-target_precompile_headers(test_unit PRIVATE ${src_loc}/mtproto/mtproto_pch.h)
+# The production storage sources are written expecting the application's
+# prelude, while the mtproto headers additionally need their own network
+# prelude. Reuse both instead of changing production includes for this test.
+target_precompile_headers(test_unit PRIVATE
+    ${src_loc}/stdafx.h
+    ${src_loc}/mtproto/mtproto_pch.h
+)
 
 nice_target_sources(test_unit ${src_loc}
 PRIVATE

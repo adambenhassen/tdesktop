@@ -80,9 +80,7 @@ Account::Account(
 , _serializeSelf(nullptr)
 , _queueMapWrite(nullptr)
 , _writeMapTimer([this] { writeMap(); })
-, _writePrefsTimer([this] { writePrefs(); })
-, _writeLocationsTimer(nullptr)
-, _writeSearchSuggestionsTimer(nullptr) {
+, _writePrefsTimer([this] { writePrefs(); }) {
 }
 
 #endif // TDESKTOP_UNIT_TESTS
