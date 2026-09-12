@@ -195,6 +195,8 @@ stop_observer_process() {
 	local label="$1"
 	local pid="$2"
 	local expected_fragment="$3"
+	local signal_pid="$pid"
+	local child_pid
 	local command
 	local forced_kill=0
 	local wait_status=0
@@ -222,13 +224,20 @@ stop_observer_process() {
 			return 1
 			;;
 	esac
-	if ! sudo -n kill -INT "$pid" 2>/dev/null && ! kill -INT "$pid" 2>/dev/null; then
+	while read -r child_pid; do
+		[ -n "$child_pid" ] || continue
+		if process_alive "$child_pid" && [[ "$(process_command "$child_pid")" == *"$expected_fragment"* ]]; then
+			signal_pid="$child_pid"
+			break
+		fi
+	done < <(ps -axo pid=,ppid= | awk -v parent="$pid" '$2 == parent { print $1 }')
+	if ! sudo -n kill -INT "$signal_pid" 2>/dev/null && ! kill -INT "$signal_pid" 2>/dev/null; then
 		result=FAIL
 		detail=interrupt-failed
 		forced_kill=1
-		if ! sudo -n kill -KILL "$pid" 2>/dev/null && ! kill -KILL "$pid" 2>/dev/null; then
+		if ! sudo -n kill -KILL "$signal_pid" 2>/dev/null && ! kill -KILL "$signal_pid" 2>/dev/null; then
 			detail=interrupt-and-kill-failed
-		elif ! wait_for_exit "$pid" 5; then
+		elif ! wait_for_exit "$signal_pid" 5; then
 			detail=interrupt-failed-and-process-still-alive
 		fi
 	else
@@ -236,7 +245,7 @@ stop_observer_process() {
 			forced_kill=1
 			result=FAIL
 			detail=forced-kill-after-interrupt-timeout
-			if ! sudo -n kill -KILL "$pid" 2>/dev/null && ! kill -KILL "$pid" 2>/dev/null; then
+			if ! sudo -n kill -KILL "$signal_pid" 2>/dev/null && ! kill -KILL "$signal_pid" 2>/dev/null; then
 				detail=interrupt-timeout-and-kill-failed
 			elif ! wait_for_exit "$pid" 5; then
 				detail=interrupt-timeout-and-process-still-alive
