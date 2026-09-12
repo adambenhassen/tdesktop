@@ -182,7 +182,7 @@ jobs:
               exit 1
             }
           done | tee evidence/architecture-static.txt
-          python3 "$REPO_NAME/Telegram/build/check_mac_fs_usage.py" \
+          python3 "$GITHUB_WORKSPACE/$REPO_NAME/Telegram/build/check_mac_fs_usage.py" \
             --self-test | tee evidence/observer-sensitivity.txt
 
       - name: Run Telegramd isolation gate.
