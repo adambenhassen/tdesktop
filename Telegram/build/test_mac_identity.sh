@@ -39,3 +39,5 @@ grep -F 'fs_usage' "$ISOLATION_FILE" >/dev/null
 grep -F -- '--self-test' "$ISOLATION_FILE" >/dev/null
 grep -F "OFFICIAL_SOURCE=\"\$(find \"\$MOUNT_PATH\" -maxdepth 2 -type d -name '*.app' -print -quit 2>/dev/null || true)\"" "$ISOLATION_FILE" >/dev/null
 grep -F 'set frontmost of (first application process whose unix id is $OFFICIAL_PID) to true' "$ISOLATION_FILE" >/dev/null
+grep -F 'env HOME="$HOME_ROOT" "$OFFICIAL_EXE" -noupdate -debug -workdir "$OLD"' "$ISOLATION_FILE" >/dev/null
+grep -F 'env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$NEW"' "$ISOLATION_FILE" >/dev/null

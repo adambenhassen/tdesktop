@@ -309,7 +309,7 @@ OFFICIAL_EXE="$OFFICIAL_APP/Contents/MacOS/$OFFICIAL_EXE_NAME"
 } > "$EVIDENCE_DIR/official-identity.txt"
 test -x "$OFFICIAL_EXE"
 
-env HOME="$HOME_ROOT" "$OFFICIAL_EXE" -noupdate -debug > "$EVIDENCE_DIR/official.log" 2>&1 &
+env HOME="$HOME_ROOT" "$OFFICIAL_EXE" -noupdate -debug -workdir "$OLD" > "$EVIDENCE_DIR/official.log" 2>&1 &
 OFFICIAL_PID=$!
 wait_for_process "$OFFICIAL_PID" 30 || { echo "official process did not stay alive" >&2; exit 1; }
 printf '%s\n' "$OFFICIAL_PID" > "$EVIDENCE_DIR/official-pid.txt"
@@ -336,7 +336,7 @@ FS_PID=$!
 sleep 1
 process_alive "$FS_PID" || unavailable "fs_usage exited before launch"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug > "$EVIDENCE_DIR/telegramd.log" 2>&1 &
+env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$NEW" > "$EVIDENCE_DIR/telegramd.log" 2>&1 &
 FORK_PID=$!
 wait_for_process "$FORK_PID" 30 || { echo "Telegramd process did not stay alive" >&2; exit 1; }
 printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/telegramd-pid.txt"
@@ -361,9 +361,9 @@ FRONTMOST_AFTER="$(osascript -e 'tell application "System Events" to get bundle 
 printf '%s\n' "$FRONTMOST_AFTER" > "$EVIDENCE_DIR/frontmost-after.txt"
 test "$FRONTMOST_AFTER" != "$OFFICIAL_BUNDLE_ID"
 process_alive "$OFFICIAL_PID" || { echo "official process exited after Telegramd launch" >&2; exit 1; }
-test "$(process_command "$OFFICIAL_PID")" = "$OFFICIAL_EXE -noupdate -debug"
+test "$(process_command "$OFFICIAL_PID")" = "$OFFICIAL_EXE -noupdate -debug -workdir $OLD"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug > "$EVIDENCE_DIR/telegramd-second.log" 2>&1 &
+env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$NEW" > "$EVIDENCE_DIR/telegramd-second.log" 2>&1 &
 SECOND_PID=$!
 sleep 5
 wait "$SECOND_PID" 2>/dev/null || true
