@@ -17,7 +17,11 @@ add_executable(test_unit)
 init_target(test_unit "(tests)")
 
 target_include_directories(test_unit PRIVATE ${src_loc})
-target_compile_definitions(test_unit PRIVATE TDESKTOP_UNIT_TESTS)
+target_compile_definitions(test_unit PRIVATE
+    TDESKTOP_UNIT_TESTS
+    TDESKTOP_API_ID=${TDESKTOP_API_ID}
+    TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
+)
 
 # Xcode links every object from an object-library dependency into each
 # consumer. Keep the test executable's link selective: some mtproto objects
