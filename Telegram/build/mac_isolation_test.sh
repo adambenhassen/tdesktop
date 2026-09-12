@@ -27,6 +27,15 @@ CONTROL_RESULT=""
 CONTROL_PID=""
 CONTROL_CHILD_PID=""
 CONTROL_TRACE=""
+SPAWN_CONTROL_HELPER_PID=""
+SPAWN_CONTROL_OBSERVER_PID=""
+SPAWN_CONTROL_PID=""
+SPAWN_CONTROL_READY=""
+SPAWN_CONTROL_RELEASE=""
+SPAWN_CONTROL_RESULT=""
+SPAWN_CONTROL_PARENT_PID=""
+SPAWN_CONTROL_CHILD_PID=""
+SPAWN_CONTROL_TRACE=""
 OFFICIAL_PID=""
 FORK_PID=""
 SECOND_PID=""
@@ -190,6 +199,52 @@ stop_lifecycle_observer_control() {
 	CONTROL_HELPER_PID=""
 }
 
+stop_spawn_observer_control() {
+	local command
+	local child_command
+	if [ -n "$SPAWN_CONTROL_OBSERVER_PID" ] && process_alive "$SPAWN_CONTROL_OBSERVER_PID"; then
+		command="$(process_command "$SPAWN_CONTROL_OBSERVER_PID")"
+		case "$command" in
+			*fs_usage*)
+				sudo -n kill -INT "$SPAWN_CONTROL_OBSERVER_PID" 2>/dev/null || kill -INT "$SPAWN_CONTROL_OBSERVER_PID" 2>/dev/null || true
+				;;
+			*)
+				record "cleanup refused spawn observer pid=$SPAWN_CONTROL_OBSERVER_PID command=$command"
+				;;
+		esac
+		wait_for_exit "$SPAWN_CONTROL_OBSERVER_PID" 10 || kill -KILL "$SPAWN_CONTROL_OBSERVER_PID" 2>/dev/null || true
+		wait "$SPAWN_CONTROL_OBSERVER_PID" 2>/dev/null || true
+	fi
+	if [ -n "$SPAWN_CONTROL_HELPER_PID" ] && process_alive "$SPAWN_CONTROL_HELPER_PID"; then
+		command="$(process_command "$SPAWN_CONTROL_HELPER_PID")"
+		case "$command" in
+			*python*|*spawn-control*)
+				kill -TERM "$SPAWN_CONTROL_HELPER_PID" 2>/dev/null || true
+				;;
+			*)
+				record "cleanup refused spawn helper pid=$SPAWN_CONTROL_HELPER_PID command=$command"
+				;;
+		esac
+		wait_for_exit "$SPAWN_CONTROL_HELPER_PID" 10 || kill -KILL "$SPAWN_CONTROL_HELPER_PID" 2>/dev/null || true
+		wait "$SPAWN_CONTROL_HELPER_PID" 2>/dev/null || true
+	fi
+	if [ -n "$SPAWN_CONTROL_CHILD_PID" ] && process_alive "$SPAWN_CONTROL_CHILD_PID"; then
+		child_command="$(process_command "$SPAWN_CONTROL_CHILD_PID")"
+		case "$child_command" in
+			/bin/sleep*|*/sleep*)
+				kill -TERM "$SPAWN_CONTROL_CHILD_PID" 2>/dev/null || true
+				;;
+			*)
+				record "cleanup refused spawn child pid=$SPAWN_CONTROL_CHILD_PID command=$child_command"
+				;;
+		esac
+		wait_for_exit "$SPAWN_CONTROL_CHILD_PID" 10 || kill -KILL "$SPAWN_CONTROL_CHILD_PID" 2>/dev/null || true
+		wait "$SPAWN_CONTROL_CHILD_PID" 2>/dev/null || true
+	fi
+	SPAWN_CONTROL_OBSERVER_PID=""
+	SPAWN_CONTROL_HELPER_PID=""
+}
+
 control_observer_unavailable() {
 	local detail="$*"
 	if [ -n "$CONTROL_RELEASE" ]; then
@@ -283,6 +338,114 @@ PY
 	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
 }
 
+spawn_observer_unavailable() {
+	local detail="$*"
+	if [ -n "$SPAWN_CONTROL_RELEASE" ]; then
+		touch "$SPAWN_CONTROL_RELEASE"
+	fi
+	stop_spawn_observer_control
+	unavailable "$detail; see spawn-observer-control.txt and spawn-observer-control-trace.txt"
+}
+
+run_spawn_observer_control() {
+	local control_log="$EVIDENCE_DIR/spawn-observer-control-helper.log"
+	local helper_status=0
+	local child_ppid
+	SPAWN_CONTROL_READY="$RUN_ROOT/spawn-observer-ready"
+	SPAWN_CONTROL_RELEASE="$RUN_ROOT/spawn-observer-release"
+	SPAWN_CONTROL_RESULT="$RUN_ROOT/spawn-observer-result"
+	SPAWN_CONTROL_TRACE="$EVIDENCE_DIR/spawn-observer-control-trace.txt"
+	rm -f "$SPAWN_CONTROL_READY" "$SPAWN_CONTROL_RELEASE" "$SPAWN_CONTROL_RESULT" "$SPAWN_CONTROL_TRACE"
+	{
+		echo "observer=fs_usage -w -F -f exec"
+		echo "control=python os.posix_spawn /bin/sleep"
+		echo "result=NOT_RUN"
+	} > "$EVIDENCE_DIR/spawn-observer-control.txt"
+	if [ ! -x /usr/bin/fs_usage ]; then
+		spawn_observer_unavailable "/usr/bin/fs_usage is unavailable"
+	fi
+	python3 - "$SPAWN_CONTROL_READY" "$SPAWN_CONTROL_RELEASE" "$SPAWN_CONTROL_RESULT" > "$control_log" 2>&1 <<'PY' &
+import os
+import sys
+import time
+
+ready_path, release_path, result_path = sys.argv[1:]
+parent_pid = os.getpid()
+with open(ready_path, "w", encoding="utf-8") as ready:
+    ready.write(str(parent_pid) + "\n")
+    ready.flush()
+while not os.path.exists(release_path):
+    time.sleep(0.01)
+child_pid = os.posix_spawn("/bin/sleep", ["sleep", "3"], os.environ.copy())
+with open(result_path, "w", encoding="utf-8") as result:
+    result.write("%d %d\n" % (parent_pid, child_pid))
+    result.flush()
+_, status = os.waitpid(child_pid, 0)
+if status != 0:
+    raise SystemExit(1)
+PY
+	SPAWN_CONTROL_HELPER_PID=$!
+	if ! wait_for_file "$SPAWN_CONTROL_READY" 10; then
+		spawn_observer_unavailable "exec observer control helper did not become ready"
+	fi
+	SPAWN_CONTROL_PID="$(tr -d '[:space:]' < "$SPAWN_CONTROL_READY")"
+	if ! [[ "$SPAWN_CONTROL_PID" =~ ^[0-9]+$ ]]; then
+		spawn_observer_unavailable "exec observer control reported an invalid parent pid"
+	fi
+	if [ "$SPAWN_CONTROL_PID" != "$SPAWN_CONTROL_HELPER_PID" ]; then
+		spawn_observer_unavailable "exec observer control parent pid changed"
+	fi
+	{
+		echo "parent_pid=$SPAWN_CONTROL_PID"
+		echo "fs_usage_filter=/usr/bin/fs_usage -w -F -f exec $SPAWN_CONTROL_PID"
+	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
+	sudo -n /usr/bin/fs_usage -w -F -f exec "$SPAWN_CONTROL_PID" > "$SPAWN_CONTROL_TRACE" 2>&1 &
+	SPAWN_CONTROL_OBSERVER_PID=$!
+	sleep 1
+	if ! process_alive "$SPAWN_CONTROL_OBSERVER_PID"; then
+		spawn_observer_unavailable "exec observer control could not start fs_usage"
+	fi
+	touch "$SPAWN_CONTROL_RELEASE"
+	if ! wait_for_file "$SPAWN_CONTROL_RESULT" 10; then
+		spawn_observer_unavailable "exec observer control child result did not appear"
+	fi
+	if ! read -r SPAWN_CONTROL_PARENT_PID SPAWN_CONTROL_CHILD_PID < "$SPAWN_CONTROL_RESULT"; then
+		spawn_observer_unavailable "exec observer control result could not be read"
+	fi
+	if ! [[ "$SPAWN_CONTROL_PARENT_PID" =~ ^[0-9]+$ ]] || ! [[ "$SPAWN_CONTROL_CHILD_PID" =~ ^[0-9]+$ ]]; then
+		spawn_observer_unavailable "exec observer control reported invalid parent or child pid"
+	fi
+	if [ "$SPAWN_CONTROL_PARENT_PID" != "$SPAWN_CONTROL_PID" ] || [ "$SPAWN_CONTROL_CHILD_PID" = "$SPAWN_CONTROL_PARENT_PID" ]; then
+		spawn_observer_unavailable "exec observer control parent-child attribution is inconsistent"
+	fi
+	if ! child_ppid="$(ps -p "$SPAWN_CONTROL_CHILD_PID" -o ppid= 2>/dev/null | tr -d '[:space:]')"; then
+		spawn_observer_unavailable "exec observer control could not inspect child pid=$SPAWN_CONTROL_CHILD_PID"
+	fi
+	if [ "$child_ppid" != "$SPAWN_CONTROL_PARENT_PID" ]; then
+		spawn_observer_unavailable "exec observer control child pid=$SPAWN_CONTROL_CHILD_PID has ppid=$child_ppid expected=$SPAWN_CONTROL_PARENT_PID"
+	fi
+	if ! wait_for_exit "$SPAWN_CONTROL_HELPER_PID" 10; then
+		spawn_observer_unavailable "exec observer control helper did not exit"
+	fi
+	wait "$SPAWN_CONTROL_HELPER_PID" || helper_status=$?
+	if [ "$helper_status" -ne 0 ]; then
+		spawn_observer_unavailable "exec observer control helper failed"
+	fi
+	if ! process_alive "$SPAWN_CONTROL_OBSERVER_PID"; then
+		spawn_observer_unavailable "exec observer control fs_usage exited before intentional shutdown"
+	fi
+	stop_spawn_observer_control
+	if ! grep -Ei '(^|[^[:alnum:]_])(spawn|posix_spawn)([^[:alnum:]_]|$)' "$SPAWN_CONTROL_TRACE" > "$EVIDENCE_DIR/spawn-observer-control-events.txt"; then
+		spawn_observer_unavailable "exec observer control missed the posix_spawn event"
+	fi
+	{
+		echo "child_pid=$SPAWN_CONTROL_CHILD_PID"
+		echo "child_ppid=$child_ppid"
+		cat "$EVIDENCE_DIR/spawn-observer-control-events.txt"
+		echo "result=PASS"
+	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
+}
+
 start_pid_observer() {
 	local target_pid="$1"
 	local trace="$TARGET_TRACE_DIR/$target_pid.txt"
@@ -358,13 +521,27 @@ assemble_pid_trace() {
 	done < "$TARGET_OBSERVER_FILE"
 }
 
-check_fork_observer_liveness() {
+check_observer_liveness() {
 	local target_pid
 	local observer_pid
 	local exec_observer_pid
 	local fork_observer_pid
 	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$target_pid" ] || continue
+		if ! process_alive "$observer_pid"; then
+			printf 'target_pid=%s observer=filesystem observer_pid=%s state=exited\n' \
+				"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+			unavailable "filesystem lifecycle observer exited before intentional shutdown for pid=$target_pid"
+		fi
+		printf 'target_pid=%s observer=filesystem observer_pid=%s state=alive\n' \
+			"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+		if ! process_alive "$exec_observer_pid"; then
+			printf 'target_pid=%s observer=exec observer_pid=%s state=exited\n' \
+				"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+			unavailable "exec lifecycle observer exited before intentional shutdown for pid=$target_pid"
+		fi
+		printf 'target_pid=%s observer=exec observer_pid=%s state=alive\n' \
+			"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 		if ! process_alive "$fork_observer_pid"; then
 			printf 'target_pid=%s fork_observer_pid=%s state=exited\n' \
 				"$target_pid" "$fork_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
@@ -745,7 +922,11 @@ cleanup() {
 	if [ -n "$CONTROL_RELEASE" ]; then
 		touch "$CONTROL_RELEASE" 2>/dev/null || true
 	fi
+	if [ -n "$SPAWN_CONTROL_RELEASE" ]; then
+		touch "$SPAWN_CONTROL_RELEASE" 2>/dev/null || true
+	fi
 	stop_lifecycle_observer_control
+	stop_spawn_observer_control
 	stop_trace
 	stop_pid_tracking
 	if [ -n "$SECOND_PID" ]; then
@@ -842,6 +1023,7 @@ trap cleanup EXIT
 	echo "descendant_policy=unavailable-on-unattached-child"
 	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
 	echo "fork_observer_control=short-lived-fork-only-child"
+	echo "spawn_observer_control=short-lived-posix_spawn-with-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
 
@@ -974,6 +1156,7 @@ if ! find "$PORTABLE_ROOT" -print | LC_ALL=C sort > "$EVIDENCE_DIR/portable-tree
 	fail "portable fixture availability" "could not snapshot executable-adjacent portable input"
 fi
 run_lifecycle_observer_control
+run_spawn_observer_control
 
 OFFICIAL_DMG="$RUN_ROOT/official.dmg"
 if ! curl --fail --location --silent --show-error \
@@ -1182,7 +1365,7 @@ if ! ps -axo pid=,ppid=,command= > "$EVIDENCE_DIR/process-table.txt"; then
 	fail "relaunch process table" "ps failed"
 fi
 
-check_fork_observer_liveness
+check_observer_liveness
 stop_trace
 stop_pid_tracking
 if [ -e "$EVIDENCE_DIR/pid-tracking-failure.txt" ]; then

@@ -84,6 +84,7 @@ def scan(lines, old_root, pids):
     ambiguous = []
     coverage = []
     observed_pids = set()
+    parseable_pids = set()
     detected = set()
     target_events = 0
     observer_pid = None
@@ -126,27 +127,49 @@ def scan(lines, old_root, pids):
             violations.append((line_number, operation or "unknown", "direct path", line))
 
         candidates = path_candidates(body)
-        if operation in PATH_OPERATIONS:
+        known_operation = operation in PATH_OPERATIONS
+        if not known_operation:
+            ambiguous.append((line_number, operation or "unknown", line))
+        else:
             detected.add(operation)
-            if not candidates or "..." in body:
+        if not candidates or "..." in body:
+            if known_operation:
                 ambiguous.append((line_number, operation, line))
-                continue
+            # An unknown operation is already ambiguous; there is no
+            # parseable event to record for this PID.
+            continue
 
+        event_ambiguous = not known_operation
         for candidate in candidates:
             if "..." in candidate:
                 ambiguous.append((line_number, operation or "unknown", line))
+                event_ambiguous = True
                 continue
             path = candidate.replace("\\ ", " ")
             if not path.startswith("/"):
                 ambiguous.append((line_number, operation or "unknown", line))
+                event_ambiguous = True
                 continue
             if inside(canonical(path), old_root):
                 violations.append((line_number, operation or "unknown", "canonical path", line))
+        if not event_ambiguous:
+            parseable_pids.add(observer_pid)
 
     missing_pids = sorted(tracked_pids - observed_pids)
     for pid in missing_pids:
         coverage.append((0, "missing observer section pid=%d" % pid, ""))
-    return violations, ambiguous, coverage, detected, target_events, observed_pids
+    missing_event_pids = sorted(tracked_pids - parseable_pids)
+    for pid in missing_event_pids:
+        coverage.append((0, "missing parseable filesystem event pid=%d" % pid, ""))
+    return (
+        violations,
+        ambiguous,
+        coverage,
+        detected,
+        target_events,
+        observed_pids,
+        parseable_pids,
+    )
 
 
 def format_report(
@@ -157,11 +180,13 @@ def format_report(
     target_events,
     tracked_pids,
     observed_pids,
+    parseable_pids,
 ):
     lines = ["detected=" + ",".join(sorted(detected))]
     lines.append("target_events=" + str(target_events))
     lines.append("tracked_os_pids=" + ",".join(str(pid) for pid in sorted(tracked_pids)))
     lines.append("observed_os_pids=" + ",".join(str(pid) for pid in sorted(observed_pids)))
+    lines.append("parseable_os_pids=" + ",".join(str(pid) for pid in sorted(parseable_pids)))
     lines.append("violations=" + str(len(violations)))
     lines.append("ambiguous=" + str(len(ambiguous)))
     lines.append("coverage_gaps=" + str(len(coverage)))
@@ -225,7 +250,15 @@ def self_test():
             allowed,
             thread_suffix + 1,
         ))
-        violations, ambiguous, coverage, detected, target_events, observed_pids = scan(
+        (
+            violations,
+            ambiguous,
+            coverage,
+            detected,
+            target_events,
+            observed_pids,
+            parseable_pids,
+        ) = scan(
             trace,
             old_alias,
             (target_pid,),
@@ -236,6 +269,7 @@ def self_test():
             or coverage
             or target_events != len(trace) - 1
             or observed_pids != {target_pid}
+            or parseable_pids != {target_pid}
             or not expected.issubset(detected)
         ):
             raise AssertionError("observer did not detect all operation classes")
@@ -253,7 +287,15 @@ def self_test():
                 thread_suffix + 1,
             ),
         ]
-        clean_violations, clean_ambiguous, clean_coverage, _, clean_target_events, _ = scan(
+        (
+            clean_violations,
+            clean_ambiguous,
+            clean_coverage,
+            _,
+            clean_target_events,
+            _,
+            clean_parseable_pids,
+        ) = scan(
             clean_trace,
             old_alias,
             (target_pid,),
@@ -263,20 +305,32 @@ def self_test():
             or clean_ambiguous
             or clean_coverage
             or clean_target_events != len(clean_trace) - 1
+            or clean_parseable_pids != {target_pid}
         ):
             raise AssertionError("observer rejected an allowed canonical root")
         truncated_trace = ["# observer-pid=%d" % target_pid] + [
             "12:00:%02d.000 %s ... Telegramd.%d" % (40 + index, operation, thread_suffix)
             for index, operation in enumerate(forbidden)
         ]
-        _, truncated_ambiguous, _, _, _, _ = scan(
+        _, truncated_ambiguous, _, _, _, _, truncated_parseable_pids = scan(
             truncated_trace,
             old_alias,
             (target_pid,),
         )
-        if len(truncated_ambiguous) != len(truncated_trace) - 1:
+        if (
+            len(truncated_ambiguous) != len(truncated_trace) - 1
+            or truncated_parseable_pids
+        ):
             raise AssertionError("observer accepted an ambiguous target event")
-        _, thread_ambiguous, thread_coverage, _, thread_target_events, _ = scan(
+        (
+            _,
+            thread_ambiguous,
+            thread_coverage,
+            _,
+            thread_target_events,
+            _,
+            thread_parseable_pids,
+        ) = scan(
             [
                 "# observer-pid=%d" % target_pid,
                 "12:00:55.000 open %s/tdata/entry 0.001 Telegramd.708875" % allowed,
@@ -284,20 +338,25 @@ def self_test():
             old_alias,
             (target_pid,),
         )
-        if thread_ambiguous or thread_coverage or thread_target_events != 1:
+        if (
+            thread_ambiguous
+            or thread_coverage
+            or thread_target_events != 1
+            or thread_parseable_pids != {target_pid}
+        ):
             raise AssertionError("observer treated a thread suffix as an OS pid")
         missing_suffix_trace = [
             "# observer-pid=%d" % target_pid,
             "12:00:56.000 open %s/tdata/entry 0.001 Telegramd" % allowed,
         ]
-        _, missing_suffix_ambiguous, _, _, _, _ = scan(
+        _, missing_suffix_ambiguous, _, _, _, _, missing_suffix_parseable_pids = scan(
             missing_suffix_trace,
             old_alias,
             (target_pid,),
         )
-        if not missing_suffix_ambiguous:
+        if missing_suffix_parseable_pids or not missing_suffix_ambiguous:
             raise AssertionError("observer accepted a target event without a thread suffix")
-        _, _, untracked_coverage, _, _, _ = scan(
+        _, _, untracked_coverage, _, _, _, _ = scan(
             [
                 "# observer-pid=99999",
                 "12:00:57.000 open %s/tdata/entry 0.001 Telegramd.9999" % allowed,
@@ -307,7 +366,7 @@ def self_test():
         )
         if not untracked_coverage:
             raise AssertionError("observer accepted an untracked OS pid section")
-        _, _, missing_section_coverage, _, _, _ = scan(
+        _, _, missing_section_coverage, _, _, _, _ = scan(
             [
                 "# observer-pid=%d" % target_pid,
                 "12:00:58.000 open %s/tdata/entry 0.001 Telegramd.%d" % (
@@ -323,6 +382,70 @@ def self_test():
             for _, reason, _ in missing_section_coverage
         ):
             raise AssertionError("observer accepted a missing tracked PID section")
+        (
+            missing_event_violations,
+            missing_event_ambiguous,
+            missing_event_coverage,
+            _,
+            missing_event_target_events,
+            missing_event_observed_pids,
+            missing_event_parseable_pids,
+        ) = scan(
+            [
+                "# observer-pid=%d" % target_pid,
+                "12:00:59.000 open %s/tdata/entry 0.001 Telegramd.%d" % (
+                    allowed,
+                    thread_suffix,
+                ),
+                "# observer-pid=%d" % (target_pid + 1),
+            ],
+            old_alias,
+            (target_pid, target_pid + 1),
+        )
+        if (
+            missing_event_violations
+            or missing_event_ambiguous
+            or missing_event_target_events != 1
+            or missing_event_observed_pids != {target_pid, target_pid + 1}
+            or missing_event_parseable_pids != {target_pid}
+            or not any(
+                "missing parseable filesystem event pid=%d" % (target_pid + 1)
+                in reason
+                for _, reason, _ in missing_event_coverage
+            )
+        ):
+            raise AssertionError("observer accepted a header-only tracked PID section")
+        (
+            unknown_violations,
+            unknown_ambiguous,
+            unknown_coverage,
+            _,
+            unknown_target_events,
+            _,
+            unknown_parseable_pids,
+        ) = scan(
+            [
+                "# observer-pid=%d" % target_pid,
+                "12:01:00.000 open %s/tdata/entry 0.001 Telegramd.%d" % (
+                    allowed,
+                    thread_suffix,
+                ),
+                "12:01:01.000 setattrlist %s/tdata/forbidden 0.001 Telegramd.%d" % (
+                    alias,
+                    thread_suffix,
+                ),
+            ],
+            old_alias,
+            (target_pid,),
+        )
+        if (
+            not unknown_violations
+            or len(unknown_ambiguous) != 1
+            or unknown_coverage
+            or unknown_target_events != 2
+            or unknown_parseable_pids != {target_pid}
+        ):
+            raise AssertionError("observer accepted an unknown filesystem operation")
         return "canonical-alias=PASS\ndetected=" + ",".join(sorted(expected)) + "\n"
 
 
@@ -339,7 +462,15 @@ def main(argv):
         pids = [int(line.strip()) for line in pid_file if line.strip()]
     with open(trace_path, encoding="utf-8", errors="replace") as trace_file:
         lines = trace_file.readlines()
-    violations, ambiguous, coverage, detected, target_events, observed_pids = scan(
+    (
+        violations,
+        ambiguous,
+        coverage,
+        detected,
+        target_events,
+        observed_pids,
+        parseable_pids,
+    ) = scan(
         lines,
         old_root,
         pids,
@@ -352,6 +483,7 @@ def main(argv):
         target_events,
         set(pids),
         observed_pids,
+        parseable_pids,
     )
     with open(report_path, "w", encoding="utf-8") as output:
         output.write(report)
