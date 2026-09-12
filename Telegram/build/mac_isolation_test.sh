@@ -19,6 +19,14 @@ OFFICIAL_EXE=""
 FORK_APP=""
 FORK_EXE=""
 LAUNCHED_PID=""
+CONTROL_HELPER_PID=""
+CONTROL_DTRACE_PID=""
+CONTROL_READY=""
+CONTROL_RELEASE=""
+CONTROL_RESULT=""
+CONTROL_PID=""
+CONTROL_CHILD_PID=""
+CONTROL_TRACE=""
 OFFICIAL_PID=""
 FORK_PID=""
 SECOND_PID=""
@@ -31,6 +39,7 @@ PID_LOCK_DIR=""
 TRACK_STOP_FILE=""
 TARGET_TRACE_DIR=""
 TARGET_EXEC_DIR=""
+TARGET_FORK_DIR=""
 TARGET_OBSERVER_FILE=""
 MOUNT_PATH=""
 MOUNTED=0
@@ -149,12 +158,140 @@ launch_suspended() {
 	wait_for_stopped "$LAUNCHED_PID" 10 || fail "suspended Telegramd launch" "pid=$LAUNCHED_PID did not stop before observation"
 }
 
+stop_lifecycle_observer_control() {
+	local command
+	if [ -n "$CONTROL_DTRACE_PID" ] && process_alive "$CONTROL_DTRACE_PID"; then
+		command="$(process_command "$CONTROL_DTRACE_PID")"
+		case "$command" in
+			*dtrace*)
+				sudo -n kill -INT "$CONTROL_DTRACE_PID" 2>/dev/null || kill -INT "$CONTROL_DTRACE_PID" 2>/dev/null || true
+				;;
+			*)
+				record "cleanup refused lifecycle dtrace pid=$CONTROL_DTRACE_PID command=$command"
+				;;
+		esac
+		wait_for_exit "$CONTROL_DTRACE_PID" 10 || kill -KILL "$CONTROL_DTRACE_PID" 2>/dev/null || true
+		wait "$CONTROL_DTRACE_PID" 2>/dev/null || true
+	fi
+	if [ -n "$CONTROL_HELPER_PID" ] && process_alive "$CONTROL_HELPER_PID"; then
+		command="$(process_command "$CONTROL_HELPER_PID")"
+		case "$command" in
+			*python*|*observer-control*)
+				kill -TERM "$CONTROL_HELPER_PID" 2>/dev/null || true
+				;;
+			*)
+				record "cleanup refused lifecycle helper pid=$CONTROL_HELPER_PID command=$command"
+				;;
+		esac
+		wait_for_exit "$CONTROL_HELPER_PID" 10 || kill -KILL "$CONTROL_HELPER_PID" 2>/dev/null || true
+		wait "$CONTROL_HELPER_PID" 2>/dev/null || true
+	fi
+	CONTROL_DTRACE_PID=""
+	CONTROL_HELPER_PID=""
+}
+
+control_observer_unavailable() {
+	local detail="$*"
+	if [ -n "$CONTROL_RELEASE" ]; then
+		touch "$CONTROL_RELEASE"
+	fi
+	stop_lifecycle_observer_control
+	unavailable "$detail; see lifecycle-observer-control.txt and lifecycle-observer-control-trace.txt"
+}
+
+run_lifecycle_observer_control() {
+	local control_log="$EVIDENCE_DIR/lifecycle-observer-control-helper.log"
+	local dtrace_program
+	local helper_status=0
+	local child_pid
+	CONTROL_READY="$RUN_ROOT/observer-control-ready"
+	CONTROL_RELEASE="$RUN_ROOT/observer-control-release"
+	CONTROL_RESULT="$RUN_ROOT/observer-control-result"
+	CONTROL_TRACE="$EVIDENCE_DIR/lifecycle-observer-control-trace.txt"
+	rm -f "$CONTROL_READY" "$CONTROL_RELEASE" "$CONTROL_RESULT" "$CONTROL_TRACE"
+	{
+		echo "observer=dtrace syscall fork:return"
+		echo "control=python os.fork child os._exit without exec"
+		echo "result=NOT_RUN"
+	} > "$EVIDENCE_DIR/lifecycle-observer-control.txt"
+	if [ ! -x /usr/sbin/dtrace ]; then
+		control_observer_unavailable "/usr/sbin/dtrace is unavailable"
+	fi
+	python3 - "$CONTROL_READY" "$CONTROL_RELEASE" "$CONTROL_RESULT" > "$control_log" 2>&1 <<'PY' &
+import os
+import sys
+import time
+
+ready_path, release_path, result_path = sys.argv[1:]
+with open(ready_path, "w", encoding="utf-8") as ready:
+    ready.write(str(os.getpid()) + "\n")
+    ready.flush()
+while not os.path.exists(release_path):
+    time.sleep(0.01)
+child_pid = os.fork()
+if child_pid == 0:
+    os._exit(0)
+with open(result_path, "w", encoding="utf-8") as result:
+    result.write(str(child_pid) + "\n")
+_, status = os.waitpid(child_pid, 0)
+if status != 0:
+    raise SystemExit(1)
+PY
+	CONTROL_HELPER_PID=$!
+	if ! wait_for_file "$CONTROL_READY" 10; then
+		control_observer_unavailable "fork observer control helper did not become ready"
+	fi
+	CONTROL_PID="$(tr -d '[:space:]' < "$CONTROL_READY")"
+	if ! [[ "$CONTROL_PID" =~ ^[0-9]+$ ]]; then
+		control_observer_unavailable "fork observer control reported an invalid parent pid"
+	fi
+	dtrace_program="syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
+	{
+		echo "parent_pid=$CONTROL_PID"
+		echo "dtrace_program=$dtrace_program"
+	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
+	sudo -n /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1 &
+	CONTROL_DTRACE_PID=$!
+	sleep 1
+	if ! process_alive "$CONTROL_DTRACE_PID"; then
+		control_observer_unavailable "fork observer control could not start dtrace"
+	fi
+	touch "$CONTROL_RELEASE"
+	if ! wait_for_file "$CONTROL_RESULT" 10; then
+		control_observer_unavailable "fork observer control child result did not appear"
+	fi
+	child_pid="$(tr -d '[:space:]' < "$CONTROL_RESULT")"
+	if ! [[ "$child_pid" =~ ^[0-9]+$ ]]; then
+		control_observer_unavailable "fork observer control reported an invalid child pid"
+	fi
+	if ! wait_for_exit "$CONTROL_HELPER_PID" 10; then
+		control_observer_unavailable "fork observer control helper did not exit"
+	fi
+	wait "$CONTROL_HELPER_PID" || helper_status=$?
+	if [ "$helper_status" -ne 0 ]; then
+		control_observer_unavailable "fork observer control helper failed"
+	fi
+	sleep 1
+	stop_lifecycle_observer_control
+	if ! grep -F "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1; then
+		control_observer_unavailable "fork observer missed a short-lived fork-only child"
+	fi
+	{
+		echo "child_pid=$child_pid"
+		echo "detected=fork parent=$CONTROL_PID child=$child_pid"
+		echo "result=PASS"
+	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
+}
+
 start_pid_observer() {
 	local target_pid="$1"
 	local trace="$TARGET_TRACE_DIR/$target_pid.txt"
 	local exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+	local fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 	local observer_pid
 	local exec_observer_pid
+	local fork_observer_pid
+	local fork_program
 	if grep -E "^${target_pid} " "$TARGET_OBSERVER_FILE" >/dev/null 2>&1; then
 		return 0
 	fi
@@ -162,18 +299,23 @@ start_pid_observer() {
 	observer_pid=$!
 	sudo -n /usr/bin/fs_usage -w -F -f exec "$target_pid" > "$exec_trace" 2>&1 &
 	exec_observer_pid=$!
-	printf '%s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" >> "$TARGET_OBSERVER_FILE"
+	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
+	sudo -n /usr/sbin/dtrace -q -n "$fork_program" > "$fork_trace" 2>&1 &
+	fork_observer_pid=$!
+	printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"
 	{
 		echo "target_pid=$target_pid"
 		echo "filesystem_observer_pid=$observer_pid"
 		echo "exec_observer_pid=$exec_observer_pid"
+		echo "fork_observer_pid=$fork_observer_pid"
 		echo "filesystem_filter=/usr/bin/fs_usage -w -F -f filesys $target_pid"
 		echo "exec_filter=/usr/bin/fs_usage -w -F -f exec $target_pid"
+		echo "fork_filter=/usr/sbin/dtrace -q -n $fork_program"
 	} >> "$EVIDENCE_DIR/observer-commands.txt"
 	sleep 1
-	if ! process_alive "$observer_pid" || ! process_alive "$exec_observer_pid"; then
+	if ! process_alive "$observer_pid" || ! process_alive "$exec_observer_pid" || ! process_alive "$fork_observer_pid"; then
 		kill -CONT "$target_pid" 2>/dev/null || true
-		unavailable "PID-filtered fs_usage observer failed for pid=$target_pid"
+		unavailable "PID-filtered lifecycle observer failed for pid=$target_pid"
 	fi
 }
 
@@ -183,7 +325,8 @@ stop_pid_observers() {
 	local target_pid
 	local observer_pid
 	local exec_observer_pid
-	while read -r target_pid observer_pid exec_observer_pid; do
+	local fork_observer_pid
+	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$observer_pid" ] || continue
 		if process_alive "$observer_pid"; then
 			sudo -n kill -INT "$observer_pid" 2>/dev/null || kill -INT "$observer_pid" 2>/dev/null || true
@@ -191,10 +334,15 @@ stop_pid_observers() {
 		if process_alive "$exec_observer_pid"; then
 			sudo -n kill -INT "$exec_observer_pid" 2>/dev/null || kill -INT "$exec_observer_pid" 2>/dev/null || true
 		fi
+		if process_alive "$fork_observer_pid"; then
+			sudo -n kill -INT "$fork_observer_pid" 2>/dev/null || kill -INT "$fork_observer_pid" 2>/dev/null || true
+		fi
 		wait_for_exit "$observer_pid" 10 || kill -KILL "$observer_pid" 2>/dev/null || true
 		wait_for_exit "$exec_observer_pid" 10 || kill -KILL "$exec_observer_pid" 2>/dev/null || true
+		wait_for_exit "$fork_observer_pid" 10 || kill -KILL "$fork_observer_pid" 2>/dev/null || true
 		wait "$observer_pid" 2>/dev/null || true
 		wait "$exec_observer_pid" 2>/dev/null || true
+		wait "$fork_observer_pid" 2>/dev/null || true
 	done < "$TARGET_OBSERVER_FILE"
 	TRACE_STOPPED=1
 	record "PID-filtered fs_usage observers stopped"
@@ -203,10 +351,27 @@ stop_pid_observers() {
 assemble_pid_trace() {
 	TRACE="$EVIDENCE_DIR/fs_usage.txt"
 	: > "$TRACE"
-	while read -r target_pid observer_pid exec_observer_pid; do
+	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$target_pid" ] || continue
 		printf '# observer-pid=%s\n' "$target_pid" >> "$TRACE"
 		cat "$TARGET_TRACE_DIR/$target_pid.txt" >> "$TRACE" || fail "filesystem observer evidence" "could not read pid=$target_pid trace"
+	done < "$TARGET_OBSERVER_FILE"
+}
+
+check_fork_observer_liveness() {
+	local target_pid
+	local observer_pid
+	local exec_observer_pid
+	local fork_observer_pid
+	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
+		[ -n "$target_pid" ] || continue
+		if ! process_alive "$fork_observer_pid"; then
+			printf 'target_pid=%s fork_observer_pid=%s state=exited\n' \
+				"$target_pid" "$fork_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+			unavailable "fork lifecycle observer exited before lifecycle completion for pid=$target_pid"
+		fi
+		printf 'target_pid=%s fork_observer_pid=%s state=alive\n' \
+			"$target_pid" "$fork_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 	done < "$TARGET_OBSERVER_FILE"
 }
 
@@ -214,19 +379,32 @@ check_process_observer_coverage() {
 	local target_pid
 	local observer_pid
 	local exec_observer_pid
+	local fork_observer_pid
 	local exec_trace
-	: > "$EVIDENCE_DIR/descendant-process-events.txt"
-	while read -r target_pid observer_pid exec_observer_pid; do
+	local fork_trace
+	: > "$EVIDENCE_DIR/descendant-fork-events.txt"
+	: > "$EVIDENCE_DIR/descendant-spawn-events.txt"
+	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$target_pid" ] || continue
 		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+		fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 		if [ ! -s "$TARGET_TRACE_DIR/$target_pid.txt" ]; then
 			unavailable "PID-filtered fs_usage captured no filesystem events for pid=$target_pid"
 		fi
 		if [ ! -s "$exec_trace" ]; then
 			unavailable "PID-filtered process observer captured no exec events for pid=$target_pid"
 		fi
-		if grep -Ei '(^|[^[:alnum:]_])(fork|spawn|posix_spawn)([^[:alnum:]_]|$)' "$exec_trace" >> "$EVIDENCE_DIR/descendant-process-events.txt"; then
-			unavailable "Telegramd created a descendant before it could be observed with a PID filter"
+		if [ ! -e "$fork_trace" ]; then
+			unavailable "fork observer evidence is missing for pid=$target_pid"
+		fi
+		if grep -Ei '^dtrace: (failed|error)' "$fork_trace" >/dev/null 2>&1; then
+			unavailable "fork observer reported an error for pid=$target_pid"
+		fi
+		if grep -E 'fork parent=[0-9]+ child=[0-9]+' "$fork_trace" >> "$EVIDENCE_DIR/descendant-fork-events.txt"; then
+			unavailable "Telegramd created a forked descendant before it could be observed with a PID filter"
+		fi
+		if grep -Ei '(^|[^[:alnum:]_])(spawn|posix_spawn)([^[:alnum:]_]|$)' "$exec_trace" >> "$EVIDENCE_DIR/descendant-spawn-events.txt"; then
+			unavailable "Telegramd created a spawned descendant before it could be observed with a PID filter"
 		fi
 	done < "$TARGET_OBSERVER_FILE"
 }
@@ -564,6 +742,10 @@ cleanup() {
 	local exit_code=$?
 	local cleanup_failed=0
 	set +e
+	if [ -n "$CONTROL_RELEASE" ]; then
+		touch "$CONTROL_RELEASE" 2>/dev/null || true
+	fi
+	stop_lifecycle_observer_control
 	stop_trace
 	stop_pid_tracking
 	if [ -n "$SECOND_PID" ]; then
@@ -656,8 +838,10 @@ trap cleanup EXIT
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
 	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
-	echo "observer_mode=one-kernel-filtered-fs_usage-and-exec-observer-per-root-pid"
+	echo "observer_mode=kernel-filtered-fs_usage-exec-and-dtrace-fork-observer-per-root-pid"
 	echo "descendant_policy=unavailable-on-unattached-child"
+	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
+	echo "fork_observer_control=short-lived-fork-only-child"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
 
@@ -789,6 +973,7 @@ done > "$EVIDENCE_DIR/canaries-before.txt"
 if ! find "$PORTABLE_ROOT" -print | LC_ALL=C sort > "$EVIDENCE_DIR/portable-tree-before.txt"; then
 	fail "portable fixture availability" "could not snapshot executable-adjacent portable input"
 fi
+run_lifecycle_observer_control
 
 OFFICIAL_DMG="$RUN_ROOT/official.dmg"
 if ! curl --fail --location --silent --show-error \
@@ -853,10 +1038,12 @@ wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints.txt" "official e
 
 TARGET_TRACE_DIR="$EVIDENCE_DIR/fs_usage-pid"
 TARGET_EXEC_DIR="$EVIDENCE_DIR/fs_usage-exec"
+TARGET_FORK_DIR="$EVIDENCE_DIR/fs_usage-fork"
 TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
-mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR"
+mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR" "$TARGET_FORK_DIR"
 : > "$TARGET_OBSERVER_FILE"
 : > "$EVIDENCE_DIR/observer-commands.txt"
+: > "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 launch_suspended "$EVIDENCE_DIR/telegramd.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
 FORK_PID="$LAUNCHED_PID"
 LAUNCHED_PID=""
@@ -995,6 +1182,7 @@ if ! ps -axo pid=,ppid=,command= > "$EVIDENCE_DIR/process-table.txt"; then
 	fail "relaunch process table" "ps failed"
 fi
 
+check_fork_observer_liveness
 stop_trace
 stop_pid_tracking
 if [ -e "$EVIDENCE_DIR/pid-tracking-failure.txt" ]; then
