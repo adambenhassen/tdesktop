@@ -439,7 +439,7 @@ stop_lifecycle_observer_control() {
 stop_spawn_observer_control() {
 	local stop_failed=0
 	if [ -n "$SPAWN_CONTROL_OBSERVER_PID" ]; then
-		stop_observer_process "spawn-fs-usage" "$SPAWN_CONTROL_OBSERVER_PID" "fs_usage" "$SPAWN_CONTROL_TRACE" || stop_failed=1
+		stop_observer_process "spawn-dtrace" "$SPAWN_CONTROL_OBSERVER_PID" "dtrace" "$SPAWN_CONTROL_TRACE" || stop_failed=1
 	fi
 	stop_helper_process "spawn-control-child" "$SPAWN_CONTROL_CHILD_PID" "sleep" || stop_failed=1
 	stop_helper_process "spawn-control" "$SPAWN_CONTROL_HELPER_PID" "python" || stop_failed=1
@@ -555,6 +555,7 @@ spawn_observer_unavailable() {
 
 run_spawn_observer_control() {
 	local control_log="$EVIDENCE_DIR/spawn-observer-control-helper.log"
+	local dtrace_program
 	local helper_status=0
 	local child_ppid
 	SPAWN_CONTROL_READY="$RUN_ROOT/spawn-observer-ready"
@@ -563,12 +564,12 @@ run_spawn_observer_control() {
 	SPAWN_CONTROL_TRACE="$EVIDENCE_DIR/spawn-observer-control-trace.txt"
 	rm -f "$SPAWN_CONTROL_READY" "$SPAWN_CONTROL_RELEASE" "$SPAWN_CONTROL_RESULT" "$SPAWN_CONTROL_TRACE"
 	{
-		echo "observer=fs_usage -w -F -f exec"
+		echo "observer=dtrace syscall posix_spawn and proc exec-success"
 		echo "control=python os.posix_spawn /bin/sleep"
 		echo "result=NOT_RUN"
 	} > "$EVIDENCE_DIR/spawn-observer-control.txt"
-	if [ ! -x /usr/bin/fs_usage ]; then
-		spawn_observer_unavailable "/usr/bin/fs_usage is unavailable"
+	if [ ! -x /usr/sbin/dtrace ]; then
+		spawn_observer_unavailable "/usr/sbin/dtrace is unavailable"
 	fi
 	python3 - "$SPAWN_CONTROL_READY" "$SPAWN_CONTROL_RELEASE" "$SPAWN_CONTROL_RESULT" > "$control_log" 2>&1 <<'PY' &
 import os
@@ -601,15 +602,15 @@ PY
 	if [ "$SPAWN_CONTROL_PID" != "$SPAWN_CONTROL_HELPER_PID" ]; then
 		spawn_observer_unavailable "exec observer control parent pid changed"
 	fi
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::posix_spawn:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"posix_spawn parent=%d\\n\", pid); } proc:::exec-success /ppid == $SPAWN_CONTROL_PID/ { printf(\"exec-success parent=%d child=%d name=%s\\n\", ppid, pid, execname); }"
 	{
 		echo "parent_pid=$SPAWN_CONTROL_PID"
-		echo "fs_usage_filter=/usr/bin/fs_usage -w -F -f exec $SPAWN_CONTROL_PID"
+		echo "dtrace_program=$dtrace_program"
 	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
-	start_privileged_observer /usr/bin/fs_usage -w -F -f exec "$SPAWN_CONTROL_PID" > "$SPAWN_CONTROL_TRACE" 2>&1
+	start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$SPAWN_CONTROL_TRACE" 2>&1
 	SPAWN_CONTROL_OBSERVER_PID=$OBSERVER_LAUNCH_PID
-	sleep 1
-	if ! process_alive "$SPAWN_CONTROL_OBSERVER_PID"; then
-		spawn_observer_unavailable "exec observer control could not start fs_usage"
+	if ! wait_for_trace_marker "$SPAWN_CONTROL_OBSERVER_PID" "$SPAWN_CONTROL_TRACE" "observer-ready" 10; then
+		spawn_observer_unavailable "exec observer control did not report dtrace readiness"
 	fi
 	touch "$SPAWN_CONTROL_RELEASE"
 	if ! wait_for_file "$SPAWN_CONTROL_RESULT" 10; then
@@ -638,17 +639,22 @@ PY
 		spawn_observer_unavailable "exec observer control helper failed"
 	fi
 	if ! process_alive "$SPAWN_CONTROL_OBSERVER_PID"; then
-		spawn_observer_unavailable "exec observer control fs_usage exited before intentional shutdown"
+		spawn_observer_unavailable "exec observer control dtrace exited before intentional shutdown"
 	fi
 	if ! stop_spawn_observer_control; then
 		spawn_observer_unavailable "exec observer shutdown or flush failed"
 	fi
-	if ! grep -Ei '(^|[^[:alnum:]_])(spawn|posix_spawn)([^[:alnum:]_]|$)' "$SPAWN_CONTROL_TRACE" > "$EVIDENCE_DIR/spawn-observer-control-events.txt"; then
-		spawn_observer_unavailable "exec observer control missed the posix_spawn event"
+	if ! grep -F -- "posix_spawn parent=$SPAWN_CONTROL_PARENT_PID" "$SPAWN_CONTROL_TRACE" > "$EVIDENCE_DIR/spawn-observer-control-events.txt"; then
+		spawn_observer_unavailable "exec observer control missed the parent posix_spawn event"
+	fi
+	if ! grep -F -- "exec-success parent=$SPAWN_CONTROL_PARENT_PID child=$SPAWN_CONTROL_CHILD_PID" "$SPAWN_CONTROL_TRACE" >> "$EVIDENCE_DIR/spawn-observer-control-events.txt"; then
+		spawn_observer_unavailable "exec observer control missed the attributed child exec event"
 	fi
 	{
+		echo "parent_pid=$SPAWN_CONTROL_PARENT_PID"
 		echo "child_pid=$SPAWN_CONTROL_CHILD_PID"
 		echo "child_ppid=$child_ppid"
+		echo "detected=posix_spawn parent=$SPAWN_CONTROL_PARENT_PID child=$SPAWN_CONTROL_CHILD_PID"
 		cat "$EVIDENCE_DIR/spawn-observer-control-events.txt"
 		echo "result=PASS"
 	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
@@ -1489,7 +1495,7 @@ trap cleanup EXIT
 	echo "descendant_policy=every-tracked-pid-must-have-independent-observer"
 	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
 	echo "fork_observer_control=short-lived-fork-only-child"
-	echo "spawn_observer_control=short-lived-posix_spawn-with-parent-child-attribution"
+	echo "spawn_observer_control=readiness-gated-dtrace-posix_spawn-and-exec-success-with-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
 
