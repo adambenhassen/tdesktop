@@ -16,18 +16,22 @@ RUN_ROOT=""
 HOME_ROOT=""
 OFFICIAL_APP=""
 OFFICIAL_EXE=""
+FORK_APP=""
 FORK_EXE=""
+LAUNCHED_PID=""
 OFFICIAL_PID=""
 FORK_PID=""
 SECOND_PID=""
 QUIT_PID=""
 RELAUNCH_PID=""
-FS_PID=""
 TRACKER_PID=""
 PID_ROOTS_FILE=""
 PID_FILE=""
 PID_LOCK_DIR=""
 TRACK_STOP_FILE=""
+TARGET_TRACE_DIR=""
+TARGET_EXEC_DIR=""
+TARGET_OBSERVER_FILE=""
 MOUNT_PATH=""
 MOUNTED=0
 TRACE_STOPPED=0
@@ -119,6 +123,112 @@ wait_for_file() {
 		sleep 1
 	done
 	return 1
+}
+
+wait_for_stopped() {
+	local pid="$1"
+	local seconds="$2"
+	local state
+	local i
+	for i in $(seq 1 $((seconds * 10))); do
+		state="$(ps -p "$pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+		case "$state" in
+			T*) return 0 ;;
+			"") return 1 ;;
+		esac
+		sleep 0.1
+	done
+	return 1
+}
+
+launch_suspended() {
+	local output="$1"
+	shift
+	env HOME="$HOME_ROOT" /bin/sh -c 'kill -STOP $$; exec "$@"' telegramd-launcher "$FORK_EXE" "$@" > "$output" 2>&1 &
+	LAUNCHED_PID=$!
+	wait_for_stopped "$LAUNCHED_PID" 10 || fail "suspended Telegramd launch" "pid=$LAUNCHED_PID did not stop before observation"
+}
+
+start_pid_observer() {
+	local target_pid="$1"
+	local trace="$TARGET_TRACE_DIR/$target_pid.txt"
+	local exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+	local observer_pid
+	local exec_observer_pid
+	if grep -E "^${target_pid} " "$TARGET_OBSERVER_FILE" >/dev/null 2>&1; then
+		return 0
+	fi
+	sudo -n /usr/bin/fs_usage -w -F -f filesys "$target_pid" > "$trace" 2>&1 &
+	observer_pid=$!
+	sudo -n /usr/bin/fs_usage -w -F -f exec "$target_pid" > "$exec_trace" 2>&1 &
+	exec_observer_pid=$!
+	printf '%s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" >> "$TARGET_OBSERVER_FILE"
+	{
+		echo "target_pid=$target_pid"
+		echo "filesystem_observer_pid=$observer_pid"
+		echo "exec_observer_pid=$exec_observer_pid"
+		echo "filesystem_filter=/usr/bin/fs_usage -w -F -f filesys $target_pid"
+		echo "exec_filter=/usr/bin/fs_usage -w -F -f exec $target_pid"
+	} >> "$EVIDENCE_DIR/observer-commands.txt"
+	sleep 1
+	if ! process_alive "$observer_pid" || ! process_alive "$exec_observer_pid"; then
+		kill -CONT "$target_pid" 2>/dev/null || true
+		unavailable "PID-filtered fs_usage observer failed for pid=$target_pid"
+	fi
+}
+
+stop_pid_observers() {
+	[ -n "$TARGET_OBSERVER_FILE" ] || return 0
+	[ -f "$TARGET_OBSERVER_FILE" ] || return 0
+	local target_pid
+	local observer_pid
+	local exec_observer_pid
+	while read -r target_pid observer_pid exec_observer_pid; do
+		[ -n "$observer_pid" ] || continue
+		if process_alive "$observer_pid"; then
+			sudo -n kill -INT "$observer_pid" 2>/dev/null || kill -INT "$observer_pid" 2>/dev/null || true
+		fi
+		if process_alive "$exec_observer_pid"; then
+			sudo -n kill -INT "$exec_observer_pid" 2>/dev/null || kill -INT "$exec_observer_pid" 2>/dev/null || true
+		fi
+		wait_for_exit "$observer_pid" 10 || kill -KILL "$observer_pid" 2>/dev/null || true
+		wait_for_exit "$exec_observer_pid" 10 || kill -KILL "$exec_observer_pid" 2>/dev/null || true
+		wait "$observer_pid" 2>/dev/null || true
+		wait "$exec_observer_pid" 2>/dev/null || true
+	done < "$TARGET_OBSERVER_FILE"
+	TRACE_STOPPED=1
+	record "PID-filtered fs_usage observers stopped"
+}
+
+assemble_pid_trace() {
+	TRACE="$EVIDENCE_DIR/fs_usage.txt"
+	: > "$TRACE"
+	while read -r target_pid observer_pid exec_observer_pid; do
+		[ -n "$target_pid" ] || continue
+		printf '# observer-pid=%s\n' "$target_pid" >> "$TRACE"
+		cat "$TARGET_TRACE_DIR/$target_pid.txt" >> "$TRACE" || fail "filesystem observer evidence" "could not read pid=$target_pid trace"
+	done < "$TARGET_OBSERVER_FILE"
+}
+
+check_process_observer_coverage() {
+	local target_pid
+	local observer_pid
+	local exec_observer_pid
+	local exec_trace
+	: > "$EVIDENCE_DIR/descendant-process-events.txt"
+	while read -r target_pid observer_pid exec_observer_pid; do
+		[ -n "$target_pid" ] || continue
+		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+		if [ ! -s "$TARGET_TRACE_DIR/$target_pid.txt" ]; then
+			unavailable "PID-filtered fs_usage captured no filesystem events for pid=$target_pid"
+		fi
+		if [ ! -s "$exec_trace" ]; then
+			unavailable "PID-filtered process observer captured no exec events for pid=$target_pid"
+		fi
+		if grep -Ei '(^|[^[:alnum:]_])(fork|spawn|posix_spawn)([^[:alnum:]_]|$)' "$exec_trace" >> "$EVIDENCE_DIR/descendant-process-events.txt"; then
+			unavailable "Telegramd created a descendant before it could be observed with a PID filter"
+		fi
+	done < "$TARGET_OBSERVER_FILE"
 }
 
 assert_alive() {
@@ -312,22 +422,10 @@ assert_live_fork_process_count() {
 }
 
 stop_trace() {
-	if [ "$TRACE_STOPPED" -eq 1 ] || [ -z "$FS_PID" ]; then
+	if [ "$TRACE_STOPPED" -eq 1 ] || [ -z "$TARGET_OBSERVER_FILE" ]; then
 		return
 	fi
-	if process_alive "$FS_PID"; then
-		sudo -n kill -INT "$FS_PID" 2>/dev/null || kill -INT "$FS_PID" 2>/dev/null || true
-	fi
-	if ! wait_for_exit "$FS_PID" 10; then
-		record "fs_usage did not stop after SIGINT; escalating"
-		kill -TERM "$FS_PID" 2>/dev/null || true
-		if ! wait_for_exit "$FS_PID" 5; then
-			kill -KILL "$FS_PID" 2>/dev/null || true
-		fi
-	fi
-	wait "$FS_PID" 2>/dev/null || true
-	TRACE_STOPPED=1
-	record "fs_usage stopped pid=$FS_PID"
+	stop_pid_observers
 }
 
 terminate_recorded_process() {
@@ -425,6 +523,43 @@ terminate_process_tree() {
 	done
 }
 
+terminate_unclaimed_launcher() {
+	local pid="$1"
+	local command
+	local i
+	if ! process_alive "$pid"; then
+		return 0
+	fi
+	command="$(process_command "$pid")"
+	case "$command" in
+		*'kill -STOP $$'*)
+			kill -CONT "$pid" 2>/dev/null || true
+			kill -TERM "$pid" 2>/dev/null || true
+			;;
+		*)
+			record "cleanup refused unclaimed launcher pid=$pid command=$command"
+			return 1
+			;;
+	esac
+	for i in $(seq 1 10); do
+		if ! process_alive "$pid"; then
+			return 0
+		fi
+		sleep 1
+	done
+	command="$(process_command "$pid")"
+	case "$command" in
+		*'kill -STOP $$'*)
+			kill -KILL "$pid" 2>/dev/null || true
+			return 0
+			;;
+		*)
+			record "cleanup refused unclaimed launcher escalation pid=$pid command=$command"
+			return 1
+			;;
+	esac
+}
+
 cleanup() {
 	local exit_code=$?
 	local cleanup_failed=0
@@ -440,10 +575,15 @@ cleanup() {
 		wait "$QUIT_PID" 2>/dev/null || true
 	fi
 	if [ -n "$RELAUNCH_PID" ]; then
-		terminate_process_tree "$RELAUNCH_PID" "$APP_PATH" || cleanup_failed=1
+		kill -CONT "$RELAUNCH_PID" 2>/dev/null || true
+		terminate_process_tree "$RELAUNCH_PID" "$FORK_EXE" || cleanup_failed=1
 	fi
 	if [ -n "$FORK_PID" ]; then
-		terminate_process_tree "$FORK_PID" "$APP_PATH" || cleanup_failed=1
+		kill -CONT "$FORK_PID" 2>/dev/null || true
+		terminate_process_tree "$FORK_PID" "$FORK_EXE" || cleanup_failed=1
+	fi
+	if [ -n "$LAUNCHED_PID" ]; then
+		terminate_unclaimed_launcher "$LAUNCHED_PID" || cleanup_failed=1
 	fi
 	if [ -n "$OFFICIAL_PID" ]; then
 		terminate_process_tree "$OFFICIAL_PID" "$OFFICIAL_APP" || cleanup_failed=1
@@ -515,7 +655,9 @@ trap cleanup EXIT
 	echo "second_launch_wait_seconds=30"
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
-	echo "observer_lifetime=from-fork-launch-through-quit-relaunch"
+	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
+	echo "observer_mode=one-kernel-filtered-fs_usage-and-exec-observer-per-root-pid"
+	echo "descendant_policy=unavailable-on-unattached-child"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
 
@@ -596,14 +738,28 @@ if ! archs="$(lipo -archs "$FORK_EXE")"; then
 fi
 assert_equal "artifact architecture" "arm64" "$archs"
 
+SOURCE_PORTABLE_ROOT="$APP_PATH/Contents/MacOS/TelegramForcePortable"
+if [ -e "$SOURCE_PORTABLE_ROOT" ]; then
+	fail "artifact portable fixture isolation" "uploaded app already contains path=$SOURCE_PORTABLE_ROOT"
+fi
+
 RUN_ROOT="$(mktemp -d /tmp/main701.XXXXXX)"
 RUN_ROOT="$(canonical_path "$RUN_ROOT")"
+FORK_APP="$RUN_ROOT/Telegramd-test.app"
+if ! ditto "$APP_PATH" "$FORK_APP"; then
+	unavailable "could not create an isolated test copy of Telegramd.app"
+fi
+FORK_EXE="$FORK_APP/Contents/MacOS/Telegramd"
+if ! shasum -a 256 "$APP_PATH/Contents/MacOS/Telegramd" "$FORK_EXE" > "$EVIDENCE_DIR/test-copy-hashes.txt"; then
+	fail "test app copy" "could not hash artifact and isolated test copy"
+fi
+shasum -a 256 "$APP_PATH/Contents/MacOS/Telegramd" > "$EVIDENCE_DIR/artifact-source-hash-before.txt"
 HOME_ROOT="$RUN_ROOT/home"
 export HOME="$HOME_ROOT"
 SUPPORT_ROOT="$HOME_ROOT/Library/Application Support"
 OLD="$SUPPORT_ROOT/Telegram Desktop"
 NEW="$SUPPORT_ROOT/Telegramd"
-PORTABLE_ROOT="$RUN_ROOT/TelegramForcePortable"
+PORTABLE_ROOT="$FORK_APP/Contents/MacOS/TelegramForcePortable"
 HOSTILE_WORKDIR="$PORTABLE_ROOT"
 PORTABLE_CANARY="$PORTABLE_ROOT/tdata/alpha"
 mkdir -p "$HOME_ROOT/Library/Application Support" \
@@ -692,15 +848,20 @@ OLD_HASH="$(printf '%s' "$OLD" | md5 -q)"
 SOCKET_ROOT="$(canonical_path /tmp)"
 wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints.txt" "official endpoint" 30
 
-TRACE="$EVIDENCE_DIR/fs_usage.txt"
-sudo -n /usr/bin/fs_usage -w -F -f filesys > "$TRACE" 2>&1 &
-FS_PID=$!
-sleep 1
-assert_alive "filesystem observer startup" "$FS_PID"
-
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/telegramd.log" 2>&1 &
-FORK_PID=$!
+TARGET_TRACE_DIR="$EVIDENCE_DIR/fs_usage-pid"
+TARGET_EXEC_DIR="$EVIDENCE_DIR/fs_usage-exec"
+TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
+mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR"
+: > "$TARGET_OBSERVER_FILE"
+: > "$EVIDENCE_DIR/observer-commands.txt"
+launch_suspended "$EVIDENCE_DIR/telegramd.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
+FORK_PID="$LAUNCHED_PID"
+LAUNCHED_PID=""
 start_pid_tracking
+start_pid_observer "$FORK_PID"
+if ! kill -CONT "$FORK_PID"; then
+	fail "Telegramd launch resume" "could not resume pid=$FORK_PID"
+fi
 wait_for_process "$FORK_PID" 30 || fail "Telegramd process lifetime" "pid=$FORK_PID did not stay alive"
 printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/telegramd-pid.txt"
 if ! wait_for_file "$NEW/tdata" 60; then
@@ -740,9 +901,14 @@ assert_alive "official coexistence" "$OFFICIAL_PID"
 official_command="$(process_command "$OFFICIAL_PID")"
 assert_equal "official command stability" "$OFFICIAL_EXE -noupdate -debug -workdir $OLD" "$official_command"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/telegramd-second.log" 2>&1 &
-SECOND_PID=$!
+launch_suspended "$EVIDENCE_DIR/telegramd-second.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
+SECOND_PID="$LAUNCHED_PID"
+LAUNCHED_PID=""
 add_pid_root "$SECOND_PID"
+start_pid_observer "$SECOND_PID"
+if ! kill -CONT "$SECOND_PID"; then
+	fail "second launch resume" "could not resume pid=$SECOND_PID"
+fi
 if ! wait_for_exit "$SECOND_PID" 30; then
 	fail "second launch bounded wait" "pid=$SECOND_PID did not exit within 30s"
 fi
@@ -758,9 +924,14 @@ assert_live_fork_process_count "second launch process count" 1
 cp "$EVIDENCE_DIR/telegramd-live-pids.txt" "$EVIDENCE_DIR/telegramd-live-pids-after-second.txt"
 cp "$EVIDENCE_DIR/telegramd-process-count.txt" "$EVIDENCE_DIR/telegramd-process-count-after-second.txt"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" -quit > "$EVIDENCE_DIR/telegramd-quit.log" 2>&1 &
-QUIT_PID=$!
+launch_suspended "$EVIDENCE_DIR/telegramd-quit.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR" -quit
+QUIT_PID="$LAUNCHED_PID"
+LAUNCHED_PID=""
 add_pid_root "$QUIT_PID"
+start_pid_observer "$QUIT_PID"
+if ! kill -CONT "$QUIT_PID"; then
+	fail "quit launch resume" "could not resume pid=$QUIT_PID"
+fi
 if ! wait_for_exit "$QUIT_PID" 40; then
 	fail "quit bounded wait" "pid=$QUIT_PID did not exit within 40s"
 fi
@@ -772,9 +943,14 @@ if ! wait_for_exit "$FORK_PID" 40; then
 fi
 assert_alive "official survives quit" "$OFFICIAL_PID"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/telegramd-relaunch.log" 2>&1 &
-RELAUNCH_PID=$!
+launch_suspended "$EVIDENCE_DIR/telegramd-relaunch.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
+RELAUNCH_PID="$LAUNCHED_PID"
+LAUNCHED_PID=""
 add_pid_root "$RELAUNCH_PID"
+start_pid_observer "$RELAUNCH_PID"
+if ! kill -CONT "$RELAUNCH_PID"; then
+	fail "Telegramd relaunch resume" "could not resume pid=$RELAUNCH_PID"
+fi
 wait_for_process "$RELAUNCH_PID" 30 || fail "Telegramd relaunch process lifetime" "pid=$RELAUNCH_PID did not stay alive"
 if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd relaunch namespace" "missing path=$NEW/tdata"
@@ -823,9 +999,18 @@ if [ -e "$EVIDENCE_DIR/pid-tracking-failure.txt" ]; then
 fi
 awk 'NR == FNR { roots[$1] = 1; next } !($1 in roots) { print }' \
 	"$PID_ROOTS_FILE" "$PID_FILE" > "$EVIDENCE_DIR/telegramd-descendants.txt"
-if ! python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/telegramd-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt"; then
-	fail "Telegramd official-namespace isolation" "filesystem observer reported a violation or ambiguous event"
+if [ -s "$EVIDENCE_DIR/telegramd-descendants.txt" ]; then
+	unavailable "complete descendant observer coverage is unavailable; see telegramd-descendants.txt"
 fi
+assemble_pid_trace
+check_process_observer_coverage
+parser_status=0
+python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/telegramd-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt" || parser_status=$?
+case "$parser_status" in
+	0) ;;
+	2) unavailable "filesystem observer PID attribution is incomplete; see fs_usage-report.txt" ;;
+	*) fail "Telegramd official-namespace isolation" "filesystem observer reported a violation or ambiguous event" ;;
+esac
 
 if ! for canary in "${CANARIES[@]}"; do
 	shasum -a 256 "$canary"
@@ -834,6 +1019,13 @@ done > "$EVIDENCE_DIR/canaries-after.txt"; then
 fi
 if ! cmp "$EVIDENCE_DIR/canaries-before.txt" "$EVIDENCE_DIR/canaries-after.txt"; then
 	fail "official canary integrity" "official or portable canary changed"
+fi
+if [ -e "$SOURCE_PORTABLE_ROOT" ]; then
+	fail "artifact portable fixture isolation" "test fixture leaked into uploaded app path=$SOURCE_PORTABLE_ROOT"
+fi
+shasum -a 256 "$APP_PATH/Contents/MacOS/Telegramd" > "$EVIDENCE_DIR/artifact-source-hash-after.txt"
+if ! cmp "$EVIDENCE_DIR/artifact-source-hash-before.txt" "$EVIDENCE_DIR/artifact-source-hash-after.txt"; then
+	fail "artifact source integrity" "uploaded executable changed during isolation gate"
 fi
 RESULT="PASS"
 printf 'PASS\n' > "$EVIDENCE_DIR/status.txt"
