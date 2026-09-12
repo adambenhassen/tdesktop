@@ -108,6 +108,9 @@ public:
 	void restart();
 	void restart(ShiftedDcId shiftedDcId);
 	void stopForServerEnrollment();
+	[[nodiscard]] uint64 serverEnrollmentStopToken() const;
+	[[nodiscard]] bool isServerEnrollmentStopTokenCurrent(
+		uint64 token) const;
 	[[nodiscard]] int32 dcstate(ShiftedDcId shiftedDcId = 0);
 	[[nodiscard]] QString dctransport(ShiftedDcId shiftedDcId = 0);
 	void ping();
@@ -195,7 +198,7 @@ private:
 	friend class Instance;
 
 	[[nodiscard]] bool networkAllowed() const {
-		return _started && !_pausedForServerEnrollment;
+		return _serverEnrollmentGate.networkAllowed();
 	}
 
 	void importDone(
@@ -238,9 +241,7 @@ private:
 	const Instance::Mode _mode = Instance::Mode::Normal;
 	const std::unique_ptr<Config> _config;
 	const std::shared_ptr<base::NetworkReachability> _networkReachability;
-	bool _startPaused = false;
-	std::atomic_bool _started = false;
-	std::atomic_bool _pausedForServerEnrollment = false;
+	ServerEnrollmentGate _serverEnrollmentGate;
 
 	std::unique_ptr<QThread> _mainSessionThread;
 	std::unique_ptr<QThread> _otherSessionsThread;
@@ -335,7 +336,7 @@ Instance::Private::Private(
 , _mode(mode)
 , _config(std::move(fields.config))
 , _networkReachability(base::NetworkReachability::Instance())
-, _startPaused(fields.startPaused)
+, _serverEnrollmentGate(fields.startPaused)
 , _proxySettings(Core::App().settings().proxy()) {
 	Expects(_config != nullptr);
 
@@ -395,10 +396,9 @@ Instance::Private::Private(
 }
 
 void Instance::Private::start() {
-	if (_started || _startPaused) {
+	if (!_serverEnrollmentGate.start()) {
 		return;
 	}
-	_started = true;
 	if (isKeysDestroyer()) {
 		for (const auto &[shiftedDcId, dc] : _dcenters) {
 			startSession(shiftedDcId);
@@ -414,29 +414,24 @@ void Instance::Private::start() {
 }
 
 void Instance::Private::resume() {
-	const auto wasPaused = _startPaused
-		|| _pausedForServerEnrollment.load();
-	if (!wasPaused) {
+	const auto result = _serverEnrollmentGate.resume();
+	if (!result.resumed) {
 		return;
 	}
-	const auto wasStarted = _started.load();
-	_startPaused = false;
-	_pausedForServerEnrollment = false;
-	if (!wasStarted) {
+	if (!result.wasStarted) {
 		start();
 		return;
 	}
 	for (const auto &[shiftedDcId, session] : _sessions) {
-		session->restart();
+		session->resumeAfterServerEnrollment();
 	}
 	requestConfig();
 }
 
 void Instance::Private::stopForServerEnrollment() {
-	if (!_started) {
+	if (!_serverEnrollmentGate.pause()) {
 		return;
 	}
-	_pausedForServerEnrollment = true;
 	_checkDelayedTimer.cancel();
 	if (_cdnConfigLoadRequestId) {
 		request(base::take(_cdnConfigLoadRequestId)).cancel();
@@ -473,6 +468,15 @@ void Instance::Private::stopForServerEnrollment() {
 	for (const auto &entry : _sessions) {
 		entry.second->stopUntilPinChange();
 	}
+}
+
+uint64 Instance::Private::serverEnrollmentStopToken() const {
+	return _serverEnrollmentGate.stopToken();
+}
+
+bool Instance::Private::isServerEnrollmentStopTokenCurrent(
+		uint64 token) const {
+	return _serverEnrollmentGate.stopTokenIsCurrent(token);
 }
 
 void Instance::Private::resolveProxyDomain(const QString &host) {
@@ -2166,6 +2170,14 @@ void Instance::resume() {
 
 bool Instance::isServerEnrollmentNetworkAllowed() const {
 	return _private->networkAllowed();
+}
+
+uint64 Instance::serverEnrollmentStopToken() const {
+	return _private->serverEnrollmentStopToken();
+}
+
+bool Instance::isServerEnrollmentStopTokenCurrent(uint64 token) const {
+	return _private->isServerEnrollmentStopTokenCurrent(token);
 }
 
 void Instance::stopForServerEnrollment() {

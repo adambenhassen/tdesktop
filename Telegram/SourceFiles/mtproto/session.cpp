@@ -279,6 +279,19 @@ void Session::restart() {
 	}
 }
 
+void Session::resumeAfterServerEnrollment() {
+	if (_killed) {
+		DEBUG_LOG(("Session Error: can't resume a killed session"));
+		return;
+	}
+	refreshOptions();
+	if (const auto captured = _private) {
+		InvokeQueued(captured, [=] {
+			captured->resumeAfterServerEnrollment();
+		});
+	}
+}
+
 void Session::refreshOptions() {
 	auto &settings = Core::App().settings().proxy();
 	const auto &proxy = settings.selected();
@@ -398,8 +411,15 @@ void Session::stopUntilPinChange() {
 	if (_killed || !_private) {
 		return;
 	}
-	InvokeQueued(_private, [captured = _private] {
-		captured->stopUntilPinChange();
+	const auto token = _instance->serverEnrollmentStopToken();
+	InvokeQueued(_private, [
+		captured = _private,
+		instance = _instance,
+		token
+	] {
+		if (instance->isServerEnrollmentStopTokenCurrent(token)) {
+			captured->stopUntilPinChange();
+		}
 	});
 }
 

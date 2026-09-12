@@ -152,6 +152,7 @@ public:
 	void setConnectionNotInited();
 
 	void restart();
+	void resumeAfterServerEnrollment();
 	void refreshOptions();
 	void stop();
 	void kill();

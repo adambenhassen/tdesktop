@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
+#include <atomic>
+
 namespace MTP {
 namespace details {
 
@@ -95,6 +97,68 @@ private:
 
 };
 
+// State for the enrollment pause. A stop request crosses from the main
+// thread to a session thread, so a request from an earlier pin must be
+// identifiable and ignored after the pin is replaced.
+class ServerEnrollmentGate final {
+public:
+	struct ResumeResult {
+		bool resumed = false;
+		bool wasStarted = false;
+	};
+
+	explicit ServerEnrollmentGate(bool startPaused = false)
+	: _startPaused(startPaused) {
+	}
+
+	[[nodiscard]] bool start() {
+		if (_started || _startPaused) {
+			return false;
+		}
+		_started = true;
+		return true;
+	}
+
+	[[nodiscard]] ResumeResult resume() {
+		const auto wasPaused = _startPaused || _paused.load();
+		if (!wasPaused) {
+			return {};
+		}
+		const auto wasStarted = _started.load();
+		_stopGeneration.fetch_add(1, std::memory_order_release);
+		_startPaused = false;
+		_paused = false;
+		return { .resumed = true, .wasStarted = wasStarted };
+	}
+
+	[[nodiscard]] bool pause() {
+		if (!_started) {
+			return false;
+		}
+		_paused = true;
+		return true;
+	}
+
+	[[nodiscard]] bool networkAllowed() const {
+		return _started.load() && !_paused.load();
+	}
+
+	[[nodiscard]] uint64 stopToken() const {
+		return _stopGeneration.load(std::memory_order_acquire);
+	}
+
+	[[nodiscard]] bool stopTokenIsCurrent(uint64 token) const {
+		return token == stopToken();
+	}
+
+private:
+	bool _startPaused = false;
+	std::atomic_bool _started = false;
+	std::atomic_bool _paused = false;
+	std::atomic<uint64> _stopGeneration = 0;
+
+};
+
 class Instance : public QObject {
 	Q_OBJECT
 
@@ -174,7 +238,13 @@ public:
 	// Start a paused instance after its endpoint and RSA key have been
 	// persisted. Calling this on an already running instance is a no-op.
 	void resume();
+	// Thread-safe.
 	[[nodiscard]] bool isServerEnrollmentNetworkAllowed() const;
+	[[nodiscard]] uint64 serverEnrollmentStopToken() const;
+	[[nodiscard]] bool isServerEnrollmentStopTokenCurrent(
+		uint64 token) const;
+
+	// Main thread.
 	// Stop this account's sessions while an unauthed enrollment is corrected.
 	// A subsequent setCustomServer() followed by resume() lets the sessions
 	// try the newly confirmed endpoint again.

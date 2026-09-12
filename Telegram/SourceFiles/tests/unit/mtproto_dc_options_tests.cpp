@@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "mtproto/mtproto_server_enrollment.h"
+
+#include <QtCore/QByteArray>
 
 namespace {
 
@@ -342,6 +345,37 @@ TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {
 	auto restored = DcOptions(Environment::Production);
 	CHECK(restored.constructFromSerialized(serialized));
 	CHECK(restored.isCustomServerPinned(MakeCustomServer().dcId));
+}
+
+// The first connection is the first operation that can identify the user
+// to the newly pinned server. The exact endpoint and key therefore have to
+// be serialized before that connection is allowed to start.
+TEST_CASE(EnrollmentPinIsPersistedBeforeTheFirstConnection) {
+	auto options = DcOptions(Environment::Production);
+	const auto server = MakeCustomServer();
+	auto serialized = QByteArray();
+	auto connected = false;
+
+	CHECK(CommitServerEnrollment(
+		[&] { return options.setCustomServer(server); },
+		[&] { serialized = options.serialize(); },
+		[&] {
+			connected = true;
+			CHECK(!serialized.isEmpty());
+		}));
+
+	CHECK(connected);
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(serialized));
+	const auto got = restored.customServer();
+	CHECK_EQ(got.dcId, server.dcId);
+	CHECK_EQ(got.ip, server.ip);
+	CHECK_EQ(got.port, server.port);
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(qint64(got.key->fingerprint()),
+			qint64(server.key->fingerprint()));
+	}
 }
 
 // The check and the apply must be one atomic step under the write lock.

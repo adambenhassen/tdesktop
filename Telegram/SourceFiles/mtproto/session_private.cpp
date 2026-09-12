@@ -361,6 +361,16 @@ void SessionPrivate::dcOptionsChanged() {
 	connectToServer(true);
 }
 
+void SessionPrivate::resumeAfterServerEnrollment() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
+	_gaveUpOnPinnedFailure = false;
+	_retryTimeout = 1;
+	restartNow();
+}
+
 void SessionPrivate::stopUntilPinChange() {
 	_gaveUpOnPinnedFailure = true;
 	doDisconnect();
@@ -1035,8 +1045,8 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 	}
 	// A pin failure is answered once and then waited out: retrying
 	// cannot change the key the endpoint answers with, nor the DC id
-	// it reports. A corrected pin arrives through dcOptionsChanged(),
-	// which passes afterConfig.
+	// it reports. A corrected pin arrives through dcOptionsChanged() or the
+	// explicit enrollment resume, both of which clear the give-up state first.
 	if (_gaveUpOnPinnedFailure && !afterConfig) {
 		return;
 	}

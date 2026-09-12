@@ -845,7 +845,7 @@ void ServerKeyWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void ServerKeyWidget::keyPressEvent(QKeyEvent *e) {
-	if (e->key() == Qt::Key_Enter || e->key() == Qt::Key_Return) {
+	if (MTP::IsServerEnrollmentActivationKey(e->key())) {
 		e->accept();
 		return;
 	}
@@ -1054,7 +1054,17 @@ void ServerKeyWidget::commitAndAdvance() {
 		.ipv6 = endpointCheck.ipv6,
 		.key = key,
 	};
-	if (!account().mtp().dcOptions().setCustomServer(server)) {
+	if (!MTP::CommitServerEnrollment(
+		[&] {
+			return account().mtp().dcOptions().setCustomServer(server);
+		},
+		[&] {
+			account().local().writeMtpConfig();
+			getData()->serverEndpoint = QString::fromStdString(_check.endpoint);
+		},
+		[&] {
+			account().mtp().resume();
+		})) {
 		const auto current = account().mtp().dcOptions().customServer();
 		if (current.key
 			&& account().mtp().dcOptions().isAuthorized(current.dcId)) {
@@ -1071,11 +1081,6 @@ void ServerKeyWidget::commitAndAdvance() {
 		return;
 	}
 
-	// The marker and serialized pin are written before resume() creates the
-	// first session. A crash after this point fails closed on the next start.
-	account().local().writeMtpConfig();
-	getData()->serverEndpoint = QString::fromStdString(_check.endpoint);
-	account().mtp().resume();
 	goNext<UsernameWidget>();
 }
 

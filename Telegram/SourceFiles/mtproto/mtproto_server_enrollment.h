@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QString>
 
+#include <functional>
 #include <string>
 
 namespace MTP {
@@ -71,5 +72,18 @@ struct ServerEnrollmentCheck {
 // Parse the one-paste enrollment format documented in docs/server_enrollment.md.
 [[nodiscard]] ServerEnrollmentCheck CheckServerEnrollment(
 	const QString &artifact);
+
+// Run the enrollment side effects in their security order. A failed pin
+// write must not persist anything or start network/auth activity, and the
+// first connection is allowed only after the pin is persisted.
+[[nodiscard]] bool CommitServerEnrollment(
+	const std::function<bool()> &setPin,
+	const std::function<void()> &persistPin,
+	const std::function<void()> &resume);
+
+// The shell handles activation keys globally. The enrollment step consumes
+// these keys when they bubble from non-action controls so they cannot submit
+// the confirmation accidentally.
+[[nodiscard]] bool IsServerEnrollmentActivationKey(int key);
 
 } // namespace MTP

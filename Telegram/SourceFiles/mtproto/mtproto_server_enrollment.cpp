@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_custom_server_input.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/Qt>
 #include <QtCore/QStringList>
 #include <QtNetwork/QHostAddress>
 
@@ -360,6 +361,24 @@ ServerEnrollmentCheck CheckServerEnrollment(const QString &artifact) {
 		.key = std::move(keyCheck.key),
 		.identity = std::move(keyCheck.identity),
 	};
+}
+
+bool CommitServerEnrollment(
+		const std::function<bool()> &setPin,
+		const std::function<void()> &persistPin,
+		const std::function<void()> &resume) {
+	if (!setPin()) {
+		return false;
+	}
+	persistPin();
+	resume();
+	return true;
+}
+
+bool IsServerEnrollmentActivationKey(int key) {
+	return key == Qt::Key_Enter
+		|| key == Qt::Key_Return
+		|| key == Qt::Key_Space;
 }
 
 } // namespace MTP
