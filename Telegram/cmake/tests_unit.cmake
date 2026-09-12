@@ -69,6 +69,7 @@ PRIVATE
     desktop-app::lib_base
     desktop-app::lib_crl
     desktop-app::lib_storage
+    desktop-app::lib_ui
     desktop-app::lib_tl
     desktop-app::external_qt
     desktop-app::external_openssl
