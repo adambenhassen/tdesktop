@@ -14,6 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <functional>
 #include <string>
 
+class QKeyEvent;
+
 namespace MTP {
 
 enum class ServerKeyStatus;
@@ -85,5 +87,6 @@ struct ServerEnrollmentCheck {
 // these keys when they bubble from non-action controls so they cannot submit
 // the confirmation accidentally.
 [[nodiscard]] bool IsServerEnrollmentActivationKey(int key);
+[[nodiscard]] bool ConsumeServerEnrollmentActivationKey(QKeyEvent &event);
 
 } // namespace MTP

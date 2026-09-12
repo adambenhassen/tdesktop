@@ -412,15 +412,13 @@ void Session::stopUntilPinChange() {
 		return;
 	}
 	const auto token = _instance->serverEnrollmentStopToken();
-	InvokeQueued(_private, [
-		captured = _private,
-		instance = _instance,
-		token
-	] {
-		if (instance->isServerEnrollmentStopTokenCurrent(token)) {
-			captured->stopUntilPinChange();
-		}
-	});
+	QueueServerEnrollmentStop(
+		_private,
+		token,
+		[instance = _instance](uint64 token) {
+			return instance->isServerEnrollmentStopTokenCurrent(token);
+		},
+		[captured = _private] { captured->stopUntilPinChange(); });
 }
 
 void Session::resetDone() {

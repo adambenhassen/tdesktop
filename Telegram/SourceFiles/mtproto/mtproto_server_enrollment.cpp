@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QByteArray>
 #include <QtCore/Qt>
 #include <QtCore/QStringList>
+#include <QtGui/QKeyEvent>
 #include <QtNetwork/QHostAddress>
 
 #include <optional>
@@ -379,6 +380,14 @@ bool IsServerEnrollmentActivationKey(int key) {
 	return key == Qt::Key_Enter
 		|| key == Qt::Key_Return
 		|| key == Qt::Key_Space;
+}
+
+bool ConsumeServerEnrollmentActivationKey(QKeyEvent &event) {
+	if (!IsServerEnrollmentActivationKey(event.key())) {
+		return false;
+	}
+	event.accept();
+	return true;
 }
 
 } // namespace MTP

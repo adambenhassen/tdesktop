@@ -42,10 +42,6 @@ namespace Intro {
 namespace details {
 namespace {
 
-constexpr auto kScrollTop = 124;
-constexpr auto kPanelSideMargin = 20;
-constexpr auto kFieldSideMargin = 40;
-
 [[nodiscard]] const style::FlatLabel &IdentityLabelStyle() {
 	static const auto result = [] {
 		auto result = st::introServerIdentity;
@@ -195,14 +191,24 @@ void PaintPanel(
 		not_null<Ui::VerticalLayout*> panel,
 		not_null<Ui::FlatLabel*> compareLabel,
 		QPainter &p) {
-	const auto rect = panel->rect().adjusted(0, 0, -1, -1);
+	const auto rect = panel->rect().adjusted(
+		0,
+		0,
+		-st::introServerPanelBorder,
+		-st::introServerPanelBorder);
 	p.setRenderHint(QPainter::Antialiasing);
 	p.setPen(Qt::NoPen);
 	p.setBrush(st::introServerPanelBg->b);
 	p.drawRoundedRect(rect, st::introServerPanelRadius, st::introServerPanelRadius);
 	p.setPen(st::shadowFg->c);
-	const auto lineY = compareLabel->y() - 8;
-	p.drawLine(8, lineY, panel->width() - 9, lineY);
+	const auto lineY = compareLabel->y() - st::introServerPanelLineGap;
+	p.drawLine(
+		st::introServerPanelLineInset,
+		lineY,
+		panel->width()
+			- st::introServerPanelLineInset
+			- st::introServerPanelBorder,
+		lineY);
 }
 
 } // namespace
@@ -257,9 +263,9 @@ void ServerWidget::setupEnrollment() {
 		st::introNextButton);
 
 	_enrollment->setAccessibleName(
-		tr::lng_intro_server_enrollment_ph(tr::now));
-	_enrollment->setAccessibleDescription(
 		tr::lng_intro_server_enrollment_label(tr::now));
+	_enrollment->setAccessibleDescription(
+		tr::lng_intro_server_enrollment_ph(tr::now));
 	ConfigureEnrollmentField(_enrollment);
 	_enrollment->changes() | rpl::on_next([=] {
 		enrollmentChanged();
@@ -269,19 +275,19 @@ void ServerWidget::setupEnrollment() {
 
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_enrollmentLabel),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 8),
+		st::introServerEnrollmentLabelMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::InputField>::fromRaw(_enrollment),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 8),
+		st::introServerEnrollmentFieldMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_status),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 0),
+		st::introServerEnrollmentStatusMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::RoundButton>::fromRaw(_review),
-		style::margins(kFieldSideMargin, 16, kFieldSideMargin, 0),
+		st::introServerEnrollmentButtonMargins,
 		style::al_justify);
 	_status->hide();
 	QWidget::setTabOrder(_enrollment, _review);
@@ -319,7 +325,10 @@ void ServerWidget::setupReadOnly() {
 		_content,
 		identity.isEmpty()
 			? tr::lng_intro_server_saved_identity_unreadable(tr::now)
-			: IdentityRows(identity, st::introServerPanelWidth - 16),
+			: IdentityRows(
+				identity,
+				st::introServerPanelWidth
+					- st::introServerPanelIdentityInset),
 		IdentityLabelStyle());
 	_savedIdentityRaw = identity;
 	_savedCopy = Ui::CreateChild<Ui::LinkButton>(
@@ -374,31 +383,31 @@ void ServerWidget::setupReadOnly() {
 
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedAddressLabel),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 8),
+		st::introServerSavedAddressLabelMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedAddress),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 16),
+		st::introServerSavedAddressMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedIdentityLabel),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 8),
+		st::introServerSavedIdentityLabelMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedIdentity),
-		style::margins(kPanelSideMargin, 0, kPanelSideMargin, 8),
+		st::introServerSavedIdentityMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::LinkButton>::fromRaw(_savedCopy),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 8),
+		st::introServerSavedCopyMargins,
 		style::al_left);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedStatus),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 0),
+		st::introServerSavedStatusMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::LinkButton>::fromRaw(_addAccount),
-		style::margins(kFieldSideMargin, 16, kFieldSideMargin, 0),
+		st::introServerAddAccountMargins,
 		style::al_left);
 	if (identity.isEmpty()) {
 		_savedStatus->show();
@@ -462,10 +471,15 @@ void ServerWidget::resizeEvent(QResizeEvent *e) {
 void ServerWidget::layoutContent() {
 	const auto scrollWidth = std::min(st::introStepWidth, width());
 	const auto scrollLeft = (width() - scrollWidth) / 2;
-	const auto scrollHeight = std::max(0, height() - contentTop() - kScrollTop - 8);
+	const auto scrollHeight = std::max(
+		0,
+		height()
+			- contentTop()
+			- st::introServerScrollTop
+			- st::introServerScrollBottom);
 	_scroll->setGeometry(
 		scrollLeft,
-		contentTop() + kScrollTop,
+		contentTop() + st::introServerScrollTop,
 		scrollWidth,
 		scrollHeight);
 	_content->resizeToWidth(scrollWidth);
@@ -522,8 +536,10 @@ void ServerWidget::reviewEnrollment() {
 	const auto artifact = _enrollment->getLastText();
 	if (artifact.isEmpty()) {
 		if (!_privateKeyWarning) {
-			_enrollment->hideError();
-			clearEnrollmentStatus();
+			const auto text = tr::lng_intro_server_enrollment_empty(tr::now);
+			_enrollment->showError();
+			_enrollment->setAccessibleDescription(text);
+			showEnrollmentStatus(text, true);
 		}
 		_enrollment->setFocusFast();
 		return;
@@ -559,7 +575,7 @@ void ServerWidget::reviewEnrollment() {
 	_review->setDisabled(false);
 	_enrollment->setDisabled(false);
 	_enrollment->setAccessibleDescription(
-		tr::lng_intro_server_enrollment_label(tr::now));
+		tr::lng_intro_server_enrollment_ph(tr::now));
 	if (!check) {
 		getData()->serverEnrollmentArtifact.clear();
 		getData()->serverEnrollment.reset();
@@ -611,7 +627,7 @@ void ServerWidget::clearEnrollmentStatus() {
 	setAccessibleDescription(QString());
 	if (_enrollment) {
 		_enrollment->setAccessibleDescription(
-			tr::lng_intro_server_enrollment_label(tr::now));
+			tr::lng_intro_server_enrollment_ph(tr::now));
 	}
 }
 
@@ -652,7 +668,8 @@ ServerKeyWidget::ServerKeyWidget(
 		_panel,
 		IdentityRows(
 			_check.identity,
-			st::introServerPanelWidth - 16),
+			st::introServerPanelWidth
+				- st::introServerPanelIdentityInset),
 		IdentityLabelStyle());
 	_copy = Ui::CreateChild<Ui::LinkButton>(
 		_panel,
@@ -721,52 +738,52 @@ ServerKeyWidget::ServerKeyWidget(
 
 	_panel->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_identityLabel),
-		style::margins(8, 12, 8, 4),
+		st::introServerPanelIdentityLabelMargins,
 		style::al_justify);
 	_panel->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_identity),
-		style::margins(8, 0, 8, 8),
+		st::introServerPanelIdentityMargins,
 		style::al_justify);
 	_panel->add(
 		object_ptr<Ui::LinkButton>::fromRaw(_copy),
-		style::margins(8, 0, 8, 12),
+		st::introServerPanelCopyMargins,
 		style::al_left);
 	_panel->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_compareLabel),
-		style::margins(8, 8, 8, 4),
+		st::introServerPanelCompareLabelMargins,
 		style::al_justify);
 	_panel->add(
 		object_ptr<Ui::InputField>::fromRaw(_compare),
-		style::margins(8, 0, 8, 8),
+		st::introServerPanelCompareMargins,
 		style::al_justify);
 	_panel->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_verdict),
-		style::margins(8, 0, 8, 12),
+		st::introServerPanelVerdictMargins,
 		style::al_justify);
 
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_endpointLabel),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 8),
+		st::introServerEndpointLabelMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_endpoint),
-		style::margins(kFieldSideMargin, 0, kFieldSideMargin, 0),
+		st::introServerEndpointMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::VerticalLayout>::fromRaw(_panel),
-		style::margins(kPanelSideMargin, 16, kPanelSideMargin, 0),
+		st::introServerPanelMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_secondary),
-		style::margins(kFieldSideMargin, 16, kFieldSideMargin, 0),
+		st::introServerSecondaryMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::LinkButton>::fromRaw(_replace),
-		style::margins(kFieldSideMargin, 12, kFieldSideMargin, 0),
+		st::introServerReplaceMargins,
 		style::al_left);
 	_content->add(
 		object_ptr<Ui::RoundButton>::fromRaw(_confirm),
-		style::margins(kFieldSideMargin, 16, kFieldSideMargin, 0),
+		st::introServerConfirmMargins,
 		style::al_justify);
 	QWidget::setTabOrder(_endpoint, _identity);
 	QWidget::setTabOrder(_identity, _copy);
@@ -846,8 +863,7 @@ void ServerKeyWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void ServerKeyWidget::keyPressEvent(QKeyEvent *e) {
-	if (MTP::IsServerEnrollmentActivationKey(e->key())) {
-		e->accept();
+	if (MTP::ConsumeServerEnrollmentActivationKey(*e)) {
 		return;
 	}
 	QWidget::keyPressEvent(e);
@@ -856,10 +872,15 @@ void ServerKeyWidget::keyPressEvent(QKeyEvent *e) {
 void ServerKeyWidget::layoutContent() {
 	const auto scrollWidth = std::min(st::introStepWidth, width());
 	const auto scrollLeft = (width() - scrollWidth) / 2;
-	const auto scrollHeight = std::max(0, height() - contentTop() - kScrollTop - 8);
+	const auto scrollHeight = std::max(
+		0,
+		height()
+			- contentTop()
+			- st::introServerScrollTop
+			- st::introServerScrollBottom);
 	_scroll->setGeometry(
 		scrollLeft,
-		contentTop() + kScrollTop,
+		contentTop() + st::introServerScrollTop,
 		scrollWidth,
 		scrollHeight);
 	_content->resizeToWidth(scrollWidth);
