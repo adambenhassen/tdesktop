@@ -628,6 +628,11 @@ observe_tracked_pids() {
 		[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
 			printf '%s\n' "observer manager final coverage pass failed" > "$OBSERVER_MANAGER_FAILURE_FILE"
 	fi
+	if [ "$manager_failed" -eq 0 ] && ! check_observer_liveness; then
+		manager_failed=1
+		[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
+			printf '%s\n' "observer exited before intentional shutdown" > "$OBSERVER_MANAGER_FAILURE_FILE"
+	fi
 	if ! stop_pid_observers; then
 		manager_failed=1
 	fi
@@ -695,30 +700,35 @@ check_observer_liveness() {
 	local observer_pid
 	local exec_observer_pid
 	local fork_observer_pid
+	local observer_failed=0
 	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$target_pid" ] || continue
 		if ! process_alive "$observer_pid"; then
 			printf 'target_pid=%s observer=filesystem observer_pid=%s state=exited\n' \
 				"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-			unavailable "filesystem lifecycle observer exited before intentional shutdown for pid=$target_pid"
+			observer_failed=1
+		else
+			printf 'target_pid=%s observer=filesystem observer_pid=%s state=alive\n' \
+				"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 		fi
-		printf 'target_pid=%s observer=filesystem observer_pid=%s state=alive\n' \
-			"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 		if ! process_alive "$exec_observer_pid"; then
 			printf 'target_pid=%s observer=exec observer_pid=%s state=exited\n' \
 				"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-			unavailable "exec lifecycle observer exited before intentional shutdown for pid=$target_pid"
+			observer_failed=1
+		else
+			printf 'target_pid=%s observer=exec observer_pid=%s state=alive\n' \
+				"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 		fi
-		printf 'target_pid=%s observer=exec observer_pid=%s state=alive\n' \
-			"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 		if ! process_alive "$fork_observer_pid"; then
 			printf 'target_pid=%s fork_observer_pid=%s state=exited\n' \
 				"$target_pid" "$fork_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-			unavailable "fork lifecycle observer exited before lifecycle completion for pid=$target_pid"
+			observer_failed=1
+		else
+			printf 'target_pid=%s fork_observer_pid=%s state=alive\n' \
+				"$target_pid" "$fork_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 		fi
-		printf 'target_pid=%s fork_observer_pid=%s state=alive\n' \
-			"$target_pid" "$fork_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
 	done < "$TARGET_OBSERVER_FILE"
+	return "$observer_failed"
 }
 
 check_process_observer_coverage() {
@@ -1722,7 +1732,6 @@ if ! ps -axo pid=,ppid=,command= > "$EVIDENCE_DIR/process-table.txt"; then
 	fail "relaunch process table" "ps failed"
 fi
 
-check_observer_liveness
 if ! stop_pid_tracking; then
 	unavailable "pid tracker shutdown or final snapshot failed"
 fi
