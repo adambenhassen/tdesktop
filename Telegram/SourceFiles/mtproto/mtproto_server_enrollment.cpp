@@ -174,6 +174,11 @@ constexpr auto kMaxArtifactSize = 16 * 1024;
 
 } // namespace
 
+ServerEnrollmentStatus ServerEnrollmentStatusFromKeyStatus(
+		ServerKeyStatus status) {
+	return KeyFailureStatus(status);
+}
+
 const char *ServerEnrollmentStatusName(ServerEnrollmentStatus status) {
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
@@ -327,7 +332,7 @@ ServerEnrollmentCheck CheckServerEnrollment(const QString &artifact) {
 	const auto keyCheck = CheckServerKey(keyText);
 	if (!keyCheck) {
 		return Failure(
-			KeyFailureStatus(keyCheck.status),
+			ServerEnrollmentStatusFromKeyStatus(keyCheck.status),
 			keyCheck.modulusBits);
 	}
 

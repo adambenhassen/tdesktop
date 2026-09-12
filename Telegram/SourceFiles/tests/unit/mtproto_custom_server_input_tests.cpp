@@ -1209,8 +1209,14 @@ TEST_CASE(EnrollmentArtifactRejectsChangedChecksum) {
 
 // InternalKeyError is the only validator outcome that requires an
 // allocation failure in DER re-encoding, so it cannot be made deterministic
-// as an input fixture. Keep its identifier in the exhaustive reason set so a
-// later UI mapping cannot silently omit it.
+// as an input fixture. Exercise the enrollment mapping directly instead.
+TEST_CASE(EnrollmentKeyReasonMapsInternalError) {
+	CHECK_EQ(
+		EnrollmentStatusValue(ServerEnrollmentStatusFromKeyStatus(
+			ServerKeyStatus::InternalError)),
+		EnrollmentStatusValue(ServerEnrollmentStatus::InternalKeyError));
+}
+
 TEST_CASE(EnrollmentStatusNamesCoverEveryReason) {
 	for (const auto status : {
 		ServerEnrollmentStatus::Valid,

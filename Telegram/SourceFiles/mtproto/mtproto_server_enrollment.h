@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace MTP {
 
+enum class ServerKeyStatus;
+
 // Why a server enrollment artifact was refused. Every value is a distinct
 // input correction or a distinct key-processing outcome for the caller.
 enum class ServerEnrollmentStatus {
@@ -59,6 +61,12 @@ struct ServerEnrollmentCheck {
 // Stable identifiers for diagnostics and exhaustive downstream mappings.
 [[nodiscard]] const char *ServerEnrollmentStatusName(
 	ServerEnrollmentStatus status);
+
+// Map an existing key validator verdict to the corresponding enrollment
+// reason. This boundary is separately testable because InternalError can
+// only be produced by a failure while re-encoding an otherwise valid key.
+[[nodiscard]] ServerEnrollmentStatus ServerEnrollmentStatusFromKeyStatus(
+	ServerKeyStatus status);
 
 // Parse the one-paste enrollment format documented in docs/server_enrollment.md.
 [[nodiscard]] ServerEnrollmentCheck CheckServerEnrollment(
