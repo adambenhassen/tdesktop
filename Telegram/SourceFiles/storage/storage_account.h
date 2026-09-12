@@ -12,13 +12,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/cache/storage_cache_database.h"
 #include "data/stickers/data_stickers_set.h"
 #include "data/data_drafts.h"
+#include "core/file_location.h"
 #include "webview/webview_common.h"
 
 class History;
-
-namespace Core {
-class FileLocation;
-} // namespace Core
 
 namespace Export {
 struct Settings;
