@@ -179,10 +179,6 @@ Account::Account(not_null<Main::Account*> owner, const QString &dataName)
 , _basePath(BaseGlobalPath() + ToFilePart(_dataNameKey) + QChar('/'))
 , _tempPath(BaseGlobalPath() + "temp_" + _dataName + QChar('/'))
 , _databasePath(ComputeDatabasePath(dataName))
-, _cacheTotalSizeLimit(Database::Settings().totalSizeLimit)
-, _cacheBigFileTotalSizeLimit(Database::Settings().totalSizeLimit)
-, _cacheTotalTimeLimit(Database::Settings().totalTimeLimit)
-, _cacheBigFileTotalTimeLimit(Database::Settings().totalTimeLimit)
 , _mtpConfig([owner]() -> const MTP::Config & {
 	return owner->mtp().config();
 })
@@ -213,6 +209,10 @@ Account::Account(not_null<Main::Account*> owner, const QString &dataName)
 		writeMap();
 	});
 })
+, _cacheTotalSizeLimit(Database::Settings().totalSizeLimit)
+, _cacheBigFileTotalSizeLimit(Database::Settings().totalSizeLimit)
+, _cacheTotalTimeLimit(Database::Settings().totalTimeLimit)
+, _cacheBigFileTotalTimeLimit(Database::Settings().totalTimeLimit)
 , _writeMapTimer([=] { writeMap(); })
 , _writePrefsTimer([=] { writePrefs(); })
 , _writeLocationsTimer([=] { writeLocations(); })
