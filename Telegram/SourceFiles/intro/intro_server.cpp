@@ -1076,16 +1076,29 @@ void ServerKeyWidget::commitAndAdvance() {
 		.ipv6 = endpointCheck.ipv6,
 		.key = key,
 	};
+	const auto previousOptions = account().mtp().dcOptions().serialize();
+	const auto previousWasBlocked = account().mtp().dcOptions().blocked();
 	if (!MTP::CommitServerEnrollment(
 		[&] {
 			return account().mtp().dcOptions().setCustomServer(server);
 		},
 		[&] {
-			account().local().writeMtpConfig();
+			if (!account().local().writeMtpConfig(true)) {
+				return false;
+			}
 			getData()->serverEndpoint = QString::fromStdString(_check.endpoint);
+			return true;
 		},
 		[&] {
 			account().mtp().resume();
+		},
+		[&] {
+			if (previousWasBlocked) {
+				account().mtp().dcOptions().constructBlocked();
+			} else if (!account().mtp().dcOptions().constructFromSerialized(
+				previousOptions)) {
+				account().mtp().dcOptions().constructBlocked();
+			}
 		})) {
 		const auto current = account().mtp().dcOptions().customServer();
 		if (current.key

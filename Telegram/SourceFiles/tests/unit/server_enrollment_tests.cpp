@@ -10,10 +10,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_server_enrollment.h"
 #include "mtproto/session.h"
+#include "storage/details/storage_file_utilities.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QMetaObject>
 #include <QtCore/QSemaphore>
+#include <QtCore/QTemporaryDir>
 #include <QtCore/QThread>
 #include <QtCore/Qt>
 #include <QtGui/QKeyEvent>
@@ -65,7 +69,10 @@ TEST_CASE(ConfirmedEnrollmentStartsNetworkAfterPinPersistence) {
 	auto persisted = false;
 	const auto committed = CommitServerEnrollment(
 		[] { return true; },
-		[&] { persisted = true; },
+		[&] {
+			persisted = true;
+			return true;
+		},
 		[&] {
 			const auto resumed = gate.resume();
 			CHECK(resumed.resumed);
@@ -114,7 +121,10 @@ TEST_CASE(RejectedEnrollmentDoesNotReachNetworkOrAuth) {
 	auto authCalls = 0;
 	const auto committed = CommitServerEnrollment(
 		[] { return false; },
-		[&] { ++networkCalls; },
+		[&] {
+			++networkCalls;
+			return true;
+		},
 		[&] { ++authCalls; });
 
 	CHECK(!committed);
@@ -129,7 +139,10 @@ TEST_CASE(PinPersistencePrecedesTheFirstConnection) {
 			events.push_back(1); // set the verified endpoint and key
 			return true;
 		},
-		[&] { events.push_back(2); }, // persist the pin
+		[&] {
+			events.push_back(2); // persist the pin
+			return true;
+		},
 		[&] { events.push_back(3); }); // start network and auth
 
 	CHECK(committed);
@@ -137,6 +150,75 @@ TEST_CASE(PinPersistencePrecedesTheFirstConnection) {
 	CHECK_EQ(events[0], 1);
 	CHECK_EQ(events[1], 2);
 	CHECK_EQ(events[2], 3);
+}
+
+TEST_CASE(EnrollmentPersistenceFailureRollsBackBeforeReturning) {
+	auto rolledBack = false;
+	auto resumed = false;
+	const auto committed = CommitServerEnrollment(
+		[] { return true; },
+		[] { return false; },
+		[&] { resumed = true; },
+		[&] { rolledBack = true; });
+
+	CHECK(!committed);
+	CHECK(!resumed);
+	CHECK(rolledBack);
+}
+
+TEST_CASE(EnrollmentWaitsForDurablePinBeforeResuming) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+	const auto basePath = directory.path() + QDir::separator();
+	const auto pinPath = basePath + u"pin"_q + u"s"_q;
+	auto persisted = false;
+	auto resumed = false;
+
+	const auto committed = CommitServerEnrollment(
+		[] { return true; },
+		[&] {
+			Storage::details::FileWriteDescriptor file(
+				u"pin"_q,
+				basePath,
+				true);
+			file.writeData(QByteArray("verified pin"));
+			persisted = file.finish();
+			CHECK(persisted);
+			CHECK(QFile::exists(pinPath));
+			return persisted;
+		},
+		[&] {
+			CHECK(persisted);
+			resumed = true;
+		});
+
+	CHECK(committed);
+	CHECK(resumed);
+}
+
+TEST_CASE(EnrollmentDoesNotResumeWhenPinStorageFails) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+	const auto basePath = directory.path() + QDir::separator();
+	const auto pinPath = basePath + u"pin"_q + u"s"_q;
+	CHECK(QDir().mkpath(pinPath));
+	auto resumed = false;
+
+	const auto committed = CommitServerEnrollment(
+		[] { return true; },
+		[&] {
+			Storage::details::FileWriteDescriptor file(
+				u"pin"_q,
+				basePath,
+				true);
+			file.writeData(QByteArray("verified pin"));
+			return file.finish();
+		},
+		[&] { resumed = true; });
+
+	CHECK(!committed);
+	CHECK(!resumed);
+	CHECK(QDir(pinPath).exists());
 }
 
 TEST_CASE(EnrollmentStepConsumesSpaceOutsideConfirm) {

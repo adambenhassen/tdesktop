@@ -48,7 +48,10 @@ PRIVATE
     # Compiled in the application target only, so the test links it
     # directly: the code under test is the shipped code.
     passport/passport_encryption.cpp
+    core/hash_sha.cpp
+    core/hash_md5.cpp
     intro/intro_username_validation.cpp
+    storage/details/storage_file_utilities.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
@@ -64,6 +67,7 @@ PRIVATE
     test_unit_mtproto
     tdesktop::td_scheme
     desktop-app::lib_base
+    desktop-app::lib_crl
     desktop-app::lib_tl
     desktop-app::external_qt
     desktop-app::external_openssl

@@ -76,12 +76,14 @@ struct ServerEnrollmentCheck {
 	const QString &artifact);
 
 // Run the enrollment side effects in their security order. A failed pin
-// write must not persist anything or start network/auth activity, and the
-// first connection is allowed only after the pin is persisted.
+// persistence step must not start network/auth activity, and the first
+// connection is allowed only after the pin is persisted. The optional
+// rollback restores staged in-memory state when persistence fails.
 [[nodiscard]] bool CommitServerEnrollment(
 	const std::function<bool()> &setPin,
-	const std::function<void()> &persistPin,
-	const std::function<void()> &resume);
+	const std::function<bool()> &persistPin,
+	const std::function<void()> &resume,
+	const std::function<void()> &rollbackPin = {});
 
 // The shell handles activation keys globally. The enrollment step consumes
 // these keys when they bubble from non-action controls so they cannot submit

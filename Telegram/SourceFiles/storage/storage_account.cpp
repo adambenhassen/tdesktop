@@ -599,20 +599,19 @@ void Account::writeMapQueued() {
 	});
 }
 
-void Account::writeMap() {
+bool Account::writeMap(bool sync) {
 	Expects(_localKey != nullptr);
 
 	_writeMapTimer.cancel();
 	if (!_mapChanged) {
-		return;
+		return true;
 	}
-	_mapChanged = false;
 
 	if (!QDir().exists(_basePath)) {
 		QDir().mkpath(_basePath);
 	}
 
-	FileWriteDescriptor map(u"map"_q, _basePath);
+	FileWriteDescriptor map(u"map"_q, _basePath, sync);
 	map.writeData(QByteArray());
 	map.writeData(QByteArray());
 
@@ -762,9 +761,12 @@ void Account::writeMap() {
 			mapData.stream << quint64(value) << SerializePeerId(key);
 		}
 	}
-	map.writeEncrypted(mapData, _localKey);
+	if (!map.finish()) {
+		return false;
+	}
 
 	_mapChanged = false;
+	return true;
 }
 
 void Account::reset() {
@@ -1189,7 +1191,7 @@ void Account::readMtpData() {
 	applyReadContext(std::move(context));
 }
 
-void Account::writeMtpConfig() {
+bool Account::writeMtpConfig(bool sync) {
 	Expects(_localKey != nullptr);
 
 	const auto &config = _owner->mtp().config();
@@ -1198,7 +1200,7 @@ void Account::writeMtpConfig() {
 		// settings could not be read back. Writing an empty config over
 		// them would destroy the pinned key for good, and there is
 		// nothing here worth keeping anyway.
-		return;
+		return false;
 	}
 
 	// The pin marker lives in its own tdata key so that a config blob
@@ -1208,26 +1210,34 @@ void Account::writeMtpConfig() {
 	const auto pinned = config.hasCustomServer();
 	if (pinned != _hasStoredCustomServer) {
 		writePref<bool>(kCustomServerPinnedPref, pinned);
-		writePrefs();
+		if (!writePrefs(sync)) {
+			return false;
+		}
 		_hasStoredCustomServer = pinned;
 	}
 
 	const auto serialized = config.serialize();
 	const auto size = Serialize::bytearraySize(serialized);
 
-	FileWriteDescriptor file(u"config"_q, _basePath);
+	FileWriteDescriptor file(u"config"_q, _basePath, sync);
 	EncryptedDescriptor data(size);
 	data.stream << serialized;
 	file.writeEncrypted(data, _localKey);
+	if (!file.finish()) {
+		return false;
+	}
 
 	if (_customServerPinUnknown) {
 		// A config was read and written this session, so whether this
 		// account is pinned is no longer unknown. Left behind, it would
 		// describe a later unreadable config as damaged local data.
-		_customServerPinUnknown = false;
 		clearPref(kCustomServerPinUnknownPref);
-		writePrefs();
+		if (!writePrefs(sync)) {
+			return false;
+		}
+		_customServerPinUnknown = false;
 	}
+	return true;
 }
 
 void Account::readStoredCustomServerPin() {
@@ -3843,23 +3853,38 @@ void Account::writePrefsDelayed() {
 	_writePrefsTimer.callOnce(kDelayedWriteTimeout);
 }
 
-void Account::writePrefs() {
+bool Account::writePrefs(bool sync) {
 	_writePrefsTimer.cancel();
 	if (!_prefsChanged) {
-		return;
+		return !sync || writeMap(true);
 	}
-	_prefsChanged = false;
 
 	if (_prefs.empty()) {
 		if (_prefsKey) {
-			ClearKey(_prefsKey, _basePath);
+			const auto oldKey = _prefsKey;
 			_prefsKey = 0;
-			writeMapDelayed();
+			_mapChanged = true;
+			if (sync && !writeMap(true)) {
+				_prefsKey = oldKey;
+				return false;
+			}
+			if (!sync) {
+				ClearKey(oldKey, _basePath);
+				writeMapDelayed();
+			} else {
+				ClearKey(oldKey, _basePath);
+			}
 		}
+		_prefsChanged = false;
+		return !sync || writeMap(true);
 	} else {
 		if (!_prefsKey) {
 			_prefsKey = GenerateKey(_basePath);
-			writeMapQueued();
+			if (sync) {
+				_mapChanged = true;
+			} else {
+				writeMapQueued();
+			}
 		}
 		quint32 size = sizeof(quint32);
 		for (const auto &[key, value] : _prefs) {
@@ -3874,9 +3899,14 @@ void Account::writePrefs() {
 			data.stream.writeRawData(value.constData(), value.size());
 		}
 
-		FileWriteDescriptor file(_prefsKey, _basePath);
+		FileWriteDescriptor file(_prefsKey, _basePath, sync);
 		file.writeEncrypted(data, _localKey);
+		if (!file.finish()) {
+			return false;
+		}
 	}
+	_prefsChanged = false;
+	return !sync || writeMap(true);
 }
 
 void Account::readPrefs() {

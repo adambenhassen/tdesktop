@@ -107,7 +107,7 @@ public:
 
 	void writeSessionSettings();
 	void writeMtpData();
-	void writeMtpConfig();
+	bool writeMtpConfig(bool sync = false);
 
 	void registerDraftSource(
 		not_null<History*> history,
@@ -266,7 +266,7 @@ private:
 	void clearLegacyFiles();
 	void writeMapDelayed();
 	void writeMapQueued();
-	void writeMap();
+	bool writeMap(bool sync = false);
 
 	void readLocations();
 	void writeLocations();
@@ -274,7 +274,7 @@ private:
 	void writeLocationsDelayed();
 
 	void readPrefs();
-	void writePrefs();
+	bool writePrefs(bool sync = false);
 	void writePrefsDelayed();
 
 	std::unique_ptr<Main::SessionSettings> readSessionSettings();

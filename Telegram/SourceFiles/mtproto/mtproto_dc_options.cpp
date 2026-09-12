@@ -630,6 +630,10 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		return false;
 	}
 	_data.clear();
+	_publicKeys.clear();
+	_cdnPublicKeys.clear();
+	readBuiltInPublicKeys();
+	_customServer = CustomServer();
 	_authorizedDcIds.clear();
 	for (auto i = 0; i != count; ++i) {
 		qint32 id = 0, flags = 0, port = 0, ipSize = 0;

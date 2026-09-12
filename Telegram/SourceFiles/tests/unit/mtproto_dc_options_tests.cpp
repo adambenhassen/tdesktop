@@ -358,7 +358,10 @@ TEST_CASE(EnrollmentPinIsPersistedBeforeTheFirstConnection) {
 
 	CHECK(CommitServerEnrollment(
 		[&] { return options.setCustomServer(server); },
-		[&] { serialized = options.serialize(); },
+		[&] {
+			serialized = options.serialize();
+			return true;
+		},
 		[&] {
 			connected = true;
 			CHECK(!serialized.isEmpty());

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "core/utils.h"
 #include "storage/storage_account.h"
 
 #include <QtCore/QBuffer>
@@ -68,10 +69,10 @@ public:
 	void writeEncrypted(
 		EncryptedDescriptor &data,
 		const MTP::AuthKeyPtr &key);
+	[[nodiscard]] bool finish();
 
 private:
 	void init(const QString &name);
-	void finish();
 
 	const QString _basePath;
 	QBuffer _buffer;
@@ -81,6 +82,7 @@ private:
 	HashMd5 _md5;
 	int _fullSize = 0;
 	bool _sync = false;
+	bool _success = true;
 
 };
 

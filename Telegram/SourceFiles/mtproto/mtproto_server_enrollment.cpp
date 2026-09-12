@@ -366,12 +366,18 @@ ServerEnrollmentCheck CheckServerEnrollment(const QString &artifact) {
 
 bool CommitServerEnrollment(
 		const std::function<bool()> &setPin,
-		const std::function<void()> &persistPin,
-		const std::function<void()> &resume) {
+		const std::function<bool()> &persistPin,
+		const std::function<void()> &resume,
+		const std::function<void()> &rollbackPin) {
 	if (!setPin()) {
 		return false;
 	}
-	persistPin();
+	if (!persistPin()) {
+		if (rollbackPin) {
+			rollbackPin();
+		}
+		return false;
+	}
 	resume();
 	return true;
 }
