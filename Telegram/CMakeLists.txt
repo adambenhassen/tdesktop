@@ -1871,6 +1871,7 @@ PRIVATE
     storage/serialize_peer.h
     storage/storage_account.cpp
     storage/storage_account.h
+    storage/storage_account_persistence.cpp
     storage/storage_cloud_blob.cpp
     storage/storage_cloud_blob.h
     storage/storage_domain.cpp

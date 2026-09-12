@@ -66,6 +66,13 @@ struct MessageDraftSource {
 class Account final {
 public:
 	Account(not_null<Main::Account*> owner, const QString &dataName);
+#ifdef TDESKTOP_UNIT_TESTS
+	Account(
+		const QString &basePath,
+		MTP::AuthKeyPtr localKey,
+		std::shared_ptr<const MTP::Config> config,
+		bool hasStoredCustomServer);
+#endif
 	~Account();
 
 	[[nodiscard]] StartResult legacyStart(const QByteArray &passcode);
@@ -335,7 +342,7 @@ private:
 	[[nodiscard]] std::optional<QByteArray> readPrefGeneric(
 		std::string_view key);
 
-	const not_null<Main::Account*> _owner;
+	Main::Account *const _owner;
 	const QString _dataName;
 	const FileKey _dataNameKey = 0;
 	const QString _basePath;
@@ -362,6 +369,9 @@ private:
 
 	QByteArray _downloadsSerialized;
 	Fn<std::optional<QByteArray>()> _downloadsSerialize;
+	Fn<const MTP::Config&()> _mtpConfig;
+	Fn<QByteArray()> _serializeSelf;
+	Fn<void()> _queueMapWrite;
 
 	FileKey _prefsKey = 0;
 	FileKey _locationsKey = 0;

@@ -8,9 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "mtproto/mtp_instance.h"
+#include "mtproto/mtproto_auth_key.h"
+#include "mtproto/mtproto_config.h"
+#include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_server_enrollment.h"
 #include "mtproto/session.h"
 #include "storage/details/storage_file_utilities.h"
+#include "storage/storage_account.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -24,11 +28,103 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <atomic>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
 
 using namespace MTP;
+
+const char kEnrollmentServerKey[] = "\
+-----BEGIN RSA PUBLIC KEY-----\n\
+MIIBCgKCAQEA6LszBcC1LGzyr992NzE0ieY+BSaOW622Aa9Bd4ZHLl+TuFQ4lo4g\n\
+5nKaMBwK/BIb9xUfg0Q29/2mgIR6Zr9krM7HjuIcCzFvDtr+L0GQjae9H0pRB2OO\n\
+62cECs5HKhT5DZ98K33vmWiLowc621dQuwKWSQKjWf50XYFw42h21P2KXUGyp2y/\n\
++aEyZ+uVgLLQbRA1dEjSDZ2iGRy12Mk5gpYc397aYp438fsJoHIgJ2lgMv5h7WY9\n\
+t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
+5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
+-----END RSA PUBLIC KEY-----";
+
+[[nodiscard]] std::shared_ptr<details::RSAPublicKey>
+MakeEnrollmentServerKey() {
+	return std::make_shared<details::RSAPublicKey>(bytes::make_span(
+		kEnrollmentServerKey,
+		sizeof(kEnrollmentServerKey) - 1));
+}
+
+[[nodiscard]] std::shared_ptr<const MTP::Config> MakeEnrollmentConfig() {
+	auto result = std::make_shared<MTP::Config>(MTP::Environment::Production);
+	Expects(result->dcOptions().setCustomServer(CustomServer{
+		.dcId = 2,
+		.ip = "10.4.1.7",
+		.port = 8443,
+		.key = MakeEnrollmentServerKey(),
+	}));
+	return result;
+}
+
+[[nodiscard]] MTP::AuthKeyPtr MakeEnrollmentStorageKey() {
+	return std::make_shared<MTP::AuthKey>(
+		MTP::AuthKey::Data{ { gsl::byte{} } });
+}
+
+[[nodiscard]] std::unique_ptr<Storage::Account> MakeEnrollmentStorageAccount(
+		const QString &basePath,
+		const MTP::AuthKeyPtr &key) {
+	return std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		MakeEnrollmentConfig(),
+		false);
+}
+
+[[nodiscard]] bool HasReadableEnrollmentMap(
+		const QString &basePath,
+		const MTP::AuthKeyPtr &key) {
+	Storage::details::FileReadDescriptor file;
+	if (!Storage::details::ReadFile(file, u"map"_q, basePath)) {
+		return false;
+	}
+
+	QByteArray legacySalt, legacyKey, encrypted;
+	file.stream >> legacySalt >> legacyKey >> encrypted;
+	if (!Storage::details::CheckStreamStatus(file.stream)) {
+		return false;
+	}
+
+	Storage::details::EncryptedDescriptor map;
+	if (!Storage::details::DecryptLocal(map, encrypted, key)) {
+		return false;
+	}
+
+	quint32 keyType = 0;
+	quint64 prefsKey = 0;
+	map.stream >> keyType >> prefsKey;
+	return Storage::details::CheckStreamStatus(map.stream)
+		&& keyType == 0x1e
+		&& prefsKey != 0;
+}
+
+[[nodiscard]] bool HasReadableEnrollmentConfig(
+		const QString &basePath,
+		const MTP::AuthKeyPtr &key) {
+	Storage::details::FileReadDescriptor file;
+	if (!Storage::details::ReadEncryptedFile(
+			file,
+			u"config"_q,
+			basePath,
+			key)) {
+		return false;
+	}
+
+	QByteArray serialized;
+	file.stream >> serialized;
+	return Storage::details::CheckStreamStatus(file.stream)
+		&& [&] {
+			const auto restored = MTP::Config::FromSerialized(serialized);
+			return restored != nullptr && restored->hasCustomServer();
+		}();
+}
 
 TEST_CASE(ReplaceInvalidatesQueuedStopFromPreviousEnrollment) {
 	ServerEnrollmentGate gate;
@@ -166,59 +262,94 @@ TEST_CASE(EnrollmentPersistenceFailureRollsBackBeforeReturning) {
 	CHECK(rolledBack);
 }
 
-TEST_CASE(EnrollmentWaitsForDurablePinBeforeResuming) {
+TEST_CASE(EnrollmentPersistsReadableMapBeforeConfig) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());
 	const auto basePath = directory.path() + QDir::separator();
-	const auto pinPath = basePath + u"pin"_q + u"s"_q;
-	auto persisted = false;
-	auto resumed = false;
+	const auto key = MakeEnrollmentStorageKey();
+	auto account = MakeEnrollmentStorageAccount(basePath, key);
 
 	const auto committed = CommitServerEnrollment(
 		[] { return true; },
-		[&] {
-			Storage::details::FileWriteDescriptor file(
-				u"pin"_q,
-				basePath,
-				true);
-			file.writeData(QByteArray("verified pin"));
-			persisted = file.finish();
-			CHECK(persisted);
-			CHECK(QFile::exists(pinPath));
-			return persisted;
-		},
-		[&] {
-			CHECK(persisted);
-			resumed = true;
-		});
+		[&] { return account->writeMtpConfig(true); },
+		[] {});
 
 	CHECK(committed);
-	CHECK(resumed);
+	CHECK(HasReadableEnrollmentMap(basePath, key));
+	CHECK(HasReadableEnrollmentConfig(basePath, key));
 }
 
-TEST_CASE(EnrollmentDoesNotResumeWhenPinStorageFails) {
+TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());
 	const auto basePath = directory.path() + QDir::separator();
-	const auto pinPath = basePath + u"pin"_q + u"s"_q;
-	CHECK(QDir().mkpath(pinPath));
+	CHECK(QDir().mkpath(basePath + u"maps"_q));
+	const auto key = MakeEnrollmentStorageKey();
+	auto account = MakeEnrollmentStorageAccount(basePath, key);
 	auto resumed = false;
 
 	const auto committed = CommitServerEnrollment(
 		[] { return true; },
-		[&] {
-			Storage::details::FileWriteDescriptor file(
-				u"pin"_q,
-				basePath,
-				true);
-			file.writeData(QByteArray("verified pin"));
-			return file.finish();
-		},
+		[&] { return account->writeMtpConfig(true); },
 		[&] { resumed = true; });
 
 	CHECK(!committed);
 	CHECK(!resumed);
-	CHECK(QDir(pinPath).exists());
+	CHECK(QDir(basePath + u"maps"_q).exists());
+	CHECK(!QFile::exists(basePath + u"configs"_q));
+}
+
+TEST_CASE(EnrollmentDoesNotResumeWhenProductionConfigStorageFails) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+	const auto basePath = directory.path() + QDir::separator();
+	CHECK(QDir().mkpath(basePath + u"configs"_q));
+	const auto key = MakeEnrollmentStorageKey();
+	auto account = MakeEnrollmentStorageAccount(basePath, key);
+	auto resumed = false;
+
+	const auto committed = CommitServerEnrollment(
+		[] { return true; },
+		[&] { return account->writeMtpConfig(true); },
+		[&] { resumed = true; });
+
+	CHECK(!committed);
+	CHECK(!resumed);
+	CHECK(QDir(basePath + u"configs"_q).exists());
+	CHECK(HasReadableEnrollmentMap(basePath, key));
+}
+
+TEST_CASE(EnrollmentDoesNotResumeWhileProductionPersistenceStalls) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+	const auto basePath = directory.path() + QDir::separator();
+	const auto key = MakeEnrollmentStorageKey();
+	QSemaphore entered;
+	QSemaphore release;
+	auto resumed = std::atomic_bool(false);
+	auto committed = std::atomic_bool(false);
+
+	std::thread enrollment([&] {
+		const auto result = CommitServerEnrollment(
+			[] { return true; },
+			[&] {
+				entered.release();
+				release.acquire();
+				auto account = MakeEnrollmentStorageAccount(basePath, key);
+				return account->writeMtpConfig(true);
+			},
+			[&] { resumed.store(true); });
+		committed.store(result);
+	});
+
+	CHECK(entered.tryAcquire(1, 1000));
+	CHECK(!resumed.load());
+	CHECK(!committed.load());
+
+	release.release();
+	enrollment.join();
+	CHECK(committed.load());
+	CHECK(resumed.load());
 }
 
 TEST_CASE(EnrollmentStepConsumesSpaceOutsideConfirm) {

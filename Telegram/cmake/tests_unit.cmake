@@ -17,6 +17,7 @@ add_executable(test_unit)
 init_target(test_unit "(tests)")
 
 target_include_directories(test_unit PRIVATE ${src_loc})
+target_compile_definitions(test_unit PRIVATE TDESKTOP_UNIT_TESTS)
 
 # Xcode links every object from an object-library dependency into each
 # consumer. Keep the test executable's link selective: some mtproto objects
@@ -50,8 +51,10 @@ PRIVATE
     passport/passport_encryption.cpp
     core/hash_sha.cpp
     core/hash_md5.cpp
+    data/data_peer_id.cpp
     intro/intro_username_validation.cpp
     storage/details/storage_file_utilities.cpp
+    storage/storage_account_persistence.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
@@ -74,6 +77,7 @@ PRIVATE
     desktop-app::external_qt
     desktop-app::external_openssl
     desktop-app::external_zlib
+    desktop-app::external_xxhash
 )
 
 # Put it beside Telegram in out/<config>/ instead of the target's own
