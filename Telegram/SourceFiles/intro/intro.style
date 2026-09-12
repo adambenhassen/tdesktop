@@ -203,4 +203,11 @@ introServerPanelWidth: 340px;
 introServerPanelRadius: 6px;
 introServerPanelBg: windowBgOver;
 introServerIdentityFont: font(13px);
+introServerIdentity: FlatLabel(introDescription) {
+	textFg: windowFg;
+	style: TextStyle(defaultTextStyle) {
+		font: introServerIdentityFont;
+		lineHeight: 20px;
+	}
+}
 introServerCompareField: InputField(introCountry) { width: 324px; }

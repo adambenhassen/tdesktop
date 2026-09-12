@@ -115,6 +115,9 @@ public:
 		AuthKeysList keys;
 		QString deviceModel;
 		QString systemVersion;
+		// New, unauthenticated accounts are held without a session until
+		// the intro flow has committed a server enrollment pin.
+		bool startPaused = false;
 	};
 
 	enum class Mode {
@@ -168,6 +171,14 @@ public:
 	void addKeysForDestroy(AuthKeysList &&keys);
 
 	void restart();
+	// Start a paused instance after its endpoint and RSA key have been
+	// persisted. Calling this on an already running instance is a no-op.
+	void resume();
+	[[nodiscard]] bool isServerEnrollmentNetworkAllowed() const;
+	// Stop this account's sessions while an unauthed enrollment is corrected.
+	// A subsequent setCustomServer() followed by resume() lets the sessions
+	// try the newly confirmed endpoint again.
+	void stopForServerEnrollment();
 	void restart(ShiftedDcId shiftedDcId);
 	int32 dcstate(ShiftedDcId shiftedDcId = 0);
 	QString dctransport(ShiftedDcId shiftedDcId = 0);

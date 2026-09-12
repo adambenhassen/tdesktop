@@ -256,6 +256,7 @@ void Step::createSession(
 			session.user(),
 			{ std::move(photo) });
 	}
+	account->appConfig().start();
 	account->appConfig().refresh();
 	if (session.supportMode()) {
 		PrepareSupportMode(&session);
@@ -305,6 +306,14 @@ rpl::producer<bool> Step::backAvailable() const {
 }
 
 QWidget *Step::firstTabWidget() const {
+	return nullptr;
+}
+
+QWidget *Step::lastTabWidget() const {
+	return nullptr;
+}
+
+QWidget *Step::nextButtonFocusWidget() const {
 	return nullptr;
 }
 

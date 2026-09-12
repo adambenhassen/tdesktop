@@ -27,6 +27,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/network_reachability.h"
 
+#include <atomic>
+
 namespace MTP {
 namespace {
 
@@ -59,6 +61,7 @@ public:
 		Fields &&fields);
 
 	void start();
+	void resume();
 
 	[[nodiscard]] Config &config() const;
 	[[nodiscard]] const ConfigFields &configValues() const;
@@ -104,6 +107,7 @@ public:
 
 	void restart();
 	void restart(ShiftedDcId shiftedDcId);
+	void stopForServerEnrollment();
 	[[nodiscard]] int32 dcstate(ShiftedDcId shiftedDcId = 0);
 	[[nodiscard]] QString dctransport(ShiftedDcId shiftedDcId = 0);
 	void ping();
@@ -129,6 +133,7 @@ public:
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId);
+	void sendAnything(ShiftedDcId shiftedDcId, crl::time msCanWait);
 	void registerRequest(mtpRequestId requestId, ShiftedDcId shiftedDcId);
 	void unregisterRequest(mtpRequestId requestId);
 	void storeRequest(
@@ -187,6 +192,12 @@ public:
 	[[nodiscard]] rpl::lifetime &lifetime();
 
 private:
+	friend class Instance;
+
+	[[nodiscard]] bool networkAllowed() const {
+		return _started && !_pausedForServerEnrollment;
+	}
+
 	void importDone(
 		const MTPauth_Authorization &result,
 		const Response &response);
@@ -227,6 +238,9 @@ private:
 	const Instance::Mode _mode = Instance::Mode::Normal;
 	const std::unique_ptr<Config> _config;
 	const std::shared_ptr<base::NetworkReachability> _networkReachability;
+	bool _startPaused = false;
+	std::atomic_bool _started = false;
+	std::atomic_bool _pausedForServerEnrollment = false;
 
 	std::unique_ptr<QThread> _mainSessionThread;
 	std::unique_ptr<QThread> _otherSessionsThread;
@@ -321,6 +335,7 @@ Instance::Private::Private(
 , _mode(mode)
 , _config(std::move(fields.config))
 , _networkReachability(base::NetworkReachability::Instance())
+, _startPaused(fields.startPaused)
 , _proxySettings(Core::App().settings().proxy()) {
 	Expects(_config != nullptr);
 
@@ -380,6 +395,10 @@ Instance::Private::Private(
 }
 
 void Instance::Private::start() {
+	if (_started || _startPaused) {
+		return;
+	}
+	_started = true;
 	if (isKeysDestroyer()) {
 		for (const auto &[shiftedDcId, dc] : _dcenters) {
 			startSession(shiftedDcId);
@@ -394,7 +413,72 @@ void Instance::Private::start() {
 	requestConfig();
 }
 
+void Instance::Private::resume() {
+	const auto wasPaused = _startPaused
+		|| _pausedForServerEnrollment.load();
+	if (!wasPaused) {
+		return;
+	}
+	const auto wasStarted = _started.load();
+	_startPaused = false;
+	_pausedForServerEnrollment = false;
+	if (!wasStarted) {
+		start();
+		return;
+	}
+	for (const auto &[shiftedDcId, session] : _sessions) {
+		session->restart();
+	}
+	requestConfig();
+}
+
+void Instance::Private::stopForServerEnrollment() {
+	if (!_started) {
+		return;
+	}
+	_pausedForServerEnrollment = true;
+	_checkDelayedTimer.cancel();
+	if (_cdnConfigLoadRequestId) {
+		request(base::take(_cdnConfigLoadRequestId)).cancel();
+	}
+	_configLoader.reset();
+	_domainResolver.reset();
+	_httpUnixtimeLoader.reset();
+
+	// The credential steps own their Sender instances, but cancel any
+	// account-level requests as well. Otherwise a request that was waiting
+	// for a connection could be replayed when the corrected pin resumes.
+	auto requestIds = std::vector<mtpRequestId>();
+	{
+		QMutexLocker lock(&_requestByDcLock);
+		requestIds.reserve(_requestsByDc.size());
+		for (const auto &request : _requestsByDc) {
+			requestIds.push_back(request.first);
+		}
+	}
+	for (const auto requestId : requestIds) {
+		request(requestId).cancel();
+		cancel(requestId);
+	}
+	_delayedRequests.clear();
+	{
+		QMutexLocker lock(&_dependentRequestsLock);
+		_dependentRequests.clear();
+	}
+	_requestsDelays.clear();
+	_badGuestDcRequests.clear();
+	_authWaiters.clear();
+	_authExportRequests.clear();
+	_logoutGuestRequestIds.clear();
+	for (const auto &entry : _sessions) {
+		entry.second->stopUntilPinChange();
+	}
+}
+
 void Instance::Private::resolveProxyDomain(const QString &host) {
+	if (!networkAllowed()) {
+		return;
+	}
 	if (!_domainResolver) {
 		_domainResolver = std::make_unique<DomainResolver>([=](
 				const QString &host,
@@ -518,7 +602,7 @@ rpl::producer<DcId> Instance::Private::mainDcIdValue() const {
 }
 
 void Instance::Private::requestConfig() {
-	if (_configLoader || isKeysDestroyer()) {
+	if (!networkAllowed() || _configLoader || isKeysDestroyer()) {
 		return;
 	}
 	_configLoader = std::make_unique<ConfigLoader>(
@@ -548,7 +632,7 @@ void Instance::Private::badConfigurationError() {
 }
 
 void Instance::Private::syncHttpUnixtime() {
-	if (base::unixtime::http_valid() || _httpUnixtimeLoader) {
+	if (!networkAllowed() || base::unixtime::http_valid() || _httpUnixtimeLoader) {
 		return;
 	} else if (dcOptions().refusesProductionFallback()) {
 		// This loader takes the same DNS and Firebase route as the
@@ -580,6 +664,9 @@ rpl::producer<> Instance::Private::frozenErrorReceived() const {
 }
 
 void Instance::Private::requestConfigIfOld() {
+	if (!networkAllowed()) {
+		return;
+	}
 	const auto timeout = _config->values().blockedMode
 		? kConfigBecomesOldForBlockedIn
 		: kConfigBecomesOldIn;
@@ -589,6 +676,9 @@ void Instance::Private::requestConfigIfOld() {
 }
 
 void Instance::Private::requestConfigIfExpired() {
+	if (!networkAllowed()) {
+		return;
+	}
 	const auto requestIn = (_configExpiresAt - crl::now());
 	if (requestIn > 0) {
 		base::call_delayed(
@@ -601,13 +691,16 @@ void Instance::Private::requestConfigIfExpired() {
 }
 
 void Instance::Private::requestCDNConfig() {
-	if (_cdnConfigLoadRequestId || !hasMainDcId()) {
+	if (!networkAllowed() || _cdnConfigLoadRequestId || !hasMainDcId()) {
 		return;
 	}
 	_cdnConfigLoadRequestId = request(
 		MTPhelp_GetCdnConfig()
 	).done([this](const MTPCdnConfig &result) {
 		_cdnConfigLoadRequestId = 0;
+		if (!networkAllowed()) {
+			return;
+		}
 		result.match([&](const MTPDcdnConfig &data) {
 			dcOptions().setCDNConfig(data);
 		});
@@ -616,12 +709,18 @@ void Instance::Private::requestCDNConfig() {
 }
 
 void Instance::Private::restart() {
+	if (!networkAllowed()) {
+		return;
+	}
 	for (const auto &[shiftedDcId, session] : _sessions) {
 		session->restart();
 	}
 }
 
 void Instance::Private::restart(ShiftedDcId shiftedDcId) {
+	if (!networkAllowed()) {
+		return;
+	}
 	const auto dcId = BareDcId(shiftedDcId);
 	for (const auto &[shiftedDcId, session] : _sessions) {
 		if (BareDcId(shiftedDcId) == dcId) {
@@ -631,6 +730,9 @@ void Instance::Private::restart(ShiftedDcId shiftedDcId) {
 }
 
 int32 Instance::Private::dcstate(ShiftedDcId shiftedDcId) {
+	if (!networkAllowed()) {
+		return DisconnectedState;
+	}
 	if (!shiftedDcId) {
 		Assert(_mainSession != nullptr);
 		return _mainSession->getState();
@@ -648,6 +750,9 @@ int32 Instance::Private::dcstate(ShiftedDcId shiftedDcId) {
 }
 
 QString Instance::Private::dctransport(ShiftedDcId shiftedDcId) {
+	if (!networkAllowed()) {
+		return QString();
+	}
 	if (!shiftedDcId) {
 		Assert(_mainSession != nullptr);
 		return _mainSession->transport();
@@ -664,7 +769,19 @@ QString Instance::Private::dctransport(ShiftedDcId shiftedDcId) {
 }
 
 void Instance::Private::ping() {
+	if (!networkAllowed()) {
+		return;
+	}
 	getSession(0)->ping();
+}
+
+void Instance::Private::sendAnything(
+		ShiftedDcId shiftedDcId,
+		crl::time msCanWait) {
+	if (!networkAllowed()) {
+		return;
+	}
+	getSession(shiftedDcId)->sendAnything(msCanWait);
 }
 
 void Instance::Private::cancel(mtpRequestId requestId) {
@@ -693,6 +810,9 @@ void Instance::Private::cancel(mtpRequestId requestId) {
 
 // result < 0 means waiting for such count of ms.
 int32 Instance::Private::state(mtpRequestId requestId) {
+	if (!networkAllowed()) {
+		return MTP::RequestSent;
+	}
 	if (requestId > 0) {
 		if (const auto shiftedDcId = queryRequestByDc(requestId)) {
 			const auto session = getSession(qAbs(*shiftedDcId));
@@ -721,6 +841,9 @@ void Instance::Private::stopSession(ShiftedDcId shiftedDcId) {
 }
 
 void Instance::Private::reInitConnection(DcId dcId) {
+	if (!networkAllowed()) {
+		return;
+	}
 	for (const auto &[shiftedDcId, session] : _sessions) {
 		if (BareDcId(shiftedDcId) == dcId) {
 			session->reInitConnection();
@@ -924,12 +1047,18 @@ QString Instance::Private::systemVersion() const {
 }
 
 void Instance::Private::unpaused() {
+	if (!networkAllowed()) {
+		return;
+	}
 	for (const auto &[shiftedDcId, session] : _sessions) {
 		session->unpaused();
 	}
 }
 
 void Instance::Private::configLoadDone(const MTPConfig &result) {
+	if (!networkAllowed()) {
+		return;
+	}
 	Expects(result.type() == mtpc_config);
 
 	_configLoader.reset();
@@ -975,6 +1104,9 @@ void Instance::Private::configLoadDone(const MTPConfig &result) {
 }
 
 bool Instance::Private::configLoadFail(const Error &error) {
+	if (!networkAllowed()) {
+		return false;
+	}
 	if (IsDefaultHandledError(error)) return false;
 
 	//	loadingConfig = false;
@@ -1009,6 +1141,10 @@ std::optional<ShiftedDcId> Instance::Private::changeRequestByDc(
 }
 
 void Instance::Private::checkDelayedRequests() {
+	if (!networkAllowed()) {
+		_delayedRequests.clear();
+		return;
+	}
 	auto now = crl::now();
 	while (!_delayedRequests.empty() && now >= _delayedRequests.front().second) {
 		auto requestId = _delayedRequests.front().first;
@@ -1049,6 +1185,10 @@ void Instance::Private::sendRequest(
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId) {
+	if (!networkAllowed()) {
+		LOG(("MTP Error: refused a request while server enrollment is paused."));
+		return;
+	}
 	const auto session = getSession(shiftedDcId);
 
 	request->requestId = requestId;
@@ -2020,6 +2160,18 @@ void Instance::restart() {
 	_private->restart();
 }
 
+void Instance::resume() {
+	_private->resume();
+}
+
+bool Instance::isServerEnrollmentNetworkAllowed() const {
+	return _private->networkAllowed();
+}
+
+void Instance::stopForServerEnrollment() {
+	_private->stopForServerEnrollment();
+}
+
 void Instance::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure) {
@@ -2202,7 +2354,7 @@ void Instance::sendRequest(
 }
 
 void Instance::sendAnything(ShiftedDcId shiftedDcId, crl::time msCanWait) {
-	_private->getSession(shiftedDcId)->sendAnything(msCanWait);
+	_private->sendAnything(shiftedDcId, msCanWait);
 }
 
 rpl::lifetime &Instance::lifetime() {

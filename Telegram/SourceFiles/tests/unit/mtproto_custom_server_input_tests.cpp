@@ -827,13 +827,13 @@ TEST_CASE(OtherKeyErrorsKeepRetrying) {
 		false) == AuthKeyFailureAction::Retry);
 }
 
-// CompareKeyId: an empty comparison is None, not a failed check, and it
-// advances — the user has not started verifying yet.
-TEST_CASE(CompareKeyIdEmptyIsNoneAndAdvances) {
+// CompareKeyId: an empty comparison is None and blocks until the user has
+// deliberately checked every group.
+TEST_CASE(CompareKeyIdEmptyIsNoneAndBlocks) {
 	const auto computed = CheckServerKey(
 		QString::fromLatin1(kRsa2048Spki)).identity;
 	CHECK_EQ(static_cast<int>(CompareKeyId(QString(), computed)), static_cast<int>(KeyIdCompare::None));
-	CHECK(KeyIdCompareAllowsAdvance(CompareKeyId(QString(), computed)));
+	CHECK(!KeyIdCompareAllowsAdvance(CompareKeyId(QString(), computed)));
 }
 
 // CompareKeyId: something typed that is not a readable key_id is

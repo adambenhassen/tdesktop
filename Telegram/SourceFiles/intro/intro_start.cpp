@@ -30,6 +30,9 @@ StartWidget::StartWidget(
 }
 
 void StartWidget::submit() {
+	// Account::resetAuthorizationKeys() preserves the paused state for a
+	// fresh enrollment account, so stale keys can be discarded here without
+	// creating a network-capable destroyer before confirmation.
 	account().destroyStaleAuthorizationKeys();
 	goNext<ServerWidget>();
 }

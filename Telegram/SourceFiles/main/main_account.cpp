@@ -204,8 +204,14 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		config = std::make_unique<MTP::Config>(
 			Core::App().fallbackProductionConfig());
 	}
-	startMtp(std::move(config));
-	_appConfig->start();
+	const auto customServer = config->customServer();
+	const auto startPaused = !_sessionUserId
+		&& (!customServer.key
+			|| !config->dcOptions().isAuthorized(customServer.dcId));
+	startMtp(std::move(config), startPaused);
+	if (!startPaused) {
+		_appConfig->start();
+	}
 	watchProxyChanges();
 	watchSessionChanges();
 }
@@ -326,6 +332,9 @@ void Account::createSession(
 		: _mtp->mainDcId();
 	if (_mtp->dcOptions().markAuthorized(authorizedDcId)) {
 		local().writeMtpConfig();
+	}
+	if (!_mtpKeysToDestroy.empty()) {
+		destroyMtpKeys(base::take(_mtpKeysToDestroy));
 	}
 
 	Ensures(_session != nullptr);
@@ -544,13 +553,16 @@ void Account::setMtpAuthorization(const QByteArray &serialized) {
 		).arg(_mtpKeysToDestroy.size()));
 }
 
-void Account::startMtp(std::unique_ptr<MTP::Config> config) {
+void Account::startMtp(
+		std::unique_ptr<MTP::Config> config,
+		bool startPaused) {
 	Expects(!_mtp);
 
 	auto fields = base::take(_mtpFields);
 	fields.config = std::move(config);
 	fields.deviceModel = Platform::DeviceModelPretty();
 	fields.systemVersion = Platform::SystemVersionPretty();
+	fields.startPaused = startPaused;
 	_mtp = std::make_unique<MTP::Instance>(
 		MTP::Instance::Mode::Normal,
 		std::move(fields));
@@ -605,7 +617,10 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
 		}
 	});
 
-	if (!_mtpKeysToDestroy.empty()) {
+	// A paused enrollment account must not create the separate key-destroyer
+	// instance either. Keep these keys until the account has authenticated,
+	// when createSession() resumes their normal cleanup path.
+	if (!startPaused && !_mtpKeysToDestroy.empty()) {
 		destroyMtpKeys(base::take(_mtpKeysToDestroy));
 	}
 
@@ -758,7 +773,11 @@ void Account::resetAuthorizationKeys() {
 	{
 		const auto old = base::take(_mtp);
 		auto config = std::make_unique<MTP::Config>(old->config());
-		startMtp(std::move(config));
+		const auto customServer = config->customServer();
+		const auto startPaused = !_sessionUserId
+			&& (!customServer.key
+				|| !config->dcOptions().isAuthorized(customServer.dcId));
+		startMtp(std::move(config), startPaused);
 	}
 	local().writeMtpData();
 }

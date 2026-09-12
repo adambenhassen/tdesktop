@@ -75,7 +75,7 @@ UsernameWidget::UsernameWidget(
 	setDescriptionText(tr::lng_intro_username_desc(
 		tr::now,
 		lt_server,
-		getData()->serverAddress));
+		getData()->serverEndpoint));
 	setErrorCentered(false);
 
 	_username->changes() | rpl::on_next([=] {
@@ -211,7 +211,7 @@ void UsernameWidget::checkRequest() {
 		showStatus(tr::lng_intro_still_waiting(
 			tr::now,
 			lt_server,
-			getData()->serverAddress));
+			getData()->serverEndpoint));
 	}
 }
 

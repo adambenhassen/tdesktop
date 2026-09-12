@@ -124,7 +124,9 @@ private:
 		LoggedOut,
 	};
 
-	void startMtp(std::unique_ptr<MTP::Config> config);
+	void startMtp(
+		std::unique_ptr<MTP::Config> config,
+		bool startPaused = false);
 	void createSession(
 		const MTPUser &user,
 		QByteArray serialized,
