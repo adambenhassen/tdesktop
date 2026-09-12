@@ -786,6 +786,9 @@ CANARIES=(
 for canary in "${CANARIES[@]}"; do
 	shasum -a 256 "$canary"
 done > "$EVIDENCE_DIR/canaries-before.txt"
+if ! find "$PORTABLE_ROOT" -print | LC_ALL=C sort > "$EVIDENCE_DIR/portable-tree-before.txt"; then
+	fail "portable fixture availability" "could not snapshot executable-adjacent portable input"
+fi
 
 OFFICIAL_DMG="$RUN_ROOT/official.dmg"
 if ! curl --fail --location --silent --show-error \
@@ -1019,6 +1022,12 @@ done > "$EVIDENCE_DIR/canaries-after.txt"; then
 fi
 if ! cmp "$EVIDENCE_DIR/canaries-before.txt" "$EVIDENCE_DIR/canaries-after.txt"; then
 	fail "official canary integrity" "official or portable canary changed"
+fi
+if ! find "$PORTABLE_ROOT" -print | LC_ALL=C sort > "$EVIDENCE_DIR/portable-tree-after.txt"; then
+	fail "portable fixture availability" "could not snapshot executable-adjacent portable input after lifecycle"
+fi
+if ! cmp "$EVIDENCE_DIR/portable-tree-before.txt" "$EVIDENCE_DIR/portable-tree-after.txt"; then
+	fail "portable override isolation" "executable-adjacent portable input changed during lifecycle"
 fi
 if [ -e "$SOURCE_PORTABLE_ROOT" ]; then
 	fail "artifact portable fixture isolation" "test fixture leaked into uploaded app path=$SOURCE_PORTABLE_ROOT"
