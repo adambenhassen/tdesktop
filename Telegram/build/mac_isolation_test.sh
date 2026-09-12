@@ -149,6 +149,24 @@ wait_for_file() {
 	return 1
 }
 
+wait_for_trace_marker() {
+	local pid="$1"
+	local path="$2"
+	local marker="$3"
+	local seconds="$4"
+	local i
+	for i in $(seq 1 $((seconds * 10))); do
+		if grep -F -- "$marker" "$path" >/dev/null 2>&1; then
+			return 0
+		fi
+		if ! process_alive "$pid"; then
+			return 1
+		fi
+		sleep 0.1
+	done
+	return 1
+}
+
 wait_for_stopped() {
 	local pid="$1"
 	local seconds="$2"
@@ -356,6 +374,7 @@ run_lifecycle_observer_control() {
 	local dtrace_program
 	local helper_status=0
 	local child_pid
+	local fork_event_seen=0
 	CONTROL_READY="$RUN_ROOT/observer-control-ready"
 	CONTROL_RELEASE="$RUN_ROOT/observer-control-release"
 	CONTROL_RESULT="$RUN_ROOT/observer-control-result"
@@ -397,16 +416,15 @@ PY
 	if ! [[ "$CONTROL_PID" =~ ^[0-9]+$ ]]; then
 		control_observer_unavailable "fork observer control reported an invalid parent pid"
 	fi
-	dtrace_program="syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
 	{
 		echo "parent_pid=$CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
 	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
 	sudo -n /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1 &
 	CONTROL_DTRACE_PID=$!
-	sleep 1
-	if ! process_alive "$CONTROL_DTRACE_PID"; then
-		control_observer_unavailable "fork observer control could not start dtrace"
+	if ! wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" "observer-ready" 10; then
+		control_observer_unavailable "fork observer control did not report dtrace readiness"
 	fi
 	touch "$CONTROL_RELEASE"
 	if ! wait_for_file "$CONTROL_RESULT" 10; then
@@ -423,11 +441,14 @@ PY
 	if [ "$helper_status" -ne 0 ]; then
 		control_observer_unavailable "fork observer control helper failed"
 	fi
-	sleep 1
+	if wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
+		"fork parent=$CONTROL_PID child=$child_pid" 10; then
+		fork_event_seen=1
+	fi
 	if ! stop_lifecycle_observer_control; then
 		control_observer_unavailable "fork observer shutdown or flush failed"
 	fi
-	if ! grep -F "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1; then
+	if [ "$fork_event_seen" -eq 0 ] && ! grep -F -- "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1; then
 		control_observer_unavailable "fork observer missed a short-lived fork-only child"
 	fi
 	{
