@@ -41,3 +41,5 @@ grep -F "OFFICIAL_SOURCE=\"\$(find \"\$MOUNT_PATH\" -maxdepth 2 -type d -name '*
 grep -F 'set frontmost of (first application process whose unix id is $OFFICIAL_PID) to true' "$ISOLATION_FILE" >/dev/null
 grep -F 'env HOME="$HOME_ROOT" "$OFFICIAL_EXE" -noupdate -debug -workdir "$OLD"' "$ISOLATION_FILE" >/dev/null
 grep -F 'env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$NEW"' "$ISOLATION_FILE" >/dev/null
+grep -F 'cp "$WORKING_LOG" "$EVIDENCE_DIR/telegramd-working-dir.log"' "$ISOLATION_FILE" >/dev/null
+grep -F 'grep -F "Working dir: $NEW" "$WORKING_LOG"' "$ISOLATION_FILE" >/dev/null

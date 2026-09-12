@@ -341,13 +341,18 @@ FORK_PID=$!
 wait_for_process "$FORK_PID" 30 || { echo "Telegramd process did not stay alive" >&2; exit 1; }
 printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/telegramd-pid.txt"
 wait_for_file "$NEW/tdata" 60 || { echo "Telegramd support directory did not appear" >&2; exit 1; }
+WORKING_LOG=""
 for i in $(seq 1 60); do
-	if grep -F "Working dir: $NEW" "$EVIDENCE_DIR/telegramd.log" >/dev/null 2>&1; then
+	WORKING_LOG="$(find "$NEW" -maxdepth 1 -type f -name 'log*.txt' -print -quit 2>/dev/null || true)"
+	if [ -n "$WORKING_LOG" ] && grep -F "Working dir: $NEW" "$WORKING_LOG" >/dev/null 2>&1; then
 		break
 	fi
+	WORKING_LOG=""
 	sleep 1
 done
-grep -F "Working dir: $NEW" "$EVIDENCE_DIR/telegramd.log" >/dev/null
+[ -n "$WORKING_LOG" ]
+cp "$WORKING_LOG" "$EVIDENCE_DIR/telegramd-working-dir.log"
+grep -F "Working dir: $NEW" "$WORKING_LOG" >/dev/null
 
 NEW_HASH="$(printf '%s' "$NEW" | md5 -q)"
 find "$SOCKET_ROOT" -type s -name "$OLD_HASH-*" -print > "$EVIDENCE_DIR/official-endpoints.txt"
