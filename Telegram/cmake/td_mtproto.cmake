@@ -43,6 +43,8 @@ PRIVATE
     mtproto/mtproto_config.h
     mtproto/mtproto_custom_server_input.cpp
     mtproto/mtproto_custom_server_input.h
+    mtproto/mtproto_server_enrollment.cpp
+    mtproto/mtproto_server_enrollment.h
     mtproto/mtproto_dc_options.cpp
     mtproto/mtproto_dc_options.h
     mtproto/mtproto_dh_utils.cpp

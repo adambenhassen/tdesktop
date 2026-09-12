@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "mtproto/mtproto_custom_server_input.h"
+#include "mtproto/mtproto_server_enrollment.h"
 
 #include <QtCore/QStringList>
 
@@ -60,6 +61,16 @@ UKnurT2BTbHefnA851R6zVDZ4RGa0pzwn11RFAW3AL2KurBZ273CzSDA/r+UXObY\n\
 u4PFcoHiO6sxo/3SWz627Xt+HzGBdbwxHrw7CEKiSxuaWNHfENFNUdFY7LKe1eIC\n\
 R5zm0IzCZUg+5aOceQ/EcJgEofi27Cg+S5OWD4uyANegnJWxYG3nWcREIcC5jTfG\n\
 df7xhSvMDo2LkEv2skHcYxuV8JaHOFZ8rwIDAQAB\n\
+-----END RSA PUBLIC KEY-----";
+
+const char kOtherRsa2048Pkcs1Pub[] = "\
+-----BEGIN RSA PUBLIC KEY-----\n\
+MIIBCgKCAQEAyMEdY1aR+sCR3ZSJrtztKTKqigvO/vBfqACJLZtS7QMgCGXJ6XIR\n\
+yy7mx66W0/sOFa7/1mAZtEoIokDP3ShoqF4fVNb6XeqgQfaUHd8wJpDWHcR2OFwv\n\
+plUUI1PLTktZ9uW2WE23b+ixNwJjJGwBDJPQEQFBE+vfmH0JP503wr5INS1poWg/\n\
+j25sIWeYPHYeOrFp/eXaqhISP6G+q2IeTaWTXpwZj4LzXq5YOpk4bYEQ6mvRq7D1\n\
+aHWfYmlEGepfaYR8Q0YqvvhYtMte3ITnuSJs171+GDqpdKcSwHnd6FudwGO4pcCO\n\
+j4WcDuXc2CTHgH8gFTNhp/Y8/SpDOhvn9QIDAQAB\n\
 -----END RSA PUBLIC KEY-----";
 
 // A private key frame with a junk body. The classifier stops at the
@@ -871,4 +882,363 @@ TEST_CASE(CompareKeyIdWithEmptyComputedNeverMatches) {
 		static_cast<int>(CompareKeyId(typed, QString())),
 		static_cast<int>(KeyIdCompare::Mismatch));
 	CHECK(!KeyIdCompareAllowsAdvance(CompareKeyId(typed, QString())));
+}
+
+namespace {
+
+// The checksum is SHA-256 over the canonical payload through the
+// public-key-end line, including its final LF. The endpoint spelling in the
+// envelope is normalized before it enters the payload, while the PEM text is
+// preserved after CRLF normalization. The values are independently derived
+// fixtures, not produced by the parser under test.
+const char kEnrollmentChecksum[] =
+	"90e50f84c9e486d67684837830d81c236811aeee769e9cdb1e401bd7599eebb6";
+const char kHostnameEnrollmentChecksum[] =
+	"00963a371813581a59691447d1796c3770ada5eac829ef07b3ab784695f20f15";
+const char kIpv6EnrollmentChecksum[] =
+	"328994c878a05dec03c62a5945baa3ebff114ad7a3b560e12e77715a35fad6d3";
+
+[[nodiscard]] QString EnrollmentArtifact(
+		const QString &endpoint = u"100.64.0.5:443"_q,
+		const QString &key = QString::fromLatin1(kRsa2048Spki),
+		const QString &checksum = QString::fromLatin1(kEnrollmentChecksum)) {
+	return u"telegramd-enrollment-v1\nendpoint="_q
+		+ endpoint
+		+ u"\npublic-key-begin\n"_q
+		+ key
+		+ u"\npublic-key-end\nchecksum=sha256:"_q
+		+ checksum
+		+ u"\ntelegramd-enrollment-end"_q;
+}
+
+[[nodiscard]] int EnrollmentStatusValue(ServerEnrollmentStatus status) {
+	return static_cast<int>(status);
+}
+
+[[nodiscard]] bool EnrollmentHasResidue(
+		const ServerEnrollmentCheck &check) {
+	return check.valid()
+		|| !check.endpoint.empty()
+		|| !check.key.empty()
+		|| !check.identity.isEmpty();
+}
+
+[[nodiscard]] QString ArtifactWithEndpoint(const char *endpoint) {
+	return EnrollmentArtifact(QString::fromLatin1(endpoint));
+}
+
+[[nodiscard]] QString ArtifactWithEndpoint(const QString &endpoint) {
+	return EnrollmentArtifact(endpoint);
+}
+
+[[nodiscard]] QString ArtifactWithKey(const char *key) {
+	return EnrollmentArtifact(
+		QString::fromLatin1("100.64.0.5:443"),
+		QString::fromLatin1(key));
+}
+
+} // namespace
+
+TEST_CASE(EnrollmentArtifactReturnsEndpointKeyAndIdentity) {
+	const auto check = CheckServerEnrollment(EnrollmentArtifact());
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::Valid));
+	CHECK(check.valid());
+	CHECK_EQ(check.endpoint, std::string("100.64.0.5:443"));
+	CHECK(check.key.valid());
+	CHECK_EQ(check.key.modulusBits(), 2048);
+	CHECK_EQ(check.identity, QString::fromLatin1(kRsa2048Identity));
+}
+
+TEST_CASE(EnrollmentArtifactIgnoresOuterWhitespaceAndCrLf) {
+	auto withWhitespace = QString::fromLatin1(" \n\t")
+		+ EnrollmentArtifact()
+		+ QString::fromLatin1(" \n\t");
+	withWhitespace.replace(QChar::fromLatin1('\n'),
+		QChar::fromLatin1('\r'));
+	// Replace only the line endings that were introduced by the artifact;
+	// the surrounding whitespace remains a valid outer prefix and suffix.
+	withWhitespace.replace(
+		QString::fromLatin1("\r"),
+		QString::fromLatin1("\r\n"));
+
+	const auto check = CheckServerEnrollment(withWhitespace);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::Valid));
+	CHECK_EQ(check.endpoint, std::string("100.64.0.5:443"));
+	CHECK_EQ(check.identity, QString::fromLatin1(kRsa2048Identity));
+}
+
+TEST_CASE(EnrollmentArtifactNormalizesEquivalentIpv4Endpoint) {
+	const auto check = CheckServerEnrollment(
+		EnrollmentArtifact(u" 100.64.0.5:0443 "_q));
+	CHECK(check.valid());
+	CHECK_EQ(check.endpoint, std::string("100.64.0.5:443"));
+}
+
+TEST_CASE(EnrollmentArtifactNormalizesEquivalentHostnameEndpoint) {
+	const auto check = CheckServerEnrollment(EnrollmentArtifact(
+		u" TELEGRAMD.EXAMPLE.COM:0443 "_q,
+		QString::fromLatin1(kRsa2048Spki),
+		QString::fromLatin1(kHostnameEnrollmentChecksum)));
+	CHECK(check.valid());
+	CHECK_EQ(check.endpoint, std::string("telegramd.example.com:443"));
+}
+
+TEST_CASE(EnrollmentArtifactNormalizesEquivalentIpv6Endpoint) {
+	const auto check = CheckServerEnrollment(EnrollmentArtifact(
+		u"[2001:0DB8:0:0:0:0:0:1]:0443"_q,
+		QString::fromLatin1(kRsa2048Spki),
+		QString::fromLatin1(kIpv6EnrollmentChecksum)));
+	CHECK(check.valid());
+	CHECK_EQ(check.endpoint, std::string("[2001:db8::1]:443"));
+}
+
+TEST_CASE(EnrollmentArtifactReportsMissingEndpoint) {
+	auto artifact = EnrollmentArtifact();
+	artifact.remove(u"endpoint=100.64.0.5:443\n"_q);
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::MissingEndpoint));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsMissingKey) {
+	auto artifact = EnrollmentArtifact();
+	artifact.replace(
+		u"public-key-begin\n"_q
+			+ QString::fromLatin1(kRsa2048Spki)
+			+ u"\npublic-key-end"_q,
+		QString());
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::MissingKey));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsMoreThanOneEndpoint) {
+	auto artifact = EnrollmentArtifact();
+	artifact.replace(
+		u"\npublic-key-begin"_q,
+		u"\nendpoint=100.64.0.5:443\npublic-key-begin"_q);
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::MultipleEndpoints));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsMoreThanOneKey) {
+	auto artifact = EnrollmentArtifact();
+	artifact.replace(
+		u"\npublic-key-end\nchecksum="_q,
+		u"\npublic-key-end\npublic-key-begin\n"_q
+			+ QString::fromLatin1(kRsa2048Spki)
+			+ u"\npublic-key-end\nchecksum="_q);
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::MultipleKeys));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsTruncatedEnvelope) {
+	auto artifact = EnrollmentArtifact();
+	artifact.chop(QString::fromLatin1("\ntelegramd-enrollment-end").size());
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::TruncatedEnvelope));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsUnparseableEnvelope) {
+	auto artifact = EnrollmentArtifact();
+	artifact.replace(
+		0,
+		QString::fromLatin1("telegramd-enrollment-v1").size(),
+		u"telegramd-enrollment-v2"_q);
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::UnparseableEnvelope));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsTrailingContent) {
+	const auto check = CheckServerEnrollment(
+		EnrollmentArtifact() + u"\ntrailing text"_q);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::TrailingContent));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsEndpointNoPort) {
+	const auto check = CheckServerEnrollment(
+		ArtifactWithEndpoint("100.64.0.5"));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::EndpointNoPort));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsEndpointBadPort) {
+	const auto check = CheckServerEnrollment(
+		ArtifactWithEndpoint("100.64.0.5:0"));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::EndpointBadPort));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsEndpointEmptyHost) {
+	const auto check = CheckServerEnrollment(ArtifactWithEndpoint(":443"));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::EndpointEmptyHost));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsEndpointBadHost) {
+	const auto check = CheckServerEnrollment(
+		ArtifactWithEndpoint("exa_mple.com:443"));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::EndpointBadHost));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsEndpointHostTooLong) {
+	const auto check = CheckServerEnrollment(
+		ArtifactWithEndpoint(HostOfSize(46, 443)));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::EndpointHostTooLong));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsEndpointUnbracketedIpv6) {
+	const auto check = CheckServerEnrollment(
+		ArtifactWithEndpoint("2001:db8::1:443"));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::EndpointUnbracketedIPv6));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsUnreadableKey) {
+	auto key = QString::fromLatin1(kRsa2048Spki);
+	key.remove(
+		u"zeigjblTm8d/Ckb8j8Th2Fj9WpBmO9kcIlG4PWmu2lysm5x1UBbkWvZVYx8AHvOx\n"_q);
+	const auto check = CheckServerEnrollment(EnrollmentArtifact(
+		u"100.64.0.5:443"_q,
+		key));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::UnreadableKey));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsPrivateKey) {
+	const auto privateKey = QString::fromLatin1(
+		"-----BEGIN PRIVATE KEY-----\n"
+		"junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk\n"
+		"-----END PRIVATE KEY-----");
+	const auto check = CheckServerEnrollment(EnrollmentArtifact(
+		u"100.64.0.5:443"_q,
+		privateKey));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::PrivateKey));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsPrivateKeyBeforeMultipleKey) {
+	const auto check = CheckServerEnrollment(ArtifactWithKey(kConcatPubThenPriv));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::PrivateKey));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsNonRsaKey) {
+	const auto check = CheckServerEnrollment(ArtifactWithKey(kEcSpki));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::NotRsaKey));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactReportsBadModulusSize) {
+	const auto check = CheckServerEnrollment(ArtifactWithKey(kRsa1024Spki));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::BadModulusSize));
+	CHECK_EQ(check.modulusBits, 1024);
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactRejectsChangedValidKey) {
+	const auto check = CheckServerEnrollment(ArtifactWithKey(
+		kOtherRsa2048Pkcs1Pub));
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::UnparseableEnvelope));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+TEST_CASE(EnrollmentArtifactRejectsChangedChecksum) {
+	auto artifact = EnrollmentArtifact();
+	const auto checksumStart = artifact.indexOf(u"checksum=sha256:"_q)
+		+ QString::fromLatin1("checksum=sha256:").size();
+	artifact[checksumStart]
+		= (artifact[checksumStart] == QChar::fromLatin1('0'))
+			? QChar::fromLatin1('1')
+			: QChar::fromLatin1('0');
+	const auto check = CheckServerEnrollment(artifact);
+	CHECK_EQ(
+		EnrollmentStatusValue(check.status),
+		EnrollmentStatusValue(ServerEnrollmentStatus::UnparseableEnvelope));
+	CHECK(!EnrollmentHasResidue(check));
+}
+
+// InternalKeyError is the only validator outcome that requires an
+// allocation failure in DER re-encoding, so it cannot be made deterministic
+// as an input fixture. Exercise the enrollment mapping directly instead.
+TEST_CASE(EnrollmentKeyReasonMapsInternalError) {
+	CHECK_EQ(
+		EnrollmentStatusValue(ServerEnrollmentStatusFromKeyStatus(
+			ServerKeyStatus::InternalError)),
+		EnrollmentStatusValue(ServerEnrollmentStatus::InternalKeyError));
+}
+
+TEST_CASE(EnrollmentStatusNamesCoverEveryReason) {
+	for (const auto status : {
+		ServerEnrollmentStatus::Valid,
+		ServerEnrollmentStatus::MissingEndpoint,
+		ServerEnrollmentStatus::MissingKey,
+		ServerEnrollmentStatus::MultipleEndpoints,
+		ServerEnrollmentStatus::MultipleKeys,
+		ServerEnrollmentStatus::TruncatedEnvelope,
+		ServerEnrollmentStatus::UnparseableEnvelope,
+		ServerEnrollmentStatus::TrailingContent,
+		ServerEnrollmentStatus::EndpointNoPort,
+		ServerEnrollmentStatus::EndpointBadPort,
+		ServerEnrollmentStatus::EndpointEmptyHost,
+		ServerEnrollmentStatus::EndpointBadHost,
+		ServerEnrollmentStatus::EndpointHostTooLong,
+		ServerEnrollmentStatus::EndpointUnbracketedIPv6,
+		ServerEnrollmentStatus::UnreadableKey,
+		ServerEnrollmentStatus::PrivateKey,
+		ServerEnrollmentStatus::NotRsaKey,
+		ServerEnrollmentStatus::BadModulusSize,
+		ServerEnrollmentStatus::InternalKeyError,
+	}) {
+		CHECK(ServerEnrollmentStatusName(status) != nullptr);
+	}
 }
