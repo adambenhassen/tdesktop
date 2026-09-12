@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_proxy_data.h"
 #include "mtproto/details/mtproto_serialized_request.h"
 
+#include <QtCore/QMutex>
 #include <QtCore/QTimer>
 
 #include <functional>
