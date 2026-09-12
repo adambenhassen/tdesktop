@@ -26,6 +26,7 @@ FS_PID=""
 TRACKER_PID=""
 PID_ROOTS_FILE=""
 PID_FILE=""
+PID_LOCK_DIR=""
 TRACK_STOP_FILE=""
 MOUNT_PATH=""
 MOUNTED=0
@@ -174,33 +175,61 @@ descendants() {
 }
 
 refresh_pid_file() {
-	local temporary="${PID_FILE}.tmp"
-	: > "$temporary"
+	local snapshot="${PID_FILE}.snapshot"
+	local merged="${PID_FILE}.merged"
+	local pid
+	local i
+	for i in $(seq 1 100); do
+		if mkdir "$PID_LOCK_DIR" 2>/dev/null; then
+			break
+		fi
+		if [ "$i" -eq 100 ]; then
+			printf '%s\n' "pid tracker could not acquire its lock" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+			return 1
+		fi
+		sleep 0.05
+	done
+	: > "$snapshot"
 	while IFS= read -r pid; do
 		[ -n "$pid" ] || continue
-		printf '%s\n' "$pid" >> "$temporary"
-		descendants "$pid" >> "$temporary"
+		printf '%s\n' "$pid" >> "$snapshot"
+		descendants "$pid" >> "$snapshot"
 	done < "$PID_ROOTS_FILE"
-	if ! sort -nu "$temporary" > "$PID_FILE"; then
-		printf '%s\n' "pid tracker could not sort its snapshot" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+	if [ -s "$PID_FILE" ]; then
+		cat "$PID_FILE" >> "$snapshot"
 	fi
-	rm -f "$temporary"
+	if ! sort -nu "$snapshot" > "$merged"; then
+		printf '%s\n' "pid tracker could not sort its snapshot" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+		rm -f "$snapshot" "$merged"
+		rmdir "$PID_LOCK_DIR" 2>/dev/null || true
+		return 1
+	fi
+	if ! mv "$merged" "$PID_FILE"; then
+		printf '%s\n' "pid tracker could not preserve its history" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+		rm -f "$snapshot" "$merged"
+		rmdir "$PID_LOCK_DIR" 2>/dev/null || true
+		return 1
+	fi
+	rm -f "$snapshot"
+	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
 }
 
 track_pids() {
 	while [ ! -e "$TRACK_STOP_FILE" ]; do
-		refresh_pid_file
-		sleep 1
+		refresh_pid_file || true
+		sleep 0.2
 	done
 }
 
 start_pid_tracking() {
 	PID_ROOTS_FILE="$EVIDENCE_DIR/telegramd-root-pids.txt"
 	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
+	PID_LOCK_DIR="$EVIDENCE_DIR/.telegramd-pids.lock"
 	TRACK_STOP_FILE="$EVIDENCE_DIR/.stop-pid-tracker"
 	: > "$PID_ROOTS_FILE"
 	: > "$PID_FILE"
 	rm -f "$TRACK_STOP_FILE" "$EVIDENCE_DIR/pid-tracking-failure.txt"
+	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
 	printf '%s\n' "$FORK_PID" >> "$PID_ROOTS_FILE"
 	refresh_pid_file
 	track_pids &
@@ -487,6 +516,7 @@ trap cleanup EXIT
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
 	echo "observer_lifetime=from-fork-launch-through-quit-relaunch"
+	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
 
 {
@@ -573,7 +603,8 @@ export HOME="$HOME_ROOT"
 SUPPORT_ROOT="$HOME_ROOT/Library/Application Support"
 OLD="$SUPPORT_ROOT/Telegram Desktop"
 NEW="$SUPPORT_ROOT/Telegramd"
-PORTABLE_ROOT="$APP_PATH/Contents/MacOS/TelegramForcePortable"
+PORTABLE_ROOT="$RUN_ROOT/TelegramForcePortable"
+HOSTILE_WORKDIR="$PORTABLE_ROOT"
 PORTABLE_CANARY="$PORTABLE_ROOT/tdata/alpha"
 mkdir -p "$HOME_ROOT/Library/Application Support" \
 	"$OLD/tdata" \
@@ -584,6 +615,7 @@ printf 'MAIN701_RC1_CANARY\n' > "$OLD/tdata/rc1-canary"
 printf 'MAIN701_READY_CANARY\n' > "$OLD/tupdates/ready/Telegram.app/Contents/MacOS/Telegram"
 printf 'MAIN701_LOG_CANARY\n' > "$OLD/log-canary.txt"
 printf 'MAIN701_PORTABLE_CANARY\n' > "$PORTABLE_CANARY"
+printf '%s\n' "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/hostile-workdir.txt"
 if [ -e "$NEW" ]; then
 	fail "fresh Telegramd namespace" "pre-existing path=$NEW"
 fi
@@ -666,7 +698,7 @@ FS_PID=$!
 sleep 1
 assert_alive "filesystem observer startup" "$FS_PID"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$OLD" > "$EVIDENCE_DIR/telegramd.log" 2>&1 &
+env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/telegramd.log" 2>&1 &
 FORK_PID=$!
 start_pid_tracking
 wait_for_process "$FORK_PID" 30 || fail "Telegramd process lifetime" "pid=$FORK_PID did not stay alive"
@@ -708,7 +740,7 @@ assert_alive "official coexistence" "$OFFICIAL_PID"
 official_command="$(process_command "$OFFICIAL_PID")"
 assert_equal "official command stability" "$OFFICIAL_EXE -noupdate -debug -workdir $OLD" "$official_command"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$OLD" > "$EVIDENCE_DIR/telegramd-second.log" 2>&1 &
+env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/telegramd-second.log" 2>&1 &
 SECOND_PID=$!
 add_pid_root "$SECOND_PID"
 if ! wait_for_exit "$SECOND_PID" 30; then
@@ -726,7 +758,7 @@ assert_live_fork_process_count "second launch process count" 1
 cp "$EVIDENCE_DIR/telegramd-live-pids.txt" "$EVIDENCE_DIR/telegramd-live-pids-after-second.txt"
 cp "$EVIDENCE_DIR/telegramd-process-count.txt" "$EVIDENCE_DIR/telegramd-process-count-after-second.txt"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$OLD" -quit > "$EVIDENCE_DIR/telegramd-quit.log" 2>&1 &
+env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" -quit > "$EVIDENCE_DIR/telegramd-quit.log" 2>&1 &
 QUIT_PID=$!
 add_pid_root "$QUIT_PID"
 if ! wait_for_exit "$QUIT_PID" 40; then
@@ -740,7 +772,7 @@ if ! wait_for_exit "$FORK_PID" 40; then
 fi
 assert_alive "official survives quit" "$OFFICIAL_PID"
 
-env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$OLD" > "$EVIDENCE_DIR/telegramd-relaunch.log" 2>&1 &
+env HOME="$HOME_ROOT" "$FORK_EXE" -noupdate -debug -workdir "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/telegramd-relaunch.log" 2>&1 &
 RELAUNCH_PID=$!
 add_pid_root "$RELAUNCH_PID"
 wait_for_process "$RELAUNCH_PID" 30 || fail "Telegramd relaunch process lifetime" "pid=$RELAUNCH_PID did not stay alive"
@@ -784,16 +816,13 @@ if ! ps -axo pid=,ppid=,command= > "$EVIDENCE_DIR/process-table.txt"; then
 	fail "relaunch process table" "ps failed"
 fi
 
-while IFS= read -r root_pid; do
-	[ -n "$root_pid" ] || continue
-	descendants "$root_pid"
-done < "$PID_ROOTS_FILE" | sort -nu > "$EVIDENCE_DIR/telegramd-descendants.txt"
-
 stop_trace
 stop_pid_tracking
 if [ -e "$EVIDENCE_DIR/pid-tracking-failure.txt" ]; then
 	fail "observer PID coverage" "pid tracker reported incomplete coverage"
 fi
+awk 'NR == FNR { roots[$1] = 1; next } !($1 in roots) { print }' \
+	"$PID_ROOTS_FILE" "$PID_FILE" > "$EVIDENCE_DIR/telegramd-descendants.txt"
 if ! python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/telegramd-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt"; then
 	fail "Telegramd official-namespace isolation" "filesystem observer reported a violation or ambiguous event"
 fi
