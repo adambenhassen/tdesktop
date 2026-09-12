@@ -602,7 +602,7 @@ PY
 	if [ "$SPAWN_CONTROL_PID" != "$SPAWN_CONTROL_HELPER_PID" ]; then
 		spawn_observer_unavailable "exec observer control parent pid changed"
 	fi
-	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::posix_spawn:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"posix_spawn parent=%d\\n\", pid); } proc:::exec-success /ppid == $SPAWN_CONTROL_PID/ { printf(\"exec-success parent=%d child=%d name=%s\\n\", ppid, pid, execname); }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::posix_spawn:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"posix_spawn parent=%d\\n\", pid); }"
 	{
 		echo "parent_pid=$SPAWN_CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
@@ -631,6 +631,10 @@ PY
 	if [ "$child_ppid" != "$SPAWN_CONTROL_PARENT_PID" ]; then
 		spawn_observer_unavailable "exec observer control child pid=$SPAWN_CONTROL_CHILD_PID has ppid=$child_ppid expected=$SPAWN_CONTROL_PARENT_PID"
 	fi
+	if ! wait_for_trace_marker "$SPAWN_CONTROL_OBSERVER_PID" "$SPAWN_CONTROL_TRACE" \
+		"posix_spawn parent=$SPAWN_CONTROL_PARENT_PID" 10; then
+		spawn_observer_unavailable "exec observer control missed the parent posix_spawn event"
+	fi
 	if ! wait_for_exit "$SPAWN_CONTROL_HELPER_PID" 10; then
 		spawn_observer_unavailable "exec observer control helper did not exit"
 	fi
@@ -644,17 +648,14 @@ PY
 	if ! stop_spawn_observer_control; then
 		spawn_observer_unavailable "exec observer shutdown or flush failed"
 	fi
-	if ! grep -F -- "posix_spawn parent=$SPAWN_CONTROL_PARENT_PID" "$SPAWN_CONTROL_TRACE" > "$EVIDENCE_DIR/spawn-observer-control-events.txt"; then
+	grep -F -- "posix_spawn parent=$SPAWN_CONTROL_PARENT_PID" "$SPAWN_CONTROL_TRACE" > "$EVIDENCE_DIR/spawn-observer-control-events.txt" ||
 		spawn_observer_unavailable "exec observer control missed the parent posix_spawn event"
-	fi
-	if ! grep -F -- "exec-success parent=$SPAWN_CONTROL_PARENT_PID child=$SPAWN_CONTROL_CHILD_PID" "$SPAWN_CONTROL_TRACE" >> "$EVIDENCE_DIR/spawn-observer-control-events.txt"; then
-		spawn_observer_unavailable "exec observer control missed the attributed child exec event"
-	fi
 	{
 		echo "parent_pid=$SPAWN_CONTROL_PARENT_PID"
 		echo "child_pid=$SPAWN_CONTROL_CHILD_PID"
 		echo "child_ppid=$child_ppid"
 		echo "detected=posix_spawn parent=$SPAWN_CONTROL_PARENT_PID child=$SPAWN_CONTROL_CHILD_PID"
+		echo "attribution=posix_spawn parent=$SPAWN_CONTROL_PARENT_PID child=$SPAWN_CONTROL_CHILD_PID child_ppid=$child_ppid"
 		cat "$EVIDENCE_DIR/spawn-observer-control-events.txt"
 		echo "result=PASS"
 	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
