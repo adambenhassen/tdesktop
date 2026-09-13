@@ -245,6 +245,7 @@ focus_application_process() {
 	local output="$2"
 	local seconds="$3"
 	local i
+	local frontmost_pid
 	: > "$output"
 	for i in $(seq 1 "$seconds"); do
 		if ! process_alive "$pid"; then
@@ -252,8 +253,16 @@ focus_application_process() {
 			return 1
 		fi
 		if osascript -e "tell application \"System Events\" to set frontmost of (first application process whose unix id is $pid) to true" >> "$output" 2>&1; then
-			printf 'attempt=%s result=PASS\n' "$i" >> "$output"
-			return 0
+			if frontmost_pid="$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>>"$output")"; then
+				frontmost_pid="$(printf '%s' "$frontmost_pid" | tr -d '[:space:]')"
+				printf 'attempt=%s frontmost_pid=%s\n' "$i" "${frontmost_pid:-unavailable}" >> "$output"
+				if [ "$frontmost_pid" = "$pid" ]; then
+					printf 'attempt=%s result=PASS\n' "$i" >> "$output"
+					return 0
+				fi
+			else
+				printf 'attempt=%s frontmost_pid=unavailable\n' "$i" >> "$output"
+			fi
 		fi
 		sleep 1
 	done
