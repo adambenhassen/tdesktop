@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "intro/intro_widget.h"
 #include "mtproto/mtproto_config.h"
+#include "mtproto/mtproto_server_enrollment.h"
 #include "ui/toast/toast.h"
 #include "ui/emoji_config.h"
 #include "chat_helpers/emoji_sets_manager.h"
@@ -403,7 +404,10 @@ void Controller::clearSetupEmailLock() {
 void Controller::setupIntro(
 		Main::Account *accountBeforeIntro,
 		QPixmap oldContentCache) {
-	const auto point = Core::App().domain().maybeLastOrSomeAuthedAccount()
+	const auto &options = account().mtp().dcOptions();
+	const auto point = MTP::ShouldOpenServerEnrollment(
+		options.hasCustomServer() || options.blocked(),
+		Core::App().domain().maybeLastOrSomeAuthedAccount() != nullptr)
 		? Intro::EnterPoint::Qr
 		: Intro::EnterPoint::Start;
 	_widget.setupIntro(point, accountBeforeIntro, std::move(oldContentCache));

@@ -105,7 +105,7 @@ MakeEnrollmentServerKey() {
 		&& prefsKey != 0;
 }
 
-[[nodiscard]] bool HasReadableEnrollmentConfig(
+[[nodiscard]] std::unique_ptr<MTP::Config> ReadEnrollmentConfig(
 		const QString &basePath,
 		const MTP::AuthKeyPtr &key) {
 	Storage::details::FileReadDescriptor file;
@@ -114,16 +114,22 @@ MakeEnrollmentServerKey() {
 			u"config"_q,
 			basePath,
 			key)) {
-		return false;
+		return nullptr;
 	}
 
 	QByteArray serialized;
 	file.stream >> serialized;
-	return Storage::details::CheckStreamStatus(file.stream)
-		&& [&] {
-			const auto restored = MTP::Config::FromSerialized(serialized);
-			return restored != nullptr && restored->hasCustomServer();
-		}();
+	if (!Storage::details::CheckStreamStatus(file.stream)) {
+		return nullptr;
+	}
+	return MTP::Config::FromSerialized(serialized);
+}
+
+[[nodiscard]] bool HasReadableEnrollmentConfig(
+		const QString &basePath,
+		const MTP::AuthKeyPtr &key) {
+	const auto restored = ReadEnrollmentConfig(basePath, key);
+	return restored != nullptr && restored->hasCustomServer();
 }
 
 TEST_CASE(ReplaceInvalidatesQueuedStopFromPreviousEnrollment) {
@@ -277,6 +283,40 @@ TEST_CASE(EnrollmentPersistsReadableMapBeforeConfig) {
 	CHECK(committed);
 	CHECK(HasReadableEnrollmentMap(basePath, key));
 	CHECK(HasReadableEnrollmentConfig(basePath, key));
+}
+
+TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+	const auto basePath = directory.path() + QDir::separator();
+	const auto key = MakeEnrollmentStorageKey();
+	auto account = MakeEnrollmentStorageAccount(basePath, key);
+	auto resumed = false;
+
+	const auto committed = CommitServerEnrollment(
+		[] { return true; },
+		[&] { return account->writeMtpConfig(true); },
+		[&] { resumed = true; });
+
+	CHECK(committed);
+	CHECK(resumed);
+	account.reset();
+
+	const auto restored = ReadEnrollmentConfig(basePath, key);
+	CHECK(restored != nullptr);
+	if (!restored) {
+		return;
+	}
+	CHECK(restored->hasCustomServer());
+	const auto server = restored->customServer();
+	CHECK_EQ(server.ip, "10.4.1.7");
+	CHECK_EQ(server.port, 8443);
+	CHECK(server.key != nullptr);
+	CHECK(MTP::ShouldOpenServerEnrollment(
+		restored->hasCustomServer(),
+		false));
+	CHECK(!MTP::ShouldOpenServerEnrollment(false, false));
+	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
 }
 
 TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {

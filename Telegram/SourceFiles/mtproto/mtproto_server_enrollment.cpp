@@ -223,6 +223,12 @@ const char *ServerEnrollmentStatusName(ServerEnrollmentStatus status) {
 	return nullptr;
 }
 
+bool ShouldOpenServerEnrollment(
+		bool hasBoundServer,
+		bool hasAuthenticatedAccount) {
+	return hasBoundServer || hasAuthenticatedAccount;
+}
+
 ServerEnrollmentCheck CheckServerEnrollment(const QString &artifact) {
 	const auto normalized = NormalizeLineEndings(artifact);
 	if (!normalized || normalized->isEmpty()) {

@@ -65,6 +65,13 @@ struct ServerEnrollmentCheck {
 [[nodiscard]] const char *ServerEnrollmentStatusName(
 	ServerEnrollmentStatus status);
 
+// A bound account must reopen the server step after a clean restart, even
+// before it has an authenticated session. Existing authenticated accounts
+// retain the QR entry point for adding another account.
+[[nodiscard]] bool ShouldOpenServerEnrollment(
+		bool hasBoundServer,
+		bool hasAuthenticatedAccount);
+
 // Map an existing key validator verdict to the corresponding enrollment
 // reason. This boundary is separately testable because InternalError can
 // only be produced by a failure while re-encoding an otherwise valid key.
