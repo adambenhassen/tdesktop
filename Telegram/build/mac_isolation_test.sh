@@ -56,6 +56,10 @@ TARGET_TRACE_DIR=""
 TARGET_EXEC_DIR=""
 TARGET_FORK_DIR=""
 TARGET_OBSERVER_FILE=""
+FILESYSTEM_ACTIVE_FILE=""
+FILESYSTEM_ACTIVE_PID=""
+FILESYSTEM_ACTIVE_TARGET=""
+FILESYSTEM_REQUEST_FILE=""
 MOUNT_PATH=""
 MOUNTED=0
 TRACE_STOPPED=0
@@ -75,6 +79,9 @@ fail() {
 	local criterion="$1"
 	shift
 	local detail="${*:-assertion failed}"
+	if [ -n "${OBSERVER_MANAGER_FAILURE_FILE:-}" ] && [ -s "$OBSERVER_MANAGER_FAILURE_FILE" ]; then
+		unavailable "observer coverage became unavailable while checking criterion=$criterion detail=$detail; see observer-manager-failure.txt"
+	fi
 	printf 'FAIL: criterion=%s detail=%s\n' "$criterion" "$detail" | tee "$EVIDENCE_DIR/status.txt" >&2
 	record "failure criterion=$criterion detail=$detail"
 	exit 1
@@ -361,7 +368,7 @@ stop_observer_process() {
 		! process_alive "$pid" && ! process_present "$tracer_pid"; then
 		if [ -z "$trace_path" ] || {
 			[ -e "$trace_path" ] &&
-			! grep -Ei '^dtrace: (failed|error)' "$trace_path" >/dev/null 2>&1;
+			! grep -Eiq '(^dtrace: (failed|error)|^ktrace_start:|resource busy)' "$trace_path";
 		}; then
 			flush_result=PASS
 		else
@@ -375,6 +382,151 @@ stop_observer_process() {
 	printf 'label=%s owner_pid=%s tracer_pid=%s signal=SIGINT forced_kill=%s wait_status=%s flush_result=%s result=%s detail=%s\n' \
 		"$label" "$pid" "$tracer_pid" "$forced_kill" "$wait_status" "$flush_result" "$result" "$detail" >> "$OBSERVER_SHUTDOWN_FILE"
 	[ "$result" = PASS ]
+}
+
+stop_active_filesystem_observer() {
+	local target_pid
+	local observer_pid
+	local trace
+	local exec_trace
+	if [ -z "$FILESYSTEM_ACTIVE_FILE" ] || [ ! -s "$FILESYSTEM_ACTIVE_FILE" ]; then
+		FILESYSTEM_ACTIVE_PID=""
+		FILESYSTEM_ACTIVE_TARGET=""
+		return 0
+	fi
+	if ! read -r target_pid observer_pid < "$FILESYSTEM_ACTIVE_FILE"; then
+		record "PID-filtered filesystem observer state could not be read"
+		return 1
+	fi
+	if ! [[ "$target_pid" =~ ^[0-9]+$ ]] || ! [[ "$observer_pid" =~ ^[0-9]+$ ]]; then
+		record "PID-filtered filesystem observer state contained invalid target=$target_pid observer=$observer_pid"
+		return 1
+	fi
+	trace="$TARGET_TRACE_DIR/$target_pid.txt"
+	exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+	if ! stop_observer_process "filesystem-exec-pid-$target_pid" "$observer_pid" "fs_usage" "$trace"; then
+		return 1
+	fi
+	if ! cp "$trace" "$exec_trace"; then
+		record "PID-filtered combined fs_usage observer could not preserve exec trace for pid=$target_pid"
+		return 1
+	fi
+	if ! touch "$trace.flushed"; then
+		record "PID-filtered filesystem observer could not record flushed state for pid=$target_pid"
+		return 1
+	fi
+	: > "$FILESYSTEM_ACTIVE_FILE"
+	FILESYSTEM_ACTIVE_PID=""
+	FILESYSTEM_ACTIVE_TARGET=""
+	record "PID-filtered combined fs_usage observer stopped and flushed for pid=$target_pid"
+}
+
+request_filesystem_observer() {
+	local target_pid="$1"
+	local active_target
+	local active_observer
+	local i
+	if ! [[ "$target_pid" =~ ^[0-9]+$ ]]; then
+		record "PID-filtered filesystem observer switch received an invalid pid=$target_pid"
+		return 1
+	fi
+	if [ -z "$FILESYSTEM_REQUEST_FILE" ]; then
+		record "PID-filtered filesystem observer switch has no request path for pid=$target_pid"
+		return 1
+	fi
+	if ! printf '%s\n' "$target_pid" > "$FILESYSTEM_REQUEST_FILE"; then
+		record "PID-filtered filesystem observer switch could not request pid=$target_pid"
+		return 1
+	fi
+	for i in $(seq 1 100); do
+		if [ -s "$OBSERVER_MANAGER_FAILURE_FILE" ]; then
+			return 1
+		fi
+		if [ -s "$FILESYSTEM_ACTIVE_FILE" ] && \
+			read -r active_target active_observer < "$FILESYSTEM_ACTIVE_FILE" && \
+			[ "$active_target" = "$target_pid" ]; then
+			return 0
+		fi
+		if [ -z "$OBSERVER_MANAGER_PID" ] || ! process_alive "$OBSERVER_MANAGER_PID"; then
+			return 1
+		fi
+		sleep 0.1
+	done
+	record "PID-filtered filesystem observer switch timed out for pid=$target_pid"
+	return 1
+}
+
+start_filesystem_observer() {
+	local target_pid="$1"
+	local trace="$TARGET_TRACE_DIR/$target_pid.txt"
+	local observer_pid
+	if [ -s "$FILESYSTEM_ACTIVE_FILE" ]; then
+		record "PID-filtered filesystem observer cannot start pid=$target_pid while another owner is active"
+		return 1
+	fi
+	touch "$trace"
+	rm -f "$trace.flushed"
+	start_privileged_observer /usr/bin/fs_usage -w -F \
+		-f filesys -f exec "$target_pid" >> "$trace" 2>&1
+	observer_pid="$OBSERVER_LAUNCH_PID"
+	printf 'filesystem_observer_start target_pid=%s owner_pid=%s command=/usr/bin/fs_usage -w -F -f filesys -f exec %s trace=%s\n' \
+		"$target_pid" "$observer_pid" "$target_pid" "$trace" >> "$EVIDENCE_DIR/observer-commands.txt"
+	sleep 1
+	if ! process_alive "$observer_pid"; then
+		record "PID-filtered combined fs_usage observer failed to stay alive for pid=$target_pid"
+		return 1
+	fi
+	if ! printf '%s %s\n' "$target_pid" "$observer_pid" > "$FILESYSTEM_ACTIVE_FILE"; then
+		record "PID-filtered filesystem observer could not record active owner for pid=$target_pid"
+		stop_observer_process "filesystem-exec-pid-$target_pid" "$observer_pid" "fs_usage" "$trace" || true
+		return 1
+	fi
+	FILESYSTEM_ACTIVE_PID="$observer_pid"
+	FILESYSTEM_ACTIVE_TARGET="$target_pid"
+}
+
+switch_filesystem_observer() {
+	local target_pid="$1"
+	local active_target=""
+	local active_observer=""
+	if [ -s "$FILESYSTEM_ACTIVE_FILE" ]; then
+		if ! read -r active_target active_observer < "$FILESYSTEM_ACTIVE_FILE"; then
+			record "PID-filtered filesystem observer state could not be read while switching to pid=$target_pid"
+			return 1
+		fi
+		if [ "$active_target" = "$target_pid" ]; then
+			return 0
+		fi
+		if ! stop_active_filesystem_observer; then
+			return 1
+		fi
+	fi
+	start_filesystem_observer "$target_pid"
+}
+
+service_filesystem_observer_request() {
+	local target_pid
+	if [ -z "$FILESYSTEM_REQUEST_FILE" ] || [ ! -s "$FILESYSTEM_REQUEST_FILE" ]; then
+		return 0
+	fi
+	if ! read -r target_pid < "$FILESYSTEM_REQUEST_FILE"; then
+		record "PID-filtered filesystem observer switch request could not be read"
+		return 1
+	fi
+	if ! [[ "$target_pid" =~ ^[0-9]+$ ]]; then
+		record "PID-filtered filesystem observer switch request contained invalid pid=$target_pid"
+		return 1
+	fi
+	if ! grep -E "^${target_pid} [0-9]+ [0-9]+ [0-9]+$" "$TARGET_OBSERVER_FILE" >/dev/null 2>&1; then
+		record "PID-filtered filesystem observer switch requested an unattached pid=$target_pid"
+		return 1
+	fi
+	if ! switch_filesystem_observer "$target_pid"; then
+		record "PID-filtered filesystem observer switch failed for pid=$target_pid"
+		return 1
+	fi
+	: > "$FILESYSTEM_REQUEST_FILE"
+	record "PID-filtered filesystem observer switch completed for pid=$target_pid"
 }
 
 stop_helper_process() {
@@ -703,17 +855,21 @@ start_pid_observer() {
 		record "PID-filtered lifecycle observer could not attach to exited pid=$target_pid"
 		return 1
 	fi
-	start_privileged_observer /usr/bin/fs_usage -w -F \
-		-f filesys -f exec "$target_pid" > "$trace" 2>&1
-	observer_pid=$OBSERVER_LAUNCH_PID
-	# One fs_usage process owns the kernel trace for both filters. Starting
-	# separate filesys and exec observers races on ktrace_start with EBUSY.
-	exec_observer_pid=$observer_pid
+	if ! switch_filesystem_observer "$target_pid"; then
+		record "PID-filtered combined fs_usage observer could not attach to pid=$target_pid"
+		return 1
+	fi
+	observer_pid="$FILESYSTEM_ACTIVE_PID"
+	# One fs_usage owner is serialized across tracked PIDs because the
+	# kernel ktrace facility rejects overlapping fs_usage sessions.
+	exec_observer_pid="$observer_pid"
 	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
 	start_privileged_observer /usr/sbin/dtrace -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
 	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
 		record "PID-filtered lifecycle observer could not record pid=$target_pid"
+		stop_active_filesystem_observer || true
+		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
 		return 1
 	fi
 	{
@@ -727,6 +883,8 @@ start_pid_observer() {
 	sleep 1
 	if ! process_alive "$observer_pid" || ! process_alive "$exec_observer_pid" || ! process_alive "$fork_observer_pid"; then
 		record "PID-filtered lifecycle observer failed to stay alive for pid=$target_pid"
+		stop_active_filesystem_observer || true
+		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
 		return 1
 	fi
 }
@@ -752,6 +910,12 @@ ensure_observer_coverage() {
 observe_tracked_pids() {
 	local manager_failed=0
 	while [ ! -e "$OBSERVER_STOP_FILE" ]; do
+		if ! service_filesystem_observer_request; then
+			manager_failed=1
+			[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
+				printf '%s\n' "observer manager could not service filesystem observer switch" > "$OBSERVER_MANAGER_FAILURE_FILE"
+			break
+		fi
 		if ! ensure_observer_coverage; then
 			manager_failed=1
 			[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
@@ -814,10 +978,17 @@ stop_pid_observers() {
 		[ -n "$observer_pid" ] || continue
 		trace="$TARGET_TRACE_DIR/$target_pid.txt"
 		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
-		stop_observer_process "filesystem-exec-pid-$target_pid" "$observer_pid" "fs_usage" "$trace" || stop_failed=1
+		if [ ! -e "$trace.flushed" ]; then
+			if [ -s "$FILESYSTEM_ACTIVE_FILE" ] && grep -E "^${target_pid} ${observer_pid}$" "$FILESYSTEM_ACTIVE_FILE" >/dev/null 2>&1; then
+				stop_active_filesystem_observer || stop_failed=1
+			else
+				record "PID-filtered filesystem observer state lost active owner for pid=$target_pid"
+				stop_failed=1
+			fi
+		fi
 		if [ "$exec_observer_pid" != "$observer_pid" ]; then
 			stop_observer_process "exec-pid-$target_pid" "$exec_observer_pid" "fs_usage" "$exec_trace" || stop_failed=1
-		elif ! cp "$trace" "$exec_trace"; then
+		elif [ ! -s "$exec_trace" ] && ! cp "$trace" "$exec_trace"; then
 			record "PID-filtered combined fs_usage observer could not preserve exec trace for pid=$target_pid"
 			stop_failed=1
 		fi
@@ -846,24 +1017,45 @@ check_observer_liveness() {
 	local observer_pid
 	local exec_observer_pid
 	local fork_observer_pid
+	local trace
+	local exec_trace
 	local observer_failed=0
 	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$target_pid" ] || continue
-		if ! process_alive "$observer_pid"; then
-			printf 'target_pid=%s observer=filesystem observer_pid=%s state=exited\n' \
-				"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-			observer_failed=1
+		trace="$TARGET_TRACE_DIR/$target_pid.txt"
+		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+		if [ -e "$trace.flushed" ]; then
+			if [ ! -s "$trace" ] || [ ! -s "$exec_trace" ]; then
+				printf 'target_pid=%s observer=filesystem observer_pid=%s state=flushed-incomplete\n' \
+					"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+				printf 'target_pid=%s observer=exec observer_pid=%s state=flushed-incomplete\n' \
+					"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+				observer_failed=1
+			else
+				printf 'target_pid=%s observer=filesystem observer_pid=%s state=flushed\n' \
+					"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+				printf 'target_pid=%s observer=exec observer_pid=%s state=flushed\n' \
+					"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+			fi
 		else
-			printf 'target_pid=%s observer=filesystem observer_pid=%s state=alive\n' \
-				"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-		fi
-		if ! process_alive "$exec_observer_pid"; then
-			printf 'target_pid=%s observer=exec observer_pid=%s state=exited\n' \
-				"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-			observer_failed=1
-		else
-			printf 'target_pid=%s observer=exec observer_pid=%s state=alive\n' \
-				"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+			if ! process_alive "$observer_pid"; then
+				printf 'target_pid=%s observer=filesystem observer_pid=%s state=exited\n' \
+					"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+				observer_failed=1
+			else
+				printf 'target_pid=%s observer=filesystem observer_pid=%s state=alive\n' \
+					"$target_pid" "$observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+			fi
+			if [ "$exec_observer_pid" != "$observer_pid" ]; then
+				if ! process_alive "$exec_observer_pid"; then
+					printf 'target_pid=%s observer=exec observer_pid=%s state=exited\n' \
+						"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+					observer_failed=1
+				else
+					printf 'target_pid=%s observer=exec observer_pid=%s state=alive\n' \
+						"$target_pid" "$exec_observer_pid" >> "$EVIDENCE_DIR/lifecycle-observer-status.txt"
+				fi
+			fi
 		fi
 		if ! process_alive "$fork_observer_pid"; then
 			printf 'target_pid=%s fork_observer_pid=%s state=exited\n' \
@@ -1057,11 +1249,15 @@ start_pid_tracking() {
 	OBSERVER_STOP_FILE="$EVIDENCE_DIR/.stop-observer-manager"
 	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
 	OBSERVER_STOP_RESULT_FILE="$EVIDENCE_DIR/observer-stop-result.txt"
+	FILESYSTEM_ACTIVE_FILE="$EVIDENCE_DIR/active-fs-usage-observer.txt"
+	FILESYSTEM_REQUEST_FILE="$EVIDENCE_DIR/request-fs-usage-observer.txt"
 	: > "$PID_ROOTS_FILE"
 	: > "$PID_FILE"
 	rm -f "$TRACK_STOP_FILE" "$OBSERVER_STOP_FILE" \
 		"$EVIDENCE_DIR/pid-tracking-failure.txt" "$OBSERVER_MANAGER_FAILURE_FILE" \
-		"$OBSERVER_STOP_RESULT_FILE"
+		"$OBSERVER_STOP_RESULT_FILE" "$FILESYSTEM_ACTIVE_FILE" "$FILESYSTEM_REQUEST_FILE"
+	: > "$FILESYSTEM_ACTIVE_FILE"
+	: > "$FILESYSTEM_REQUEST_FILE"
 	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
 	printf '%s\n' "$FORK_PID" >> "$PID_ROOTS_FILE"
 	refresh_pid_file
@@ -1523,8 +1719,10 @@ trap cleanup EXIT
 	echo "second_launch_wait_seconds=5"
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
+	echo "filesystem_switch_wait_seconds=10"
 	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
-	echo "observer_mode=kernel-filtered-combined-fs_usage-filesys-exec-and-dtrace-fork-observer-per-tracked-pid"
+	echo "observer_mode=kernel-filtered-serialized-combined-fs_usage-filesys-exec-and-dtrace-fork-observer-per-tracked-pid"
+	echo "filesystem_observer_policy=one-ktrace-owner-at-a-time; manager-reaped-SIGINT-flush-before-each-PID-switch"
 	echo "descendant_policy=every-tracked-pid-must-have-independent-observer"
 	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
 	echo "fork_observer_control=readiness-gated-dtrace-write-and-short-lived-fork-only-child"
@@ -1809,6 +2007,10 @@ assert_alive "second launch primary process" "$FORK_PID"
 assert_live_fork_process_count "second launch process count" 1
 cp "$EVIDENCE_DIR/telegramd-live-pids.txt" "$EVIDENCE_DIR/telegramd-live-pids-after-second.txt"
 cp "$EVIDENCE_DIR/telegramd-process-count.txt" "$EVIDENCE_DIR/telegramd-process-count-after-second.txt"
+
+if ! request_filesystem_observer "$FORK_PID"; then
+	unavailable "PID-filtered filesystem observer could not resume primary pid=$FORK_PID"
+fi
 
 launch_suspended "$EVIDENCE_DIR/telegramd-quit.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR" -quit
 QUIT_PID="$LAUNCHED_PID"
