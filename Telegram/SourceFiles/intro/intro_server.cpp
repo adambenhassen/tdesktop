@@ -485,6 +485,15 @@ void ServerWidget::submitSelection() {
 	}
 	auto discoveryAttempt = MTP::ServerDiscoveryAttempt::Acquire();
 	if (!discoveryAttempt) {
+		const auto error = tr::lng_intro_server_connect_failed(tr::now);
+		_address->showError();
+		_address->rawTextEdit()->setReadOnly(false);
+		_continue->setDisabled(false);
+		_continue->setText(tr::lng_intro_server_try_again());
+		_address->setAccessibleDescription(error);
+		showStatus(error, true);
+		_address->setFocusFast();
+		_scroll->scrollToWidget(_continue);
 		return;
 	}
 	_selection = checked;
@@ -585,6 +594,58 @@ void ServerWidget::beginLocalDiscovery() {
 	_localNonce.resize(32);
 	base::RandomFill(_localNonce.data(), _localNonce.size());
 	_localRequest = MTP::BuildLocalDiscoveryRequest(_localNonce);
+	_localAddresses.clear();
+	_localAddressIndex = 0;
+	_localResponse.clear();
+	_localWriteOffset = 0;
+	_localWriteClosed = false;
+	const auto address = QHostAddress(_selection.host);
+	if (!address.isNull()) {
+		_localAddresses.append(address);
+		startNextLocalAddress();
+		return;
+	}
+	const auto attempt = _attempt;
+	_hostLookupId = QHostInfo::lookupHost(
+		_selection.host,
+		this,
+		[=](const QHostInfo &info) {
+			if (!_connecting || _attempt != attempt) {
+				return;
+			}
+			_hostLookupId = -1;
+			if (info.error() != QHostInfo::NoError) {
+				discoveryFailed(true);
+				return;
+			}
+			_localAddresses = info.addresses();
+			_localAddressIndex = 0;
+			if (_localAddresses.isEmpty()) {
+				discoveryFailed(true);
+				return;
+			}
+			startNextLocalAddress();
+		});
+	if (_hostLookupId < 0) {
+		discoveryFailed(true);
+	}
+}
+
+void ServerWidget::startNextLocalAddress() {
+	if (!_connecting) {
+		return;
+	}
+	if (_socket) {
+		const auto socket = _socket;
+		_socket = nullptr;
+		disconnect(socket, nullptr, this, nullptr);
+		socket->abort();
+		socket->deleteLater();
+	}
+	if (_localAddressIndex >= _localAddresses.size()) {
+		discoveryFailed(true);
+		return;
+	}
 	_localResponse.clear();
 	_localWriteOffset = 0;
 	_localWriteClosed = false;
@@ -608,10 +669,15 @@ void ServerWidget::beginLocalDiscovery() {
 	});
 	connect(socket, &QTcpSocket::errorOccurred, this,
 		[=](QAbstractSocket::SocketError error) {
-		if (_connecting
-			&& _socket == socket
-			&& error != QAbstractSocket::RemoteHostClosedError) {
-			discoveryFailed(true);
+		if (!_connecting
+			|| _socket != socket
+			|| error == QAbstractSocket::RemoteHostClosedError) {
+			return;
+		}
+		if (_localResponse.isEmpty()) {
+			startNextLocalAddress();
+		} else {
+			discoveryFailed(false);
 		}
 	});
 	connect(socket, &QTcpSocket::disconnected, this, [=] {
@@ -623,6 +689,10 @@ void ServerWidget::beginLocalDiscovery() {
 			discoveryFailed(false);
 			return;
 		}
+		if (_localResponse.isEmpty()) {
+			startNextLocalAddress();
+			return;
+		}
 		if (!MTP::IsCompleteLocalDiscoveryResponse(_localResponse)) {
 			discoveryFailed(false);
 			return;
@@ -632,40 +702,11 @@ void ServerWidget::beginLocalDiscovery() {
 			_localNonce,
 			_localResponse));
 	});
-	const auto address = QHostAddress(_selection.host);
-	if (!address.isNull()) {
-		if (!MTP::StartLocalDiscoverySocket(
-				*socket,
-				_selection,
-				address)) {
-			discoveryFailed(true);
-		}
-		return;
-	}
-	const auto attempt = _attempt;
-	_hostLookupId = QHostInfo::lookupHost(
-		_selection.host,
-		this,
-		[=](const QHostInfo &info) {
-			if (!_connecting || _attempt != attempt || _socket != socket) {
-				return;
-			}
-			_hostLookupId = -1;
-			if (info.error() != QHostInfo::NoError) {
-				discoveryFailed(true);
-				return;
-			}
-			for (const auto &address : info.addresses()) {
-				if (MTP::StartLocalDiscoverySocket(
-						*socket,
-						_selection,
-						address)) {
-					return;
-				}
-			}
-			discoveryFailed(true);
-		});
-	if (_hostLookupId < 0) {
+	if (!MTP::StartNextLocalDiscoverySocket(
+			*socket,
+			_selection,
+			_localAddresses,
+			_localAddressIndex)) {
 		discoveryFailed(true);
 	}
 }
@@ -679,7 +720,7 @@ void ServerWidget::sendLocalRequest() {
 			_localRequest,
 			_localWriteOffset,
 			_localWriteClosed)) {
-		discoveryFailed(true);
+		startNextLocalAddress();
 	}
 }
 
@@ -756,6 +797,7 @@ void ServerWidget::resolvePublicEndpoint(
 		return;
 	}
 
+	_deadline->start(kDiscoveryTimeout);
 	const auto attempt = _attempt;
 	_hostLookupId = QHostInfo::lookupHost(
 		endpoint.host,

@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QList>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QNetworkRequest>
@@ -137,19 +138,24 @@ void CloseNativeTestSocket(NativeTestSocket socket) {
 #endif
 }
 
-[[nodiscard]] QByteArray PublicResponse(const QString &endpoint) {
-	const auto key = TestKey();
-	const auto der = key.getSubjectPublicKeyInfo();
+[[nodiscard]] QByteArray PublicResponse(
+		const QString &endpoint,
+		const QByteArray &encodedKey) {
 	return QJsonDocument(QJsonObject{
 		{ u"version"_q, 1 },
 		{ u"mtproto"_q, QJsonObject{
 			{ u"endpoint"_q, endpoint },
 			{ u"dc_id"_q, 2 },
-			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
-				reinterpret_cast<const char *>(der.data()),
-				int(der.size())).toBase64()) }
+			{ u"rsa_spki"_q, QString::fromLatin1(encodedKey) }
 		} }
 	}).toJson(QJsonDocument::Compact);
+}
+
+[[nodiscard]] QByteArray PublicResponse(const QString &endpoint) {
+	const auto der = TestKey().getSubjectPublicKeyInfo();
+	return PublicResponse(endpoint, QByteArray(
+		reinterpret_cast<const char *>(der.data()),
+		int(der.size())).toBase64());
 }
 
 TEST_CASE(PublicSelectionDefaultsToHttps) {
@@ -477,7 +483,93 @@ TEST_CASE(LocalDiscoveryRequestHalfClosesBeforeResponse) {
 	CHECK(ParseLocalDiscoveryResponse(selection, nonce, received).valid());
 }
 
-TEST_CASE(PublicDiscoveryRequestsDoNotUseCookies) {
+TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"localhost:"_q + QString::number(server.serverPort()));
+	CHECK(selection.valid());
+	if (!selection) {
+		return;
+	}
+
+	const auto nonce = QByteArray(32, '\x05');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+	const QList<QHostAddress> addresses{
+		QHostAddress(u"127.0.0.2"_q),
+		server.serverAddress(),
+	};
+	QTcpSocket client;
+	auto nextAddress = 0;
+	CHECK(StartNextLocalDiscoverySocket(
+		client,
+		selection,
+		addresses,
+		nextAddress));
+	CHECK_EQ(nextAddress, 1);
+	CHECK(!client.waitForConnected(1000));
+	client.abort();
+
+	CHECK(StartNextLocalDiscoverySocket(
+		client,
+		selection,
+		addresses,
+		nextAddress));
+	CHECK_EQ(nextAddress, 2);
+	CHECK(client.waitForConnected(1000));
+	if (!client.isOpen()) {
+		return;
+	}
+	CHECK(server.waitForNewConnection(1000));
+	const auto peer = server.nextPendingConnection();
+	CHECK(peer != nullptr);
+	if (!peer) {
+		return;
+	}
+
+	auto writeOffset = 0;
+	auto writeClosed = false;
+	while (!writeClosed) {
+		CHECK(SendLocalDiscoveryRequest(
+			client,
+			request,
+			writeOffset,
+			writeClosed));
+		if (!writeClosed) {
+			CHECK(client.waitForBytesWritten(1000));
+		}
+	}
+	CHECK_EQ(writeOffset, request.size());
+
+	QByteArray receivedRequest;
+	while (receivedRequest.size() < request.size()) {
+		CHECK(peer->waitForReadyRead(1000));
+		receivedRequest += peer->readAll();
+	}
+	CHECK_EQ(receivedRequest, request);
+	peer->write(response);
+	CHECK(peer->waitForBytesWritten(1000));
+	peer->disconnectFromHost();
+	QByteArray receivedResponse;
+	while (client.state() != QAbstractSocket::UnconnectedState
+		&& client.waitForReadyRead(1000)) {
+		receivedResponse += client.readAll();
+	}
+	receivedResponse += client.readAll();
+	CHECK(IsCompleteLocalDiscoveryResponse(receivedResponse));
+	CHECK(ParseLocalDiscoveryResponse(
+		selection,
+		nonce,
+		receivedResponse).valid());
+	peer->deleteLater();
+}
+
+TEST_CASE(PublicDiscoveryRequestsUseRestrictedPolicy) {
 	QNetworkRequest request(QUrl(
 		u"https://example.com/.well-known/telegramd/client"_q));
 	ConfigurePublicDiscoveryRequest(request);
@@ -485,6 +577,13 @@ TEST_CASE(PublicDiscoveryRequestsDoNotUseCookies) {
 		== int(QNetworkRequest::Manual));
 	CHECK(request.attribute(QNetworkRequest::CookieSaveControlAttribute).toInt()
 		== int(QNetworkRequest::Manual));
+	CHECK(request.attribute(QNetworkRequest::CacheLoadControlAttribute).toInt()
+		== int(QNetworkRequest::AlwaysNetwork));
+	CHECK(!request.attribute(QNetworkRequest::CacheSaveControlAttribute).toBool());
+	CHECK(request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt()
+		== int(QNetworkRequest::ManualRedirectPolicy));
+	CHECK(request.rawHeaderList().contains(QByteArray("User-Agent")));
+	CHECK(request.rawHeader(QByteArray("User-Agent")).isEmpty());
 }
 
 TEST_CASE(DiscoveryAttemptsAreLimitedAndReleased) {
@@ -532,6 +631,62 @@ TEST_CASE(DiscoveryJsonRejectsDuplicateKeys) {
 		CheckServerSelection(u"server.example.com"_q),
 		QByteArray(R"({"version":1,"version":1,"mtproto":{}})"));
 	CHECK(result.status == ServerDiscoveryResponseStatus::InvalidJson);
+}
+
+TEST_CASE(DiscoveryJsonRejectsNonCanonicalBase64) {
+	const auto der = TestKey().getSubjectPublicKeyInfo();
+	auto encoded = QByteArray(
+		reinterpret_cast<const char *>(der.data()),
+		int(der.size())).toBase64();
+	encoded.append('\n');
+	const auto result = ParsePublicDiscoveryResponse(
+		CheckServerSelection(u"server.example.com"_q),
+		PublicResponse(u"mtproto.example.com:443"_q, encoded));
+	CHECK(result.status == ServerDiscoveryResponseStatus::InvalidKey);
+}
+
+TEST_CASE(DiscoveryJsonRejectsInvalidBase64) {
+	const auto der = TestKey().getSubjectPublicKeyInfo();
+	auto encoded = QByteArray(
+		reinterpret_cast<const char *>(der.data()),
+		int(der.size())).toBase64();
+	encoded[0] = '!';
+	const auto result = ParsePublicDiscoveryResponse(
+		CheckServerSelection(u"server.example.com"_q),
+		PublicResponse(u"mtproto.example.com:443"_q, encoded));
+	CHECK(result.status == ServerDiscoveryResponseStatus::InvalidKey);
+}
+
+TEST_CASE(DiscoveryJsonRejectsNonRsaSubjectPublicKeyInfo) {
+	const auto der = QByteArray::fromHex(
+		"3059301306072a8648ce3d020106082a8648ce3d030107"
+		"0342000497fc873893ed223585e805a4ea3a5e92a6913eb5"
+		"3654ea97c5cdc19529d807998e4189fc64fe396edb4fef47"
+		"57f525a5e81d82ba2d1bc56ede4d0951a8888e24");
+	const auto result = ParsePublicDiscoveryResponse(
+		CheckServerSelection(u"server.example.com"_q),
+		PublicResponse(
+			u"mtproto.example.com:443"_q,
+			der.toBase64()));
+	CHECK(result.status == ServerDiscoveryResponseStatus::InvalidKey);
+}
+
+TEST_CASE(DiscoveryJsonRejectsWrongRsaModulusSize) {
+	const auto der = QByteArray::fromHex(
+		"30819f300d06092a864886f70d010101050003818d00"
+		"30818902818100b712cf541b031bf5ee4bc37c954eed62"
+		"2e2e4f1fc2719de13c689e2d51088a351c5c33d450355d"
+		"4e55e7818a45c4a90df7c84ab803beae6bc882a8c7035c"
+		"bb5b1790d9a4a771e2a25ea0a8789d7f35a005d62db43b"
+		"ae7a541f1b2e2f5a61da4b39b120ab03ccaece8dfcd343"
+		"c3de8a12782400ee9c1c6f990ffbd5c19d38b68b020301"
+		"0001");
+	const auto result = ParsePublicDiscoveryResponse(
+		CheckServerSelection(u"server.example.com"_q),
+		PublicResponse(
+			u"mtproto.example.com:443"_q,
+			der.toBase64()));
+	CHECK(result.status == ServerDiscoveryResponseStatus::InvalidKey);
 }
 
 TEST_CASE(SelectionRejectsOversizedHost) {

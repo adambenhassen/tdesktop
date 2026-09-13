@@ -60,10 +60,10 @@ constexpr auto kProductionKeyFingerprint = qint64(-3414540481677951611LL);
 
 } // namespace
 
-// The user checks the key they entered against the fingerprint telegramd
-// logs at startup, so client and server have to agree on this number
-// exactly. Getting it wrong is invisible at compile time and shows up
-// only as an auth-key exchange that never completes.
+// The discovered key must match the fingerprint telegramd logs at startup,
+// so client and server have to agree on this number exactly. Getting it wrong
+// is invisible at compile time and shows up only as an auth-key exchange that
+// never completes.
 TEST_CASE(RsaPublicKeyFingerprintMatchesTheProtocol) {
 	const auto key = MakeKey();
 	CHECK(key->valid());

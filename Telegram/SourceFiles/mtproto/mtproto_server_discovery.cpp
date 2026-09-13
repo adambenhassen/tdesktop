@@ -740,6 +740,7 @@ QString PublicDiscoveryUrl(const ServerSelectionCheck &selection) {
 }
 
 void ConfigurePublicDiscoveryRequest(QNetworkRequest &request) {
+	request.setRawHeader("User-Agent", QByteArrayLiteral(""));
 	request.setAttribute(
 		QNetworkRequest::RedirectPolicyAttribute,
 		QNetworkRequest::ManualRedirectPolicy);
@@ -855,6 +856,20 @@ bool StartLocalDiscoverySocket(
 		address,
 		quint16(selection.operationalPort));
 	return true;
+}
+
+bool StartNextLocalDiscoverySocket(
+		QTcpSocket &socket,
+		const ServerSelectionCheck &selection,
+		const QList<QHostAddress> &addresses,
+		int &nextAddress) {
+	while (nextAddress >= 0 && nextAddress < addresses.size()) {
+		const auto address = addresses.at(nextAddress++);
+		if (StartLocalDiscoverySocket(socket, selection, address)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool SendLocalDiscoveryRequest(

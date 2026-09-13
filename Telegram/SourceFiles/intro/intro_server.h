@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QList>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -65,6 +66,7 @@ private:
 	void submitSelection();
 	void beginPublicDiscovery();
 	void beginLocalDiscovery();
+	void startNextLocalAddress();
 	void sendLocalRequest();
 	void localReadyRead();
 	void discoveryTimeout();
@@ -100,6 +102,8 @@ private:
 	QByteArray _publicResponse;
 	int _hostLookupId = -1;
 	QTcpSocket *_socket = nullptr;
+	QList<QHostAddress> _localAddresses;
+	int _localAddressIndex = 0;
 	QTimer *_deadline = nullptr;
 	QByteArray _localNonce;
 	QByteArray _localRequest;

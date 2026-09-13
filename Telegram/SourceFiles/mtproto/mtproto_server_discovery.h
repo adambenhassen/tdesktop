@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_rsa_public_key.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QList>
 #include <QtCore/QString>
 #include <QtNetwork/QHostAddress>
 
@@ -152,6 +153,12 @@ struct ServerDiscoveryResult {
 	QTcpSocket &socket,
 	const ServerSelectionCheck &selection,
 	const QHostAddress &address);
+
+[[nodiscard]] bool StartNextLocalDiscoverySocket(
+	QTcpSocket &socket,
+	const ServerSelectionCheck &selection,
+	const QList<QHostAddress> &addresses,
+	int &nextAddress);
 
 // Continue the asynchronous local/direct request and half-close only its
 // write direction after all request bytes have reached the socket.
