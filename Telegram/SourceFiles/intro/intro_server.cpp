@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "mtproto/mtproto_server_enrollment.h"
 #include "storage/storage_account.h"
 #include "base/random.h"
 #include "core/application.h"
@@ -35,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QSslError>
 #include <QtNetwork/QTcpSocket>
+#include <QtWidgets/QTextEdit>
 
 #include <algorithm>
 #include <optional>
@@ -77,8 +79,8 @@ void ConfigureAddressField(not_null<Ui::InputField*> field) {
 		+ QString::number(port);
 }
 
-[[nodiscard]] bool HasBoundServer(not_null<Main::Account*> account) {
-	const auto &options = account->mtp().dcOptions();
+[[nodiscard]] bool HasBoundServer(Main::Account &account) {
+	const auto &options = account.mtp().dcOptions();
 	return options.hasCustomServer() || options.blocked();
 }
 
@@ -460,7 +462,7 @@ void ServerWidget::selectionChanged() {
 	getData()->serverSelection = _address->getLastText();
 	_address->hideError();
 	clearStatus();
-	_continue->setText(tr::lng_intro_server_continue(tr::now));
+	_continue->setText(tr::lng_intro_server_continue());
 }
 
 QString ServerWidget::selectionError(MTP::ServerSelectionStatus status) const {
@@ -504,7 +506,7 @@ void ServerWidget::submitSelection() {
 	++_attempt;
 	_address->rawTextEdit()->setReadOnly(true);
 	_continue->setDisabled(true);
-	_continue->setText(tr::lng_intro_server_connecting(tr::now));
+	_continue->setText(tr::lng_intro_server_connecting());
 	_address->setAccessibleDescription(
 		tr::lng_intro_server_connecting(tr::now));
 	showStatus(tr::lng_intro_server_connecting(tr::now), false);
@@ -822,7 +824,7 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 	}
 	_address->rawTextEdit()->setReadOnly(false);
 	_continue->setDisabled(false);
-	_continue->setText(tr::lng_intro_server_try_again(tr::now));
+	_continue->setText(tr::lng_intro_server_try_again());
 	_address->setAccessibleDescription(connectionFailure
 		? tr::lng_intro_server_connect_failed(tr::now)
 		: tr::lng_intro_server_unsupported(tr::now));
@@ -861,7 +863,7 @@ void ServerWidget::cancelDiscovery() {
 	}
 	_address->rawTextEdit()->setReadOnly(false);
 	_continue->setDisabled(false);
-	_continue->setText(tr::lng_intro_server_continue(tr::now));
+	_continue->setText(tr::lng_intro_server_continue());
 	_address->hideError();
 	clearStatus();
 }
@@ -984,7 +986,7 @@ void ServerWidget::commitBinding(
 		_continue->show();
 		_address->rawTextEdit()->setReadOnly(false);
 		_continue->setDisabled(false);
-		_continue->setText(tr::lng_intro_server_try_again(tr::now));
+		_continue->setText(tr::lng_intro_server_try_again());
 		showStatus(tr::lng_intro_server_save_failed(tr::now), true);
 		_address->setAccessibleDescription(
 			tr::lng_intro_server_save_failed(tr::now));
