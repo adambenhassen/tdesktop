@@ -489,6 +489,7 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	if (!server.isListening()) {
 		return;
 	}
+	server.pauseAccepting();
 
 	const auto selection = CheckServerSelection(
 		u"localhost:"_q + QString::number(server.serverPort()));
@@ -521,14 +522,25 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 		addresses,
 		nextAddress));
 	CHECK_EQ(nextAddress, 2);
-	CHECK(client.waitForConnected(1000));
-	if (!client.isOpen()) {
+	const auto connected = client.waitForConnected(1000);
+	CHECK(connected);
+	if (!connected) {
 		return;
 	}
-	CHECK(server.waitForNewConnection(1000));
-	const auto peer = server.nextPendingConnection();
-	CHECK(peer != nullptr);
-	if (!peer) {
+#if defined Q_OS_WIN
+	const auto invalidPeer = INVALID_SOCKET;
+#else
+	const auto invalidPeer = -1;
+#endif
+	const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
+	CHECK(peer != invalidPeer);
+	if (peer == invalidPeer) {
+		return;
+	}
+	const auto hasReceiveTimeout = SetNativeTestReceiveTimeout(peer);
+	CHECK(hasReceiveTimeout);
+	if (!hasReceiveTimeout) {
+		CloseNativeTestSocket(peer);
 		return;
 	}
 
@@ -547,14 +559,42 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	CHECK_EQ(writeOffset, request.size());
 
 	QByteArray receivedRequest;
-	while (receivedRequest.size() < request.size()) {
-		CHECK(peer->waitForReadyRead(1000));
-		receivedRequest += peer->readAll();
+	auto peerSawEof = false;
+	while (receivedRequest.size() <= request.size()) {
+		char buffer[256];
+		const auto read = ReceiveNativeTestSocket(
+			peer,
+			buffer,
+			int(sizeof(buffer)));
+		if (read > 0) {
+			receivedRequest.append(buffer, int(read));
+			continue;
+		}
+		if (read == 0) {
+			peerSawEof = true;
+		}
+		break;
 	}
+	CHECK(peerSawEof);
 	CHECK_EQ(receivedRequest, request);
-	peer->write(response);
-	CHECK(peer->waitForBytesWritten(1000));
-	peer->disconnectFromHost();
+	if (!peerSawEof || receivedRequest != request) {
+		CloseNativeTestSocket(peer);
+		return;
+	}
+	auto responseOffset = 0;
+	while (responseOffset < response.size()) {
+		const auto written = SendNativeTestSocket(
+			peer,
+			response.constData() + responseOffset,
+			response.size() - responseOffset);
+		CHECK(written > 0);
+		if (written <= 0) {
+			break;
+		}
+		responseOffset += int(written);
+	}
+	CHECK_EQ(responseOffset, response.size());
+	CloseNativeTestSocket(peer);
 	QByteArray receivedResponse;
 	while (client.state() != QAbstractSocket::UnconnectedState
 		&& client.waitForReadyRead(1000)) {
@@ -566,7 +606,6 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 		selection,
 		nonce,
 		receivedResponse).valid());
-	peer->deleteLater();
 }
 
 TEST_CASE(PublicDiscoveryRequestsUseRestrictedPolicy) {
@@ -582,8 +621,17 @@ TEST_CASE(PublicDiscoveryRequestsUseRestrictedPolicy) {
 	CHECK(!request.attribute(QNetworkRequest::CacheSaveControlAttribute).toBool());
 	CHECK(request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt()
 		== int(QNetworkRequest::ManualRedirectPolicy));
-	CHECK(request.rawHeaderList().contains(QByteArray("User-Agent")));
-	CHECK(request.rawHeader(QByteArray("User-Agent")).isEmpty());
+	auto hasUserAgent = false;
+	for (const auto &header : request.rawHeaderList()) {
+		if (header.compare("User-Agent", Qt::CaseInsensitive) == 0) {
+			hasUserAgent = true;
+			break;
+		}
+	}
+	CHECK(hasUserAgent);
+	const auto userAgent = request.rawHeader(QByteArray("User-Agent"));
+	CHECK(!userAgent.isEmpty());
+	CHECK(userAgent.trimmed().isEmpty());
 }
 
 TEST_CASE(DiscoveryAttemptsAreLimitedAndReleased) {
