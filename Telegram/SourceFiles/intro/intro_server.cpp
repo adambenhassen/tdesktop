@@ -84,23 +84,6 @@ void ConfigureAddressField(not_null<Ui::InputField*> field) {
 	return options.hasCustomServer() || options.blocked();
 }
 
-[[nodiscard]] bool IsCompleteLocalResponse(const QByteArray &response) {
-	if (response.size() < 58) {
-		return false;
-	}
-	const auto read32 = [&](int offset) {
-		return (quint32(uchar(response[offset])) << 24)
-			| (quint32(uchar(response[offset + 1])) << 16)
-			| (quint32(uchar(response[offset + 2])) << 8)
-			| quint32(uchar(response[offset + 3]));
-	};
-	const auto bodyLength = read32(48);
-	if (bodyLength < 7 || bodyLength > 4102) {
-		return false;
-	}
-	return response.size() >= 58 + int(bodyLength);
-}
-
 [[nodiscard]] bool DiscoveryHeadersWithinBound(
 		QNetworkReply *reply) {
 	auto size = 0;
@@ -500,8 +483,13 @@ void ServerWidget::submitSelection() {
 		_address->setFocusFast();
 		return;
 	}
+	auto discoveryAttempt = MTP::ServerDiscoveryAttempt::Acquire();
+	if (!discoveryAttempt) {
+		return;
+	}
 	_selection = checked;
 	getData()->serverSelection = _selection.normalizedSelection;
+	_discoveryAttempt = std::move(discoveryAttempt);
 	_connecting = true;
 	++_attempt;
 	_address->rawTextEdit()->setReadOnly(true);
@@ -526,15 +514,7 @@ void ServerWidget::beginPublicDiscovery() {
 	_publicResponse.clear();
 	const auto url = QUrl(MTP::PublicDiscoveryUrl(_selection));
 	QNetworkRequest request(url);
-	request.setAttribute(
-		QNetworkRequest::RedirectPolicyAttribute,
-		QNetworkRequest::ManualRedirectPolicy);
-	request.setAttribute(
-		QNetworkRequest::CacheLoadControlAttribute,
-		QNetworkRequest::AlwaysNetwork);
-	request.setAttribute(
-		QNetworkRequest::CacheSaveControlAttribute,
-		false);
+	MTP::ConfigurePublicDiscoveryRequest(request);
 	_reply = _network->get(request);
 	const auto reply = _reply;
 	reply->setReadBufferSize(kMaxDiscoveryBody);
@@ -643,7 +623,7 @@ void ServerWidget::beginLocalDiscovery() {
 			discoveryFailed(false);
 			return;
 		}
-		if (!IsCompleteLocalResponse(_localResponse)) {
+		if (!MTP::IsCompleteLocalDiscoveryResponse(_localResponse)) {
 			discoveryFailed(false);
 			return;
 		}
@@ -802,6 +782,7 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 		return;
 	}
 	_connecting = false;
+	_discoveryAttempt.reset();
 	++_attempt;
 	_deadline->stop();
 	if (_hostLookupId >= 0) {
@@ -841,6 +822,7 @@ void ServerWidget::cancelDiscovery() {
 		return;
 	}
 	_connecting = false;
+	_discoveryAttempt.reset();
 	++_attempt;
 	_deadline->stop();
 	if (_hostLookupId >= 0) {
@@ -977,6 +959,7 @@ void ServerWidget::commitBinding(
 			}
 		})) {
 		_connecting = false;
+		_discoveryAttempt.reset();
 		++_attempt;
 		_deadline->stop();
 		_readOnly = false;
@@ -994,6 +977,7 @@ void ServerWidget::commitBinding(
 		return;
 	}
 
+	_discoveryAttempt.reset();
 	_connecting = false;
 	getData()->serverEndpoint = result.endpoint;
 	switchToBound();

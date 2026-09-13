@@ -105,6 +105,7 @@ private:
 	QByteArray _localRequest;
 	QByteArray _localResponse;
 	int _localWriteOffset = 0;
+	std::optional<MTP::ServerDiscoveryAttempt> _discoveryAttempt;
 
 	MTP::ServerSelectionCheck _selection;
 	bool _readOnly = false;

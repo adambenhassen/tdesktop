@@ -13,6 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QString>
 #include <QtNetwork/QHostAddress>
 
+#include <optional>
+
+class QNetworkRequest;
+
 namespace MTP {
 
 // The policy is selected from the normalized text before any socket or DNS
@@ -22,6 +26,25 @@ enum class ServerDiscoveryPolicy : uchar {
 	Legacy,
 	PublicHttps,
 	LocalDirect,
+};
+
+// Limits simultaneous automatic discovery work across all account flows in
+// this process. Ownership is released when the token leaves scope.
+class ServerDiscoveryAttempt final {
+public:
+	[[nodiscard]] static std::optional<ServerDiscoveryAttempt> Acquire();
+
+	ServerDiscoveryAttempt(const ServerDiscoveryAttempt &) = delete;
+	ServerDiscoveryAttempt &operator=(const ServerDiscoveryAttempt &) = delete;
+	ServerDiscoveryAttempt(ServerDiscoveryAttempt &&other) noexcept;
+	ServerDiscoveryAttempt &operator=(ServerDiscoveryAttempt &&other) noexcept;
+	~ServerDiscoveryAttempt();
+
+private:
+	explicit ServerDiscoveryAttempt(bool held) : _held(held) {
+	}
+
+	bool _held = false;
 };
 
 enum class ServerSelectionStatus {
@@ -74,6 +97,10 @@ struct ServerSelectionCheck {
 [[nodiscard]] QString PublicDiscoveryUrl(
 	const ServerSelectionCheck &selection);
 
+// Apply the network policy to every public discovery request, including
+// retries. Cookies are intentionally managed by the application, not Qt.
+void ConfigurePublicDiscoveryRequest(QNetworkRequest &request);
+
 enum class ServerDiscoveryResponseStatus {
 	Valid,
 	InvalidJson,
@@ -117,6 +144,9 @@ struct ServerDiscoveryResult {
 
 // MAIN-736 local/direct preflight framing.
 [[nodiscard]] QByteArray BuildLocalDiscoveryRequest(const QByteArray &nonce);
+
+[[nodiscard]] bool IsCompleteLocalDiscoveryResponse(
+	const QByteArray &response);
 
 [[nodiscard]] ServerDiscoveryResult ParseLocalDiscoveryResponse(
 	const ServerSelectionCheck &selection,

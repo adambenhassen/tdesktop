@@ -13,8 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QSet>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostAddress>
+#include <QtNetwork/QNetworkRequest>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <initializer_list>
@@ -34,6 +36,9 @@ constexpr auto kMaxJsonDepth = 8;
 constexpr auto kMaxJsonValues = 64;
 constexpr auto kLocalRequestMagic = "telegramd-key-v1";
 constexpr auto kLocalResponseMagic = "telegramd-key-r1";
+constexpr auto kMaxServerDiscoveryAttempts = 4;
+
+std::atomic<int> ServerDiscoveryAttempts = 0;
 
 [[nodiscard]] bool IsAsciiDigit(QChar ch) {
 	const auto code = ch.unicode();
@@ -484,6 +489,47 @@ private:
 
 } // namespace
 
+std::optional<ServerDiscoveryAttempt> ServerDiscoveryAttempt::Acquire() {
+	auto current = ServerDiscoveryAttempts.load(std::memory_order_relaxed);
+	while (current < kMaxServerDiscoveryAttempts
+		&& !ServerDiscoveryAttempts.compare_exchange_weak(
+			current,
+			current + 1,
+			std::memory_order_relaxed,
+			std::memory_order_relaxed)) {
+	}
+	if (current >= kMaxServerDiscoveryAttempts) {
+		return std::nullopt;
+	}
+	return ServerDiscoveryAttempt(true);
+}
+
+ServerDiscoveryAttempt::ServerDiscoveryAttempt(
+		ServerDiscoveryAttempt &&other) noexcept
+: _held(std::exchange(other._held, false)) {
+}
+
+ServerDiscoveryAttempt &ServerDiscoveryAttempt::operator=(
+		ServerDiscoveryAttempt &&other) noexcept {
+	if (this != &other) {
+		if (std::exchange(_held, false)) {
+			ServerDiscoveryAttempts.fetch_sub(
+				1,
+				std::memory_order_relaxed);
+		}
+		_held = std::exchange(other._held, false);
+	}
+	return *this;
+}
+
+ServerDiscoveryAttempt::~ServerDiscoveryAttempt() {
+	if (_held) {
+		ServerDiscoveryAttempts.fetch_sub(
+			1,
+			std::memory_order_relaxed);
+	}
+}
+
 ServerSelectionCheck CheckServerSelection(const QString &value) {
 	if (value.toUtf8().size() > kMaxSelectionBytes) {
 		return SelectionFailure(ServerSelectionStatus::HostTooLong);
@@ -647,6 +693,24 @@ QString PublicDiscoveryUrl(const ServerSelectionCheck &selection) {
 		+ u"/.well-known/telegramd/client"_q;
 }
 
+void ConfigurePublicDiscoveryRequest(QNetworkRequest &request) {
+	request.setAttribute(
+		QNetworkRequest::RedirectPolicyAttribute,
+		QNetworkRequest::ManualRedirectPolicy);
+	request.setAttribute(
+		QNetworkRequest::CacheLoadControlAttribute,
+		QNetworkRequest::AlwaysNetwork);
+	request.setAttribute(
+		QNetworkRequest::CacheSaveControlAttribute,
+		false);
+	request.setAttribute(
+		QNetworkRequest::CookieLoadControlAttribute,
+		QNetworkRequest::Manual);
+	request.setAttribute(
+		QNetworkRequest::CookieSaveControlAttribute,
+		QNetworkRequest::Manual);
+}
+
 ServerDiscoveryResult ParsePublicDiscoveryResponse(
 		const ServerSelectionCheck &selection,
 		const QByteArray &body) {
@@ -725,6 +789,24 @@ QByteArray BuildLocalDiscoveryRequest(const QByteArray &nonce) {
 		return {};
 	}
 	return QByteArray(kLocalRequestMagic, 16) + nonce;
+}
+
+bool IsCompleteLocalDiscoveryResponse(const QByteArray &response) {
+	constexpr auto kLocalResponsePrefix = 52;
+	if (response.size() < kLocalResponsePrefix) {
+		return false;
+	}
+	const auto read32 = [&](int offset) {
+		return (quint32(uchar(response[offset])) << 24)
+			| (quint32(uchar(response[offset + 1])) << 16)
+			| (quint32(uchar(response[offset + 2])) << 8)
+			| quint32(uchar(response[offset + 3]));
+	};
+	const auto bodyLength = read32(48);
+	if (bodyLength < 7 || bodyLength > 4102) {
+		return false;
+	}
+	return response.size() >= kLocalResponsePrefix + int(bodyLength);
 }
 
 ServerDiscoveryResult ParseLocalDiscoveryResponse(

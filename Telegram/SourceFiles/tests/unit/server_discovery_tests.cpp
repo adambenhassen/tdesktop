@@ -11,6 +11,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QUrl>
+#include <QtNetwork/QNetworkRequest>
+#include <QtNetwork/QTcpServer>
+#include <QtNetwork/QTcpSocket>
+
+#include <utility>
 
 namespace {
 
@@ -41,6 +47,18 @@ void AppendBigEndian(QByteArray &target, quint32 value) {
 void AppendBigEndian(QByteArray &target, quint16 value) {
 	target.append(char(value >> 8));
 	target.append(char(value));
+}
+
+[[nodiscard]] QByteArray LocalResponse(const QByteArray &nonce) {
+	const auto der = TestKey().getSubjectPublicKeyInfo();
+	auto response = QByteArray("telegramd-key-r1", 16) + nonce;
+	AppendBigEndian(response, quint32(6 + der.size()));
+	AppendBigEndian(response, quint32(2));
+	AppendBigEndian(response, quint16(der.size()));
+	response += QByteArray(
+		reinterpret_cast<const char *>(der.data()),
+		int(der.size()));
+	return response;
 }
 
 TEST_CASE(PublicSelectionDefaultsToHttps) {
@@ -120,14 +138,7 @@ TEST_CASE(LocalRequestRejectsWrongNonceSize) {
 TEST_CASE(LocalResponseRoundTripsOnlyAfterEof) {
 	const auto selection = CheckServerSelection(u"127.0.0.1:2443"_q);
 	const auto nonce = QByteArray(32, '\x02');
-	const auto der = TestKey().getSubjectPublicKeyInfo();
-	auto response = QByteArray("telegramd-key-r1", 16) + nonce;
-	AppendBigEndian(response, quint32(6 + der.size()));
-	AppendBigEndian(response, quint32(2));
-	AppendBigEndian(response, quint16(der.size()));
-	response += QByteArray(
-		reinterpret_cast<const char *>(der.data()),
-		int(der.size()));
+	const auto response = LocalResponse(nonce);
 
 	const auto result = ParseLocalDiscoveryResponse(
 		selection,
@@ -138,12 +149,86 @@ TEST_CASE(LocalResponseRoundTripsOnlyAfterEof) {
 	CHECK_EQ(result.dcId, 2);
 	CHECK(result.key.valid());
 
-	response.append('\0');
+	auto trailingResponse = response;
+	trailingResponse.append('\0');
 	const auto trailing = ParseLocalDiscoveryResponse(
 		selection,
 		nonce,
-		response);
+		trailingResponse);
 	CHECK(trailing.status == ServerDiscoveryResponseStatus::BadFrame);
+}
+
+TEST_CASE(LocalResponseTransportCompletesAtDisconnect) {
+	const auto selection = CheckServerSelection(u"127.0.0.1:2443"_q);
+	const auto nonce = QByteArray(32, '\x03');
+	const auto response = LocalResponse(nonce);
+	QByteArray received;
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	QTcpSocket client;
+	client.connectToHost(server.serverAddress(), server.serverPort());
+	CHECK(client.waitForConnected(1000));
+	CHECK(server.waitForNewConnection(1000));
+	const auto peer = server.nextPendingConnection();
+	CHECK(peer != nullptr);
+	if (!peer) {
+		return;
+	}
+
+	peer->write(response.left(response.size() - 1));
+	CHECK(peer->waitForBytesWritten(1000));
+	CHECK(client.waitForReadyRead(1000));
+	received += client.readAll();
+	CHECK(!IsCompleteLocalDiscoveryResponse(received));
+
+	peer->write(response.right(1));
+	CHECK(peer->waitForBytesWritten(1000));
+	peer->disconnectFromHost();
+	while (client.state() != QAbstractSocket::UnconnectedState
+		&& client.waitForReadyRead(1000)) {
+		received += client.readAll();
+	}
+	received += client.readAll();
+	CHECK(client.state() == QAbstractSocket::UnconnectedState);
+	CHECK(IsCompleteLocalDiscoveryResponse(received));
+	CHECK(ParseLocalDiscoveryResponse(selection, nonce, received).valid());
+
+	peer->deleteLater();
+}
+
+TEST_CASE(PublicDiscoveryRequestsDoNotUseCookies) {
+	QNetworkRequest request(QUrl(
+		u"https://example.com/.well-known/telegramd/client"_q));
+	ConfigurePublicDiscoveryRequest(request);
+	CHECK(request.attribute(QNetworkRequest::CookieLoadControlAttribute).toInt()
+		== int(QNetworkRequest::Manual));
+	CHECK(request.attribute(QNetworkRequest::CookieSaveControlAttribute).toInt()
+		== int(QNetworkRequest::Manual));
+}
+
+TEST_CASE(DiscoveryAttemptsAreLimitedAndReleased) {
+	auto first = ServerDiscoveryAttempt::Acquire();
+	auto second = ServerDiscoveryAttempt::Acquire();
+	auto third = ServerDiscoveryAttempt::Acquire();
+	auto fourth = ServerDiscoveryAttempt::Acquire();
+	CHECK(first.has_value());
+	CHECK(second.has_value());
+	CHECK(third.has_value());
+	CHECK(fourth.has_value());
+	CHECK(!ServerDiscoveryAttempt::Acquire().has_value());
+
+	first.reset();
+	CHECK(ServerDiscoveryAttempt::Acquire().has_value());
+}
+
+TEST_CASE(DiscoveryAttemptMoveReleasesExactlyOnce) {
+	auto source = ServerDiscoveryAttempt::Acquire();
+	CHECK(source.has_value());
+	auto moved = std::move(*source);
+	CHECK(moved.has_value());
+	source.reset();
+	moved.reset();
+	CHECK(ServerDiscoveryAttempt::Acquire().has_value());
 }
 
 TEST_CASE(DiscoveryJsonRejectsMalformedResponse) {
