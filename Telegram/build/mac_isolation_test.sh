@@ -687,7 +687,6 @@ PY
 start_pid_observer() {
 	local target_pid="$1"
 	local trace="$TARGET_TRACE_DIR/$target_pid.txt"
-	local exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
 	local fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 	local observer_pid
 	local exec_observer_pid
@@ -704,10 +703,12 @@ start_pid_observer() {
 		record "PID-filtered lifecycle observer could not attach to exited pid=$target_pid"
 		return 1
 	fi
-	start_privileged_observer /usr/bin/fs_usage -w -F -f filesys "$target_pid" > "$trace" 2>&1
+	start_privileged_observer /usr/bin/fs_usage -w -F \
+		-f filesys -f exec "$target_pid" > "$trace" 2>&1
 	observer_pid=$OBSERVER_LAUNCH_PID
-	start_privileged_observer /usr/bin/fs_usage -w -F -f exec "$target_pid" > "$exec_trace" 2>&1
-	exec_observer_pid=$OBSERVER_LAUNCH_PID
+	# One fs_usage process owns the kernel trace for both filters. Starting
+	# separate filesys and exec observers races on ktrace_start with EBUSY.
+	exec_observer_pid=$observer_pid
 	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
 	start_privileged_observer /usr/sbin/dtrace -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
@@ -720,8 +721,7 @@ start_pid_observer() {
 		echo "filesystem_observer_pid=$observer_pid"
 		echo "exec_observer_pid=$exec_observer_pid"
 		echo "fork_observer_pid=$fork_observer_pid"
-		echo "filesystem_filter=/usr/bin/fs_usage -w -F -f filesys $target_pid"
-		echo "exec_filter=/usr/bin/fs_usage -w -F -f exec $target_pid"
+		echo "filesystem_exec_filter=/usr/bin/fs_usage -w -F -f filesys -f exec $target_pid"
 		echo "fork_filter=/usr/sbin/dtrace -q -n $fork_program"
 	} >> "$EVIDENCE_DIR/observer-commands.txt"
 	sleep 1
@@ -808,10 +808,19 @@ stop_pid_observers() {
 	local exec_observer_pid
 	local fork_observer_pid
 	local stop_failed=0
+	local trace
+	local exec_trace
 	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$observer_pid" ] || continue
-		stop_observer_process "filesystem-pid-$target_pid" "$observer_pid" "fs_usage" "$TARGET_TRACE_DIR/$target_pid.txt" || stop_failed=1
-		stop_observer_process "exec-pid-$target_pid" "$exec_observer_pid" "fs_usage" "$TARGET_EXEC_DIR/$target_pid.txt" || stop_failed=1
+		trace="$TARGET_TRACE_DIR/$target_pid.txt"
+		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
+		stop_observer_process "filesystem-exec-pid-$target_pid" "$observer_pid" "fs_usage" "$trace" || stop_failed=1
+		if [ "$exec_observer_pid" != "$observer_pid" ]; then
+			stop_observer_process "exec-pid-$target_pid" "$exec_observer_pid" "fs_usage" "$exec_trace" || stop_failed=1
+		elif ! cp "$trace" "$exec_trace"; then
+			record "PID-filtered combined fs_usage observer could not preserve exec trace for pid=$target_pid"
+			stop_failed=1
+		fi
 		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$TARGET_FORK_DIR/$target_pid.txt" || stop_failed=1
 	done < "$TARGET_OBSERVER_FILE"
 	if [ "$stop_failed" -ne 0 ]; then
@@ -819,7 +828,7 @@ stop_pid_observers() {
 		return 1
 	fi
 	TRACE_STOPPED=1
-	record "PID-filtered fs_usage observers stopped and flushed"
+	record "PID-filtered combined fs_usage observers stopped and flushed"
 }
 
 assemble_pid_trace() {
@@ -1515,7 +1524,7 @@ trap cleanup EXIT
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
 	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
-	echo "observer_mode=kernel-filtered-fs_usage-exec-and-dtrace-fork-observer-per-tracked-pid"
+	echo "observer_mode=kernel-filtered-combined-fs_usage-filesys-exec-and-dtrace-fork-observer-per-tracked-pid"
 	echo "descendant_policy=every-tracked-pid-must-have-independent-observer"
 	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
 	echo "fork_observer_control=readiness-gated-dtrace-write-and-short-lived-fork-only-child"
