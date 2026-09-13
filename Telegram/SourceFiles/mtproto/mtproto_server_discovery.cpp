@@ -390,7 +390,7 @@ private:
 
 	[[nodiscard]] bool parseNumber() {
 		const auto start = _position;
-		consume('-');
+		(void)consume('-');
 		if (_position == _data.size()) {
 			return false;
 		}
@@ -420,8 +420,8 @@ private:
 		if (_position < _data.size()
 			&& (_data[_position] == 'e' || _data[_position] == 'E')) {
 			++_position;
-			consume('+');
-			consume('-');
+			(void)consume('+');
+			(void)consume('-');
 			const auto exponent = _position;
 			while (_position < _data.size()
 				&& _data[_position] >= '0'
