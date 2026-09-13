@@ -213,6 +213,33 @@ wait_for_trace_marker() {
 	return 1
 }
 
+record_spawn_observer_diagnostics() {
+	local owner_pid="${SPAWN_CONTROL_OBSERVER_PID:-}"
+	local trace_bytes
+	trace_bytes="$(wc -c < "${SPAWN_CONTROL_TRACE:-/dev/null}" 2>/dev/null || printf 'unavailable')"
+	{
+		echo "startup_diagnostics=begin"
+		echo "observer_owner_pid=${owner_pid:-missing}"
+		if [ -n "$owner_pid" ]; then
+			echo "observer_owner_state=$(ps -p "$owner_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+			echo "observer_owner_command=$(process_command "$owner_pid")"
+			echo "observer_children_begin"
+			ps -axo pid=,ppid=,state=,command= 2>/dev/null | awk -v parent="$owner_pid" '$2 == parent' || true
+			echo "observer_children_end"
+		fi
+		echo "trace_path=${SPAWN_CONTROL_TRACE:-missing}"
+		echo "trace_bytes=$trace_bytes"
+		echo "trace_tail_begin"
+		if [ -n "${SPAWN_CONTROL_TRACE:-}" ] && [ -e "$SPAWN_CONTROL_TRACE" ]; then
+			tail -n 20 "$SPAWN_CONTROL_TRACE" || true
+		else
+			echo "trace_missing"
+		fi
+		echo "trace_tail_end"
+		echo "startup_diagnostics=end"
+	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
+}
+
 focus_application_process() {
 	local pid="$1"
 	local output="$2"
@@ -720,6 +747,7 @@ PY
 
 spawn_observer_unavailable() {
 	local detail="$*"
+	record_spawn_observer_diagnostics
 	if [ -n "$SPAWN_CONTROL_RELEASE" ]; then
 		touch "$SPAWN_CONTROL_RELEASE"
 	fi
@@ -732,14 +760,18 @@ run_spawn_observer_control() {
 	local dtrace_program
 	local helper_status=0
 	local child_ppid
+	local readiness_attempt
+	local readiness_attempts=3
+	local ready=0
 	SPAWN_CONTROL_READY="$RUN_ROOT/spawn-observer-ready"
 	SPAWN_CONTROL_RELEASE="$RUN_ROOT/spawn-observer-release"
 	SPAWN_CONTROL_RESULT="$RUN_ROOT/spawn-observer-result"
 	SPAWN_CONTROL_TRACE="$EVIDENCE_DIR/spawn-observer-control-trace.txt"
 	rm -f "$SPAWN_CONTROL_READY" "$SPAWN_CONTROL_RELEASE" "$SPAWN_CONTROL_RESULT" "$SPAWN_CONTROL_TRACE"
 	{
-		echo "observer=dtrace syscall write readiness and posix_spawn"
+		echo "observer=dtrace syscall write readiness and wildcard posix_spawn"
 		echo "control=python os.posix_spawn /bin/sleep"
+		echo "readiness_attempts=$readiness_attempts"
 		echo "result=NOT_RUN"
 	} > "$EVIDENCE_DIR/spawn-observer-control.txt"
 	if [ ! -x /usr/sbin/dtrace ]; then
@@ -777,14 +809,36 @@ PY
 	if [ "$SPAWN_CONTROL_PID" != "$SPAWN_CONTROL_HELPER_PID" ]; then
 		spawn_observer_unavailable "exec observer control parent pid changed"
 	fi
-	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::posix_spawn:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"posix_spawn parent=%d\\n\", pid); }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall:::entry /pid == $SPAWN_CONTROL_PID && probefunc == \"posix_spawn\"/ { printf(\"posix_spawn parent=%d\\n\", pid); }"
 	{
 		echo "parent_pid=$SPAWN_CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
 	} >> "$EVIDENCE_DIR/spawn-observer-control.txt"
-	start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$SPAWN_CONTROL_TRACE" 2>&1
-	SPAWN_CONTROL_OBSERVER_PID=$OBSERVER_LAUNCH_PID
-	if ! wait_for_trace_marker "$SPAWN_CONTROL_OBSERVER_PID" "$SPAWN_CONTROL_TRACE" "observer-ready" 10; then
+	for readiness_attempt in $(seq 1 "$readiness_attempts"); do
+		if [ "$readiness_attempt" -gt 1 ]; then
+			: > "$SPAWN_CONTROL_TRACE"
+		fi
+		start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$SPAWN_CONTROL_TRACE" 2>&1
+		SPAWN_CONTROL_OBSERVER_PID=$OBSERVER_LAUNCH_PID
+		printf 'readiness_attempt=%s observer_owner_pid=%s\n' \
+			"$readiness_attempt" "$SPAWN_CONTROL_OBSERVER_PID" >> "$EVIDENCE_DIR/spawn-observer-control.txt"
+		if wait_for_trace_marker "$SPAWN_CONTROL_OBSERVER_PID" "$SPAWN_CONTROL_TRACE" "observer-ready" 10; then
+			ready=1
+			break
+		fi
+		record_spawn_observer_diagnostics
+		cp "$SPAWN_CONTROL_TRACE" \
+			"$EVIDENCE_DIR/spawn-observer-control-trace-attempt-$readiness_attempt.txt" 2>/dev/null || true
+		if ! stop_observer_process "spawn-dtrace-startup-$readiness_attempt" \
+			"$SPAWN_CONTROL_OBSERVER_PID" "dtrace" "$SPAWN_CONTROL_TRACE"; then
+			spawn_observer_unavailable "exec observer control dtrace startup attempt $readiness_attempt could not shut down cleanly"
+		fi
+		SPAWN_CONTROL_OBSERVER_PID=""
+		if [ "$readiness_attempt" -lt "$readiness_attempts" ]; then
+			sleep 1
+		fi
+	done
+	if [ "$ready" -ne 1 ]; then
 		spawn_observer_unavailable "exec observer control did not report dtrace readiness"
 	fi
 	touch "$SPAWN_CONTROL_RELEASE"
