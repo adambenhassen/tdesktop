@@ -206,6 +206,27 @@ wait_for_trace_marker() {
 	return 1
 }
 
+focus_application_process() {
+	local pid="$1"
+	local output="$2"
+	local seconds="$3"
+	local i
+	: > "$output"
+	for i in $(seq 1 "$seconds"); do
+		if ! process_alive "$pid"; then
+			printf 'attempt=%s result=FAIL detail=process-exited\n' "$i" >> "$output"
+			return 1
+		fi
+		if osascript -e "tell application \"System Events\" to set frontmost of (first application process whose unix id is $pid) to true" >> "$output" 2>&1; then
+			printf 'attempt=%s result=PASS\n' "$i" >> "$output"
+			return 0
+		fi
+		sleep 1
+	done
+	printf 'attempts=%s result=FAIL detail=process-never-became-focusable\n' "$seconds" >> "$output"
+	return 1
+}
+
 wait_for_stopped() {
 	local pid="$1"
 	local seconds="$2"
@@ -1680,7 +1701,7 @@ env HOME="$HOME_ROOT" "$OFFICIAL_EXE" -noupdate -debug -workdir "$OLD" > "$EVIDE
 OFFICIAL_PID=$!
 wait_for_process "$OFFICIAL_PID" 30 || fail "official process lifetime" "pid=$OFFICIAL_PID did not stay alive"
 printf '%s\n' "$OFFICIAL_PID" > "$EVIDENCE_DIR/official-pid.txt"
-if ! osascript -e "tell application \"System Events\" to set frontmost of (first application process whose unix id is $OFFICIAL_PID) to true" > "$EVIDENCE_DIR/official-activate.txt" 2>&1; then
+if ! focus_application_process "$OFFICIAL_PID" "$EVIDENCE_DIR/official-activate.txt" 30; then
 	unavailable "System Events could not focus the official process"
 fi
 if ! FRONTMOST_BEFORE="$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')"; then
