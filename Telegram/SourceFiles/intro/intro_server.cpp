@@ -674,23 +674,13 @@ void ServerWidget::sendLocalRequest() {
 	if (!_socket || !_connecting || _localWriteClosed) {
 		return;
 	}
-	while (_localWriteOffset < _localRequest.size()) {
-		const auto written = _socket->write(
-			_localRequest.constData() + _localWriteOffset,
-			_localRequest.size() - _localWriteOffset);
-		if (written < 0) {
-			discoveryFailed(true);
-			return;
-		}
-		if (written == 0) {
-			return;
-		}
-		_localWriteOffset += int(written);
+	if (!MTP::SendLocalDiscoveryRequest(
+			*_socket,
+			_localRequest,
+			_localWriteOffset,
+			_localWriteClosed)) {
+		discoveryFailed(true);
 	}
-	_localWriteClosed = true;
-	// QTcpSocket drains queued bytes before closing its write side. The
-	// server therefore observes EOF while its response remains readable.
-	_socket->disconnectFromHost();
 }
 
 void ServerWidget::localReadyRead() {

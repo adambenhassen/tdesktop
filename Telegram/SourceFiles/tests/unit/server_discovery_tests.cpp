@@ -9,6 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/mtproto_server_discovery.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
+#include <QtCore/QIODevice>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QUrl>
@@ -298,6 +302,84 @@ TEST_CASE(LocalDiscoveryStartsSocketForLiteralAndLocalName) {
 		client.disconnectFromHost();
 		client.waitForDisconnected(1000);
 	}
+}
+
+TEST_CASE(LocalDiscoveryRequestHalfClosesBeforeResponse) {
+	QByteArray peerRequest;
+	QByteArray received;
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"127.0.0.1:"_q + QString::number(server.serverPort()));
+	const auto nonce = QByteArray(32, '\x04');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+	QTcpSocket client;
+	CHECK(StartLocalDiscoverySocket(
+		client,
+		selection,
+		server.serverAddress()));
+	CHECK(client.waitForConnected(1000));
+	CHECK(server.waitForNewConnection(1000));
+	auto peer = server.nextPendingConnection();
+	CHECK(peer != nullptr);
+	if (!peer) {
+		return;
+	}
+
+	auto peerSawEof = false;
+	connect(peer, &QAbstractSocket::readyRead, peer, [&] {
+		peerRequest += peer->readAll();
+	});
+	connect(peer, &QIODevice::readChannelFinished, peer, [&] {
+		peerSawEof = true;
+	});
+	auto writeOffset = 0;
+	auto writeClosed = false;
+	auto writeSucceeded = true;
+	while (!writeClosed && writeSucceeded) {
+		writeSucceeded = SendLocalDiscoveryRequest(
+			client,
+			request,
+			writeOffset,
+			writeClosed);
+		CHECK(writeSucceeded);
+		if (!writeClosed) {
+			const auto bytesWritten = client.waitForBytesWritten(1000);
+			CHECK(bytesWritten);
+			if (!bytesWritten) {
+				break;
+			}
+		}
+	}
+	CHECK(writeClosed);
+	CHECK_EQ(writeOffset, request.size());
+
+	QElapsedTimer timer;
+	timer.start();
+	while (!peerSawEof && timer.elapsed() < 1000) {
+		QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+	}
+	peerRequest += peer->readAll();
+	CHECK(peerSawEof);
+	CHECK_EQ(peerRequest, request);
+
+	CHECK_EQ(peer->write(response), qint64(response.size()));
+	CHECK(peer->waitForBytesWritten(1000));
+	peer->disconnectFromHost();
+	while (client.state() != QAbstractSocket::UnconnectedState
+		&& client.waitForReadyRead(1000)) {
+		received += client.readAll();
+	}
+	received += client.readAll();
+	CHECK(IsCompleteLocalDiscoveryResponse(received));
+	CHECK(ParseLocalDiscoveryResponse(selection, nonce, received).valid());
+
+	peer->deleteLater();
 }
 
 TEST_CASE(PublicDiscoveryRequestsDoNotUseCookies) {

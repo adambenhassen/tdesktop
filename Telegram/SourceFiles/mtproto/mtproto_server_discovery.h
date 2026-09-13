@@ -153,6 +153,14 @@ struct ServerDiscoveryResult {
 	const ServerSelectionCheck &selection,
 	const QHostAddress &address);
 
+// Continue the asynchronous local/direct request and half-close only its
+// write direction after all request bytes have reached the socket.
+[[nodiscard]] bool SendLocalDiscoveryRequest(
+	QTcpSocket &socket,
+	const QByteArray &request,
+	int &writeOffset,
+	bool &writeClosed);
+
 [[nodiscard]] bool IsCompleteLocalDiscoveryResponse(
 	const QByteArray &response);
 
