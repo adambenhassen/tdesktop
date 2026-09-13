@@ -150,7 +150,7 @@ TEST_CASE(DiscoveryJsonRejectsMalformedResponse) {
 	const auto selection = CheckServerSelection(u"server.example.com"_q);
 	const auto result = ParsePublicDiscoveryResponse(
 		selection,
-		QByteArray("{}"));
+		QByteArray("{"));
 	CHECK(result.status == ServerDiscoveryResponseStatus::InvalidJson);
 }
 
