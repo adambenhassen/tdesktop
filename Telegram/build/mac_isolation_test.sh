@@ -585,7 +585,7 @@ run_spawn_observer_control() {
 	SPAWN_CONTROL_TRACE="$EVIDENCE_DIR/spawn-observer-control-trace.txt"
 	rm -f "$SPAWN_CONTROL_READY" "$SPAWN_CONTROL_RELEASE" "$SPAWN_CONTROL_RESULT" "$SPAWN_CONTROL_TRACE"
 	{
-		echo "observer=dtrace syscall posix_spawn and proc exec-success"
+		echo "observer=dtrace syscall kill readiness and posix_spawn"
 		echo "control=python os.posix_spawn /bin/sleep"
 		echo "result=NOT_RUN"
 	} > "$EVIDENCE_DIR/spawn-observer-control.txt"
@@ -603,6 +603,7 @@ with open(ready_path, "w", encoding="utf-8") as ready:
     ready.write(str(parent_pid) + "\n")
     ready.flush()
 while not os.path.exists(release_path):
+    os.kill(parent_pid, 0)
     time.sleep(0.01)
 child_pid = os.posix_spawn("/bin/sleep", ["sleep", "3"], os.environ.copy())
 with open(result_path, "w", encoding="utf-8") as result:
@@ -623,7 +624,7 @@ PY
 	if [ "$SPAWN_CONTROL_PID" != "$SPAWN_CONTROL_HELPER_PID" ]; then
 		spawn_observer_unavailable "exec observer control parent pid changed"
 	fi
-	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::posix_spawn:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"posix_spawn parent=%d\\n\", pid); }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::kill:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::posix_spawn:entry /pid == $SPAWN_CONTROL_PID/ { printf(\"posix_spawn parent=%d\\n\", pid); }"
 	{
 		echo "parent_pid=$SPAWN_CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
@@ -1517,7 +1518,7 @@ trap cleanup EXIT
 	echo "descendant_policy=every-tracked-pid-must-have-independent-observer"
 	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
 	echo "fork_observer_control=short-lived-fork-only-child"
-	echo "spawn_observer_control=readiness-gated-dtrace-posix_spawn-and-exec-success-with-parent-child-attribution"
+	echo "spawn_observer_control=readiness-gated-dtrace-kill-and-posix_spawn-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
 
