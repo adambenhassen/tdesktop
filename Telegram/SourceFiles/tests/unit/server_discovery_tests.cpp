@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
 #include <QtCore/QIODevice>
+#include <QtCore/QObject>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QUrl>
@@ -332,10 +333,10 @@ TEST_CASE(LocalDiscoveryRequestHalfClosesBeforeResponse) {
 	}
 
 	auto peerSawEof = false;
-	connect(peer, &QAbstractSocket::readyRead, peer, [&] {
+	QObject::connect(peer, &QAbstractSocket::readyRead, peer, [&] {
 		peerRequest += peer->readAll();
 	});
-	connect(peer, &QIODevice::readChannelFinished, peer, [&] {
+	QObject::connect(peer, &QIODevice::readChannelFinished, peer, [&] {
 		peerSawEof = true;
 	});
 	auto writeOffset = 0;
