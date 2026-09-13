@@ -382,6 +382,7 @@ TEST_CASE(LocalDiscoveryRequestHalfClosesBeforeResponse) {
 	if (!server.isListening()) {
 		return;
 	}
+	server.pauseAccepting();
 
 	const auto selection = CheckServerSelection(
 		u"127.0.0.1:"_q + QString::number(server.serverPort()));
