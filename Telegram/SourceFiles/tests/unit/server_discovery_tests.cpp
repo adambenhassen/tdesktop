@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QUrl>
+#include <QtNetwork/QHostInfo>
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
@@ -61,6 +62,21 @@ void AppendBigEndian(QByteArray &target, quint16 value) {
 	return response;
 }
 
+[[nodiscard]] QByteArray PublicResponse(const QString &endpoint) {
+	const auto key = TestKey();
+	const auto der = key.getSubjectPublicKeyInfo();
+	return QJsonDocument(QJsonObject{
+		{ u"version"_q, 1 },
+		{ u"mtproto"_q, QJsonObject{
+			{ u"endpoint"_q, endpoint },
+			{ u"dc_id"_q, 2 },
+			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
+				reinterpret_cast<const char *>(der.data()),
+				int(der.size())).toBase64()) }
+		} }
+	}).toJson(QJsonDocument::Compact);
+}
+
 TEST_CASE(PublicSelectionDefaultsToHttps) {
 	const auto result = CheckServerSelection(u" Example.COM. "_q);
 	CHECK(result.valid());
@@ -91,6 +107,36 @@ TEST_CASE(EveryIpLiteralUsesLocalPreflight) {
 	CHECK(IsPublicAddress(QHostAddress(u"8.8.8.8"_q)));
 	CHECK(!IsPublicAddress(QHostAddress(u"203.0.113.10"_q)));
 	CHECK(!IsPublicAddress(QHostAddress(u"10.0.0.1"_q)));
+}
+
+TEST_CASE(PublicDiscoveryRejectsSpecialPurposeIpv6Addresses) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	const auto special = {
+		u"64:ff9b:1::1"_q,
+		u"100:0:0:1::1"_q,
+		u"3fff::1"_q,
+		u"5f00::1"_q,
+	};
+	for (const auto &text : special) {
+		const auto address = QHostAddress(text);
+		CHECK(!IsPublicAddress(address));
+
+		const auto result = ParsePublicDiscoveryResponse(
+			selection,
+			PublicResponse(u"["_q + text + u"]:443"_q));
+		CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+
+		QHostInfo info;
+		info.setAddresses({ address });
+		for (const auto &answer : info.addresses()) {
+			CHECK(!IsPublicAddress(answer));
+		}
+	}
+}
+
+TEST_CASE(PublicDiscoveryNormalizesIpv4MappedAddresses) {
+	CHECK(IsPublicAddress(QHostAddress(u"::ffff:8.8.8.8"_q)));
+	CHECK(!IsPublicAddress(QHostAddress(u"::ffff:10.0.0.1"_q)));
 }
 
 TEST_CASE(SelectionRejectsNonRoutableIpLiterals) {

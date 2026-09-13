@@ -52,41 +52,82 @@ std::atomic<int> ServerDiscoveryAttempts = 0;
 	return address.isInSubnet(QHostAddress(QString::fromLatin1(subnet)), bits);
 }
 
-[[nodiscard]] bool IsSpecialLiteral(const QHostAddress &address) {
+struct AddressSubnet {
+	const char *address;
+	int bits;
+};
+
+// Keep these blocks synchronized with the IANA Special-Purpose Address
+// Registries. Public discovery accepts only ordinary globally routable
+// unicast addresses; protocol, private, reserved, and documentation blocks
+// stay rejected even when a DNS answer or delegated literal names them.
+constexpr auto kNonGlobalIpv4 = {
+	AddressSubnet{ "0.0.0.0", 8 },
+	AddressSubnet{ "10.0.0.0", 8 },
+	AddressSubnet{ "100.64.0.0", 10 },
+	AddressSubnet{ "127.0.0.0", 8 },
+	AddressSubnet{ "169.254.0.0", 16 },
+	AddressSubnet{ "172.16.0.0", 12 },
+	AddressSubnet{ "192.0.0.0", 24 },
+	AddressSubnet{ "192.0.2.0", 24 },
+	AddressSubnet{ "192.31.196.0", 24 },
+	AddressSubnet{ "192.52.193.0", 24 },
+	AddressSubnet{ "192.88.99.0", 24 },
+	AddressSubnet{ "192.168.0.0", 16 },
+	AddressSubnet{ "192.175.48.0", 24 },
+	AddressSubnet{ "198.18.0.0", 15 },
+	AddressSubnet{ "198.51.100.0", 24 },
+	AddressSubnet{ "203.0.113.0", 24 },
+	AddressSubnet{ "224.0.0.0", 4 },
+	AddressSubnet{ "240.0.0.0", 4 },
+};
+
+constexpr auto kNonGlobalIpv6 = {
+	AddressSubnet{ "::", 128 },
+	AddressSubnet{ "::1", 128 },
+	AddressSubnet{ "::ffff:0:0", 96 },
+	AddressSubnet{ "64:ff9b::", 96 },
+	AddressSubnet{ "64:ff9b:1::", 48 },
+	AddressSubnet{ "100::", 64 },
+	AddressSubnet{ "100:0:0:1::", 64 },
+	AddressSubnet{ "2001::", 23 },
+	AddressSubnet{ "2001:4:112::", 48 },
+	AddressSubnet{ "2001:db8::", 32 },
+	AddressSubnet{ "2002::", 16 },
+	AddressSubnet{ "2620:4f:8000::", 48 },
+	AddressSubnet{ "3fff::", 20 },
+	AddressSubnet{ "5f00::", 16 },
+	AddressSubnet{ "fc00::", 7 },
+	AddressSubnet{ "fe80::", 10 },
+};
+
+[[nodiscard]] bool IsInAnySubnet(
+		const QHostAddress &address,
+		std::initializer_list<AddressSubnet> subnets) {
+	for (const auto &subnet : subnets) {
+		if (IsInSubnet(address, subnet.address, subnet.bits)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+[[nodiscard]] bool IsGloballyRoutableUnicast(const QHostAddress &address) {
 	if (address.protocol() == QAbstractSocket::IPv6Protocol
 		&& IsInSubnet(address, "::ffff:0:0", 96)) {
-		return IsSpecialLiteral(QHostAddress(address.toIPv4Address()));
+		return IsGloballyRoutableUnicast(QHostAddress(address.toIPv4Address()));
 	}
 	if (address.protocol() == QAbstractSocket::IPv4Protocol) {
-		return IsInSubnet(address, "0.0.0.0", 8)
-			|| IsInSubnet(address, "10.0.0.0", 8)
-			|| IsInSubnet(address, "100.64.0.0", 10)
-			|| IsInSubnet(address, "127.0.0.0", 8)
-			|| IsInSubnet(address, "169.254.0.0", 16)
-			|| IsInSubnet(address, "172.16.0.0", 12)
-			|| IsInSubnet(address, "192.0.0.0", 24)
-			|| IsInSubnet(address, "192.0.2.0", 24)
-			|| IsInSubnet(address, "192.88.99.0", 24)
-			|| IsInSubnet(address, "192.168.0.0", 16)
-			|| IsInSubnet(address, "198.18.0.0", 15)
-			|| IsInSubnet(address, "198.51.100.0", 24)
-			|| IsInSubnet(address, "203.0.113.0", 24)
-			|| IsInSubnet(address, "224.0.0.0", 4)
-			|| IsInSubnet(address, "240.0.0.0", 4);
+		return !IsInAnySubnet(address, kNonGlobalIpv4);
 	}
-	return IsInSubnet(address, "::", 128)
-		|| IsInSubnet(address, "::1", 128)
-		|| IsInSubnet(address, "100::", 64)
-		|| IsInSubnet(address, "fc00::", 7)
-		|| IsInSubnet(address, "fe80::", 10)
-		|| IsInSubnet(address, "ff00::", 8)
-		|| IsInSubnet(address, "2001::", 32)
-		|| IsInSubnet(address, "2001:2::", 48)
-		|| IsInSubnet(address, "2001:4:112::", 48)
-		|| IsInSubnet(address, "2001:10::", 28)
-		|| IsInSubnet(address, "2001:20::", 28)
-		|| IsInSubnet(address, "2001:db8::", 32)
-		|| IsInSubnet(address, "64:ff9b::", 96);
+	if (address.protocol() != QAbstractSocket::IPv6Protocol) {
+		return false;
+	}
+	// Only 2000::/3 is allocated to IPv6 global unicast. This outer
+	// allow-list rejects future, reserved, and special-purpose space by
+	// default; the table handles special assignments within that range.
+	return IsInSubnet(address, "2000::", 3)
+		&& !IsInAnySubnet(address, kNonGlobalIpv6);
 }
 
 [[nodiscard]] bool IsRejectedLiteral(const QHostAddress &address) {
@@ -666,9 +707,7 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 }
 
 bool IsPublicAddress(const QHostAddress &address) {
-	return (address.protocol() == QAbstractSocket::IPv4Protocol
-			|| address.protocol() == QAbstractSocket::IPv6Protocol)
-		&& !IsSpecialLiteral(address);
+	return IsGloballyRoutableUnicast(address);
 }
 
 bool IsPublicDiscoveryEndpoint(
