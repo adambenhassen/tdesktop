@@ -815,6 +815,7 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 			: tr::lng_intro_server_unsupported(tr::now),
 		true);
 	_address->setFocusFast();
+	_scroll->scrollToWidget(_continue);
 }
 
 void ServerWidget::cancelDiscovery() {
@@ -974,6 +975,7 @@ void ServerWidget::commitBinding(
 		_address->setAccessibleDescription(
 			tr::lng_intro_server_save_failed(tr::now));
 		_address->setFocusFast();
+		_scroll->scrollToWidget(_continue);
 		return;
 	}
 
