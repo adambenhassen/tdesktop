@@ -163,11 +163,7 @@ Widget::Widget(
 		const auto text = (
 			report->failure == MTP::PinnedServerFailure::KeyMismatch
 		)	? tr::lng_intro_server_key_mismatch(tr::now)
-		: tr::lng_intro_server_dc_mismatch(
-			tr::now,
-			lt_dc,
-			QString::number(
-				_account->mtp().dcOptions().customServer().dcId));
+		: tr::lng_intro_server_dc_mismatch(tr::now);
 		getStep()->showError(rpl::single(text));
 	}, lifetime());
 

@@ -109,6 +109,27 @@ TEST_CASE(PinnedCustomServerSurvivesSerialization) {
 	}
 }
 
+// Address-only discovery stores the normalized selection and the origin that
+// authenticated it alongside the operational binding. Losing either field
+// on restart would turn a verified enrollment into an unclassified legacy
+// pin, so the complete metadata must survive the same encrypted config blob.
+TEST_CASE(DiscoveredCustomServerMetadataSurvivesSerialization) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.serverSelection = "10.4.1.7:8443";
+	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+	server.discoveryOrigin = "local:10.4.1.7:8443";
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+
+	const auto got = restored.customServer();
+	CHECK_EQ(got.serverSelection, server.serverSelection);
+	CHECK(got.discoveryPolicy == server.discoveryPolicy);
+	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
+}
+
 // An unpinned config must round-trip as unpinned rather than picking up
 // a half-written pin, and must keep its production fallback.
 TEST_CASE(UnpinnedConfigSurvivesSerialization) {

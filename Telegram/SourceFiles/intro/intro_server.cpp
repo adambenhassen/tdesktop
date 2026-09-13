@@ -11,204 +11,104 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
-#include "main/main_app_config.h"
 #include "main/main_domain.h"
-#include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "storage/storage_account.h"
+#include "base/random.h"
 #include "core/application.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/wrap/vertical_layout.h"
-#include "ui/ui_utility.h"
 #include "window/window_controller.h"
 #include "styles/style_intro.h"
 
+#include <QtCore/QTimer>
 #include <QtGui/QAccessible>
-#include <QtGui/QClipboard>
-#include <QtGui/QGuiApplication>
-#include <QtGui/QKeyEvent>
-#include <QtGui/QPainter>
-#include <QtGui/QFontMetrics>
-#include <QtWidgets/QTextEdit>
+#include <QtGui/QColor>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkProxy>
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QHostInfo>
+#include <QtNetwork/QSslError>
+#include <QtNetwork/QTcpSocket>
 
 #include <algorithm>
-#include <memory>
 #include <optional>
+#include <utility>
 
 namespace Intro {
 namespace details {
 namespace {
 
-[[nodiscard]] const style::FlatLabel &IdentityLabelStyle() {
-	static const auto result = [] {
-		auto result = st::introServerIdentity;
-		result.style.font = result.style.font->monospace();
-		return result;
-	}();
-	return result;
-}
+constexpr auto kDiscoveryTimeout = 10 * 1000;
+constexpr auto kMaxDiscoveryBody = 16 * 1024;
+constexpr auto kMaxDiscoveryHeaders = 16 * 1024;
 
-[[nodiscard]] QString IdentityGroupsForAccessibility(const QString &identity) {
-	auto result = QString();
-	auto inGroup = 0;
-	for (const auto ch : identity) {
-		if (ch == QChar::fromLatin1('-')) {
-			result += u", "_q;
-			inGroup = 0;
-		} else {
-			if (inGroup > 0) {
-				result += QChar::fromLatin1(' ');
-			}
-			result += ch;
-			++inGroup;
-		}
-	}
-	return result;
-}
-
-[[nodiscard]] QString IdentityRows(
-		const QString &identity,
-		int availableWidth) {
-	const auto groups = identity.split(QChar::fromLatin1('-'));
-	const auto font = IdentityLabelStyle().style.font->f;
-	const auto metrics = QFontMetrics(font);
-	for (const auto perRow : { 8, 4, 2 }) {
-		auto fits = true;
-		for (auto start = 0; start < groups.size(); start += perRow) {
-			const auto row = groups.mid(start, perRow).join(
-				QChar::fromLatin1('-'));
-			const auto displayedRow = (start + perRow < groups.size())
-				? row + QChar::fromLatin1('-')
-				: row;
-			if (metrics.horizontalAdvance(displayedRow) > availableWidth) {
-				fits = false;
-				break;
-			}
-		}
-		if (fits) {
-			auto rows = QString();
-			for (auto start = 0; start < groups.size(); start += perRow) {
-				if (!rows.isEmpty()) {
-					rows += QChar::fromLatin1('\n');
-				}
-				rows += groups.mid(start, perRow).join(
-					QChar::fromLatin1('-'));
-				if (start + perRow < groups.size()) {
-					rows += QChar::fromLatin1('-');
-				}
-			}
-			return rows;
-		}
-	}
-	return identity;
-}
-
-[[nodiscard]] QString EnrollmentErrorText(
-		const MTP::ServerEnrollmentCheck &check) {
-	// Common warning options disable switch diagnostics. Keep this mapping
-	// exhaustive so every parser reason has its own accepted copy.
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic error "-Wswitch-enum"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic error "-Wswitch-enum"
-#elif defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(4:4062)
-#pragma warning(error:4062)
-#endif
-	switch (check.status) {
-	case MTP::ServerEnrollmentStatus::Valid:
-		return {};
-	case MTP::ServerEnrollmentStatus::MissingEndpoint:
-		return tr::lng_intro_server_enrollment_missing_endpoint(tr::now);
-	case MTP::ServerEnrollmentStatus::MissingKey:
-		return tr::lng_intro_server_enrollment_missing_key(tr::now);
-	case MTP::ServerEnrollmentStatus::MultipleEndpoints:
-		return tr::lng_intro_server_enrollment_multiple_endpoints(tr::now);
-	case MTP::ServerEnrollmentStatus::MultipleKeys:
-		return tr::lng_intro_server_enrollment_multiple_keys(tr::now);
-	case MTP::ServerEnrollmentStatus::TruncatedEnvelope:
-		return tr::lng_intro_server_enrollment_truncated(tr::now);
-	case MTP::ServerEnrollmentStatus::UnparseableEnvelope:
-		return tr::lng_intro_server_enrollment_unparseable(tr::now);
-	case MTP::ServerEnrollmentStatus::TrailingContent:
-		return tr::lng_intro_server_enrollment_trailing(tr::now);
-	case MTP::ServerEnrollmentStatus::EndpointNoPort:
-		return tr::lng_intro_server_enrollment_endpoint_no_port(tr::now);
-	case MTP::ServerEnrollmentStatus::EndpointBadPort:
-		return tr::lng_intro_server_enrollment_endpoint_bad_port(tr::now);
-	case MTP::ServerEnrollmentStatus::EndpointEmptyHost:
-		return tr::lng_intro_server_enrollment_endpoint_empty_host(tr::now);
-	case MTP::ServerEnrollmentStatus::EndpointBadHost:
-		return tr::lng_intro_server_enrollment_endpoint_bad_host(tr::now);
-	case MTP::ServerEnrollmentStatus::EndpointHostTooLong:
-		return tr::lng_intro_server_enrollment_endpoint_host_too_long(tr::now);
-	case MTP::ServerEnrollmentStatus::EndpointUnbracketedIPv6:
-		return tr::lng_intro_server_enrollment_endpoint_ipv6(tr::now);
-	case MTP::ServerEnrollmentStatus::UnreadableKey:
-		return tr::lng_intro_server_enrollment_unreadable_key(tr::now);
-	case MTP::ServerEnrollmentStatus::PrivateKey:
-		return tr::lng_intro_server_enrollment_private_key(tr::now);
-	case MTP::ServerEnrollmentStatus::NotRsaKey:
-		return tr::lng_intro_server_enrollment_not_rsa(tr::now);
-	case MTP::ServerEnrollmentStatus::BadModulusSize:
-		return tr::lng_intro_server_enrollment_bad_modulus(
-			tr::now,
-			lt_bits,
-			QString::number(check.modulusBits));
-	case MTP::ServerEnrollmentStatus::InternalKeyError:
-		return tr::lng_intro_server_enrollment_internal(tr::now);
-	}
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#elif defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-	Unexpected("Unhandled server enrollment status.");
-	return {};
-}
-
-void ConfigureEnrollmentField(not_null<Ui::InputField*> field) {
+void ConfigureAddressField(not_null<Ui::InputField*> field) {
 	field->setSubmitSettings(Ui::InputField::SubmitSettings::None);
 	field->setMarkdownReplacesEnabled(false);
 	field->setInstantReplacesEnabled(rpl::single(false));
 	field->rawTextEdit()->setAcceptRichText(false);
 	field->rawTextEdit()->setInputMethodHints(
-		Qt::ImhMultiLine
-		| Qt::ImhNoPredictiveText
+		Qt::ImhNoPredictiveText
 		| Qt::ImhNoAutoUppercase);
 	field->rawTextEdit()->setTabChangesFocus(true);
 }
 
-void PaintPanel(
-		not_null<Ui::VerticalLayout*> panel,
-		not_null<Ui::FlatLabel*> compareLabel,
-		QPainter &p) {
-	const auto rect = panel->rect().adjusted(
-		0,
-		0,
-		-st::introServerPanelBorder,
-		-st::introServerPanelBorder);
-	p.setRenderHint(QPainter::Antialiasing);
-	p.setPen(Qt::NoPen);
-	p.setBrush(st::introServerPanelBg->b);
-	p.drawRoundedRect(rect, st::introServerPanelRadius, st::introServerPanelRadius);
-	p.setPen(st::shadowFg->c);
-	const auto lineY = compareLabel->y() - st::introServerPanelLineGap;
-	p.drawLine(
-		st::introServerPanelLineInset,
-		lineY,
-		panel->width()
-			- st::introServerPanelLineInset
-			- st::introServerPanelBorder,
-		lineY);
+[[nodiscard]] QString CustomServerEndpoint(const MTP::CustomServer &server) {
+	const auto host = QString::fromStdString(server.ip);
+	return (server.ipv6 ? (u"["_q + host + u"]"_q) : host)
+		+ u":"_q
+		+ QString::number(server.port);
+}
+
+[[nodiscard]] QString AddressWithPort(
+		const QHostAddress &address,
+		int port) {
+	const auto host = address.toString();
+	return (address.protocol() == QAbstractSocket::IPv6Protocol
+		? (u"["_q + host + u"]"_q)
+		: host)
+		+ u":"_q
+		+ QString::number(port);
+}
+
+[[nodiscard]] bool HasBoundServer(not_null<Main::Account*> account) {
+	const auto &options = account->mtp().dcOptions();
+	return options.hasCustomServer() || options.blocked();
+}
+
+[[nodiscard]] bool IsCompleteLocalResponse(const QByteArray &response) {
+	if (response.size() < 58) {
+		return false;
+	}
+	const auto read32 = [&](int offset) {
+		return (quint32(uchar(response[offset])) << 24)
+			| (quint32(uchar(response[offset + 1])) << 16)
+			| (quint32(uchar(response[offset + 2])) << 8)
+			| quint32(uchar(response[offset + 3]));
+	};
+	const auto bodyLength = read32(48);
+	if (bodyLength < 7 || bodyLength > 4102) {
+		return false;
+	}
+	return response.size() >= 58 + int(bodyLength);
+}
+
+[[nodiscard]] bool DiscoveryHeadersWithinBound(
+		QNetworkReply *reply) {
+	auto size = 0;
+	for (const auto &header : reply->rawHeaderPairs()) {
+		size += header.first.size() + header.second.size() + 4;
+		if (size > kMaxDiscoveryHeaders) {
+			return false;
+		}
+	}
+	return true;
 }
 
 } // namespace
@@ -219,20 +119,35 @@ ServerWidget::ServerWidget(
 		not_null<Data*> data)
 : Step(parent, account, data)
 , _scroll(this)
+, _deadline(new QTimer(this))
 , _readOnly(readOnly()) {
+	_deadline->setSingleShot(true);
+	connect(_deadline, &QTimer::timeout, this, [=] {
+		discoveryTimeout();
+	});
+
 	setTitleText(_readOnly
 		? tr::lng_intro_server_saved_title()
 		: tr::lng_intro_server_title());
 	setDescriptionText(_readOnly
 		? tr::lng_intro_server_saved_desc()
-		: tr::lng_intro_server_enrollment_desc());
+		: tr::lng_intro_server_desc());
 
 	_content = _scroll->setOwnedWidget(
 		object_ptr<Ui::VerticalLayout>(_scroll));
-	if (_readOnly) {
-		setupReadOnly();
+	setupSelection();
+	setupBound();
+	if (!_readOnly) {
+		_savedAddressLabel->hide();
+		_savedAddress->hide();
+		_savedStatus->hide();
+		_savedContinue->hide();
+		_addAccount->hide();
 	} else {
-		setupEnrollment();
+		_addressLabel->hide();
+		_address->hide();
+		_status->hide();
+		_continue->hide();
 	}
 	descriptionGeometryValue() | rpl::on_next([=](QRect) {
 		if (_content) {
@@ -243,77 +158,77 @@ ServerWidget::ServerWidget(
 }
 
 bool ServerWidget::readOnly() const {
-	const auto custom = account().mtp().dcOptions().customServer();
-	return custom.key
-		&& account().mtp().dcOptions().isAuthorized(custom.dcId);
+	return HasBoundServer(account());
 }
 
-void ServerWidget::setupEnrollment() {
-	_enrollmentLabel = Ui::CreateChild<Ui::FlatLabel>(
+void ServerWidget::setupSelection() {
+	_addressLabel = Ui::CreateChild<Ui::FlatLabel>(
 		_content,
-		tr::lng_intro_server_enrollment_label(),
+		tr::lng_intro_server_address_label(),
 		st::introDescription);
-	_enrollment = Ui::CreateChild<Ui::InputField>(
+	_address = Ui::CreateChild<Ui::InputField>(
 		_content,
-		st::introServerKeyField,
-		Ui::InputField::Mode::MultiLine,
-		tr::lng_intro_server_enrollment_ph());
+		st::introCountry,
+		Ui::InputField::Mode::SingleLine,
+		tr::lng_intro_server_address_ph());
 	_status = Ui::CreateChild<Ui::FlatLabel>(
 		_content,
 		QString(),
 		st::introError);
-	_review = Ui::CreateChild<Ui::RoundButton>(
+	_continue = Ui::CreateChild<Ui::RoundButton>(
 		_content,
-		tr::lng_intro_server_review(),
+		tr::lng_intro_server_continue(),
 		st::introNextButton);
 
-	_enrollment->setAccessibleName(
-		tr::lng_intro_server_enrollment_label(tr::now));
-	_enrollment->setAccessibleDescription(
-		tr::lng_intro_server_enrollment_ph(tr::now));
-	ConfigureEnrollmentField(_enrollment);
-	_enrollment->changes() | rpl::on_next([=] {
-		enrollmentChanged();
-	}, _enrollment->lifetime());
-	_review->setClickedCallback([=] { reviewEnrollment(); });
+	_address->setAccessibleName(
+		tr::lng_intro_server_address_label(tr::now));
+	_address->setAccessibleDescription(
+		tr::lng_intro_server_address_ph(tr::now));
+	ConfigureAddressField(_address);
+	_address->changes() | rpl::on_next([=] {
+		selectionChanged();
+	}, _address->lifetime());
+	_address->submits() | rpl::on_next([=](Qt::KeyboardModifiers) {
+		submitSelection();
+	}, _address->lifetime());
+	_continue->setClickedCallback([=] {
+		submitSelection();
+	});
 	_status->setTextColorOverride(st::boxTextFgError->c);
 
 	_content->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_enrollmentLabel),
-		st::introServerEnrollmentLabelMargins,
+		object_ptr<Ui::FlatLabel>::fromRaw(_addressLabel),
+		st::introServerAddressLabelMargins,
 		style::al_justify);
 	_content->add(
-		object_ptr<Ui::InputField>::fromRaw(_enrollment),
-		st::introServerEnrollmentFieldMargins,
+		object_ptr<Ui::InputField>::fromRaw(_address),
+		st::introServerAddressFieldMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_status),
-		st::introServerEnrollmentStatusMargins,
+		st::introServerAddressStatusMargins,
 		style::al_justify);
 	_content->add(
-		object_ptr<Ui::RoundButton>::fromRaw(_review),
-		st::introServerEnrollmentButtonMargins,
+		object_ptr<Ui::RoundButton>::fromRaw(_continue),
+		st::introServerAddressButtonMargins,
 		style::al_justify);
 	_status->hide();
-	QWidget::setTabOrder(_enrollment, _review);
+	QWidget::setTabOrder(_address, _continue);
 
-	if (!getData()->serverEnrollmentArtifact.isEmpty()) {
+	if (!getData()->serverSelection.isEmpty()) {
 		_suppressChanges = true;
-		_enrollment->setText(getData()->serverEnrollmentArtifact);
+		_address->setText(getData()->serverSelection);
 		_suppressChanges = false;
 	}
 }
 
-void ServerWidget::setupReadOnly() {
+void ServerWidget::setupBound() {
+	const auto blocked = account().mtp().dcOptions().blocked();
+	const auto authorized = account().sessionExists();
 	const auto custom = account().mtp().dcOptions().customServer();
-	const auto address = custom.ipv6
-		? (u"["_q + QString::fromStdString(custom.ip) + u"]:"_q)
-		: (QString::fromStdString(custom.ip) + u":"_q);
-	const auto endpoint = address + QString::number(custom.port);
-	const auto identity = custom.key
-		? MTP::ServerKeyIdentity(*custom.key)
-		: QString();
-
+	const auto endpoint = custom.serverSelection.empty()
+		? (custom.empty() ? QString() : CustomServerEndpoint(custom))
+		: QString::fromStdString(custom.serverSelection);
 	_savedAddressLabel = Ui::CreateChild<Ui::FlatLabel>(
 		_content,
 		tr::lng_intro_server_address_label(),
@@ -322,27 +237,14 @@ void ServerWidget::setupReadOnly() {
 		_content,
 		endpoint,
 		st::introDescription);
-	_savedIdentityLabel = Ui::CreateChild<Ui::FlatLabel>(
-		_content,
-		tr::lng_intro_server_identity_label(),
-		st::introDescription);
-	_savedIdentity = Ui::CreateChild<Ui::FlatLabel>(
-		_content,
-		identity.isEmpty()
-			? tr::lng_intro_server_saved_identity_unreadable(tr::now)
-			: IdentityRows(
-				identity,
-				st::introServerPanelWidth
-					- st::introServerPanelIdentityInset),
-		IdentityLabelStyle());
-	_savedIdentityRaw = identity;
-	_savedCopy = Ui::CreateChild<Ui::LinkButton>(
-		_content,
-		tr::lng_intro_server_check_copy(tr::now));
 	_savedStatus = Ui::CreateChild<Ui::FlatLabel>(
 		_content,
 		QString(),
 		st::introError);
+	_savedContinue = Ui::CreateChild<Ui::RoundButton>(
+		_content,
+		tr::lng_intro_server_continue(),
+		st::introNextButton);
 	_addAccount = Ui::CreateChild<Ui::LinkButton>(
 		_content,
 		tr::lng_intro_server_add_account(tr::now));
@@ -355,36 +257,13 @@ void ServerWidget::setupReadOnly() {
 		tr::lng_context_copy_selected(tr::now));
 	_savedAddress->setAccessibleName(
 		tr::lng_intro_server_address_label(tr::now));
-	_savedIdentity->setSelectable(true);
-	_savedIdentity->setLayoutDirection(Qt::LeftToRight);
-	_savedIdentity->setFocusPolicy(Qt::TabFocus);
-	_savedIdentity->setContextCopyText(
-		tr::lng_context_copy_selected(tr::now));
-	_savedIdentity->setAccessibleName(identity.isEmpty()
-		? tr::lng_intro_server_saved_identity_unreadable(tr::now)
-		: tr::lng_intro_server_check_value_a11y(
-			tr::now,
-			lt_groups,
-			IdentityGroupsForAccessibility(identity)));
-	_savedCopy->setClickedCallback([=] {
-		if (!identity.isEmpty()) {
-			QGuiApplication::clipboard()->setText(identity);
-			getData()->controller->showToast(
-				tr::lng_text_copied(tr::now));
-		}
+	_savedStatus->setTextColorOverride(st::boxTextFgError->c);
+	_savedContinue->setClickedCallback([=] {
+		submit();
 	});
-	_savedCopy->setDisabled(identity.isEmpty());
 	_addAccount->setClickedCallback([=] {
 		Core::App().domain().addActivated(account().mtp().environment());
 	});
-	_savedStatus->setTextColorOverride(st::boxTextFgError->c);
-	if (identity.isEmpty()) {
-		_savedStatus->setText(
-			tr::lng_intro_server_saved_identity_unreadable(tr::now));
-		_savedStatus->show();
-	} else {
-		_savedStatus->hide();
-	}
 
 	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedAddressLabel),
@@ -395,33 +274,63 @@ void ServerWidget::setupReadOnly() {
 		st::introServerSavedAddressMargins,
 		style::al_justify);
 	_content->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_savedIdentityLabel),
-		st::introServerSavedIdentityLabelMargins,
-		style::al_justify);
-	_content->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_savedIdentity),
-		st::introServerSavedIdentityMargins,
-		style::al_justify);
-	_content->add(
-		object_ptr<Ui::LinkButton>::fromRaw(_savedCopy),
-		st::introServerSavedCopyMargins,
-		style::al_left);
-	_content->add(
 		object_ptr<Ui::FlatLabel>::fromRaw(_savedStatus),
 		st::introServerSavedStatusMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::RoundButton>::fromRaw(_savedContinue),
+		st::introServerSavedContinueMargins,
 		style::al_justify);
 	_content->add(
 		object_ptr<Ui::LinkButton>::fromRaw(_addAccount),
 		st::introServerAddAccountMargins,
 		style::al_left);
-	if (identity.isEmpty()) {
+	_savedStatus->hide();
+
+	if (blocked) {
+		_savedStatus->setText(
+			tr::lng_intro_server_saved_settings_unreadable(tr::now));
 		_savedStatus->show();
-	} else {
-		_savedStatus->hide();
+		_savedContinue->setDisabled(true);
+		_savedAddressLabel->hide();
+		_savedAddress->hide();
+		_savedContinue->hide();
+	} else if (authorized) {
+		_savedContinue->hide();
 	}
-	QWidget::setTabOrder(_savedAddress, _savedIdentity);
-	QWidget::setTabOrder(_savedIdentity, _savedCopy);
-	QWidget::setTabOrder(_savedCopy, _addAccount);
+	if (!endpoint.isEmpty()) {
+		QWidget::setTabOrder(_savedAddress, (!blocked && !authorized)
+			? static_cast<QWidget*>(_savedContinue)
+			: static_cast<QWidget*>(_addAccount));
+	}
+	if (!blocked && !authorized) {
+		QWidget::setTabOrder(_savedContinue, _addAccount);
+	}
+}
+
+void ServerWidget::switchToBound() {
+	_readOnly = true;
+	setTitleText(tr::lng_intro_server_saved_title());
+	setDescriptionText(tr::lng_intro_server_saved_desc());
+	_addressLabel->hide();
+	_address->hide();
+	_status->hide();
+	_continue->hide();
+	_savedAddressLabel->show();
+	_savedAddress->show();
+	_savedContinue->show();
+	_addAccount->show();
+	const auto custom = account().mtp().dcOptions().customServer();
+	_savedAddress->setText(custom.serverSelection.empty()
+		? CustomServerEndpoint(custom)
+		: QString::fromStdString(custom.serverSelection));
+	if (account().mtp().dcOptions().blocked()) {
+		_savedStatus->setText(
+			tr::lng_intro_server_saved_settings_unreadable(tr::now));
+		_savedStatus->show();
+		_savedContinue->setDisabled(true);
+	}
+	layoutContent();
 }
 
 int ServerWidget::nextButtonTop() const {
@@ -430,433 +339,53 @@ int ServerWidget::nextButtonTop() const {
 
 void ServerWidget::setInnerFocus() {
 	if (_readOnly) {
-		if (_savedAddress) {
-			_savedAddress->setFocus(Qt::OtherFocusReason);
+		if (account().mtp().dcOptions().blocked()
+			|| account().sessionExists()) {
+			_addAccount->setFocus(Qt::OtherFocusReason);
+		} else {
+			_savedContinue->setFocus(Qt::OtherFocusReason);
 		}
-	} else if (_enrollment) {
-		_enrollment->setFocusFast();
+	} else {
+		_address->setFocusFast();
 	}
 }
 
 void ServerWidget::activate() {
 	Step::activate();
 	_scroll->show();
-	if (_readOnly) {
-		setInnerFocus();
-	} else if (_enrollment) {
-		_enrollment->show();
-		if (getData()->selectServerEnrollment) {
-			getData()->selectServerEnrollment = false;
-			_enrollment->selectAll();
-		}
-		_enrollment->setFocusFast();
+	if (!_readOnly && readOnly()) {
+		switchToBound();
 	}
-}
-
-void ServerWidget::submit() {
-	reviewEnrollment();
-}
-
-void ServerWidget::cancelled() {
-	if (_readOnly) {
-		return;
-	}
-	++_reviewSerial;
-	_privateKeyWarning = false;
-	getData()->serverEnrollmentArtifact.clear();
-	getData()->serverEnrollment.reset();
-	getData()->serverEndpoint.clear();
-}
-
-void ServerWidget::resizeEvent(QResizeEvent *e) {
-	Step::resizeEvent(e);
-	layoutContent();
-}
-
-void ServerWidget::layoutContent() {
-	const auto scrollWidth = std::min(st::introStepWidth, width());
-	const auto scrollLeft = (width() - scrollWidth) / 2;
-	const auto scrollTop = std::max(
-		st::introServerScrollTop,
-		descriptionBottom()
-			- contentTop()
-			+ st::introServerScrollGap);
-	const auto scrollHeight = std::max(
-		0,
-		height()
-			- contentTop()
-			- scrollTop
-			- st::introServerScrollBottom);
-	_scroll->setGeometry(
-		scrollLeft,
-		contentTop() + scrollTop,
-		scrollWidth,
-		scrollHeight);
-	_content->resizeToWidth(scrollWidth);
-	if (_savedIdentity && !_savedIdentityRaw.isEmpty()) {
-		const auto rows = IdentityRows(
-			_savedIdentityRaw,
-			std::max(_savedIdentity->width(), 1));
-		if (rows != _savedIdentityRows) {
-			_savedIdentityRows = rows;
-			_savedIdentity->setText(rows);
-		}
-	}
-}
-
-QWidget *ServerWidget::firstTabWidget() const {
-	return _readOnly
-		? static_cast<QWidget*>(_savedAddress)
-		: static_cast<QWidget*>(_enrollment);
-}
-
-QWidget *ServerWidget::lastTabWidget() const {
-	return _readOnly
-		? static_cast<QWidget*>(_addAccount)
-		: static_cast<QWidget*>(_review);
-}
-
-QWidget *ServerWidget::nextButtonFocusWidget() const {
-	return _readOnly
-		? static_cast<QWidget*>(_addAccount)
-		: static_cast<QWidget*>(_review);
-}
-
-rpl::producer<QString> ServerWidget::nextButtonText() const {
-	return rpl::single(QString());
-}
-
-void ServerWidget::enrollmentChanged() {
-	if (_suppressChanges || !_enrollment) {
-		return;
-	}
-	++_reviewSerial;
-	_privateKeyWarning = false;
-	getData()->serverEnrollmentArtifact.clear();
-	getData()->serverEnrollment.reset();
-	getData()->serverEndpoint.clear();
-	_enrollment->hideError();
-	clearEnrollmentStatus();
-}
-
-void ServerWidget::reviewEnrollment() {
-	if (!_enrollment || _review->isDisabled()) {
-		return;
-	}
-	const auto artifact = _enrollment->getLastText();
-	if (artifact.isEmpty()) {
-		if (!_privateKeyWarning) {
-			const auto text = tr::lng_intro_server_enrollment_empty(tr::now);
-			_enrollment->showError();
-			_enrollment->setAccessibleDescription(text);
-			showEnrollmentStatus(text, true);
-		}
-		_enrollment->setFocusFast();
-		return;
-	}
-	if (artifact.trimmed().isEmpty()) {
-		const auto text = tr::lng_intro_server_enrollment_empty(tr::now);
-		_enrollment->showError();
-		_enrollment->setAccessibleDescription(text);
-		showEnrollmentStatus(text, true);
-		_enrollment->setFocusFast();
-		return;
-	}
-
-	const auto serial = ++_reviewSerial;
-	_review->setDisabled(true);
-	_enrollment->setDisabled(true);
-	_enrollment->setAccessibleDescription(
-		tr::lng_intro_server_enrollment_checking(tr::now));
-	showEnrollmentStatus(
-		tr::lng_intro_server_enrollment_checking(tr::now),
-		false);
-
-	// CheckServerEnrollment is bounded to the pasted artifact and has no
-	// transport-facing dependencies. Keep the serial check even though the
-	// current parser is synchronous: it makes a future worker result unable
-	// to restore a cancelled or edited draft.
-	auto check = MTP::CheckServerEnrollment(artifact);
-	if (serial != _reviewSerial
-		|| !_enrollment
-		|| artifact != _enrollment->getLastText()) {
-		return;
-	}
-	_review->setDisabled(false);
-	_enrollment->setDisabled(false);
-	_enrollment->setAccessibleDescription(
-		tr::lng_intro_server_enrollment_ph(tr::now));
-	if (!check) {
-		getData()->serverEnrollmentArtifact.clear();
-		getData()->serverEnrollment.reset();
-		getData()->serverEndpoint.clear();
-		if (check.status == MTP::ServerEnrollmentStatus::PrivateKey) {
-			_privateKeyWarning = true;
-			_suppressChanges = true;
-			_enrollment->clear();
-			_enrollment->rawTextEdit()->document()->clearUndoRedoStacks();
-			_suppressChanges = false;
-			getData()->serverEnrollmentArtifact.clear();
-		}
-		const auto text = EnrollmentErrorText(check);
-		_enrollment->showError();
-		_enrollment->setAccessibleDescription(text);
-		showEnrollmentStatus(text, true);
-		_enrollment->setFocusFast();
-		return;
-	}
-
-	_privateKeyWarning = false;
-	getData()->serverEnrollmentArtifact = artifact;
-	getData()->serverEndpoint = QString::fromStdString(check.endpoint);
-	getData()->serverEnrollment = std::move(check);
-	clearEnrollmentStatus();
-	goNext<ServerKeyWidget>();
-}
-
-void ServerWidget::showEnrollmentStatus(
-		const QString &text,
-		bool error) {
-	if (!_status) {
-		return;
-	}
-	_status->setTextColorOverride(error
-		? std::optional<QColor>(st::boxTextFgError->c)
-		: std::optional<QColor>(st::windowSubTextFg->c));
-	_status->setText(text);
-	_status->show();
-	setAccessibleDescription(text);
-	announceStatus();
-}
-
-void ServerWidget::clearEnrollmentStatus() {
-	if (_status) {
-		_status->setText(QString());
-		_status->hide();
-	}
-	setAccessibleDescription(QString());
-	if (_enrollment) {
-		_enrollment->setAccessibleDescription(
-			tr::lng_intro_server_enrollment_ph(tr::now));
-	}
-}
-
-void ServerWidget::announceStatus() {
-	auto event = QAccessibleEvent(this, QAccessible::Alert);
-	QAccessible::updateAccessibility(&event);
-}
-
-ServerKeyWidget::ServerKeyWidget(
-		QWidget *parent,
-		not_null<Main::Account*> account,
-		not_null<Data*> data)
-: Step(parent, account, data)
-, _scroll(this) {
-	if (getData()->serverEnrollment) {
-		_check = *getData()->serverEnrollment;
-	}
-
-	setTitleText(tr::lng_intro_server_check_title());
-	setDescriptionText(tr::lng_intro_server_check_desc());
-
-	_content = _scroll->setOwnedWidget(
-		object_ptr<Ui::VerticalLayout>(_scroll));
-	_endpointLabel = Ui::CreateChild<Ui::FlatLabel>(
-		_content,
-		tr::lng_intro_server_address_label(),
-		st::introDescription);
-	_endpoint = Ui::CreateChild<Ui::FlatLabel>(
-		_content,
-		QString::fromStdString(_check.endpoint),
-		st::introDescription);
-	_panel = Ui::CreateChild<Ui::VerticalLayout>(_content);
-	_identityLabel = Ui::CreateChild<Ui::FlatLabel>(
-		_panel,
-		tr::lng_intro_server_identity_label(),
-		st::introDescription);
-	_identity = Ui::CreateChild<Ui::FlatLabel>(
-		_panel,
-		IdentityRows(
-			_check.identity,
-			st::introServerPanelWidth
-				- st::introServerPanelIdentityInset),
-		IdentityLabelStyle());
-	_copy = Ui::CreateChild<Ui::LinkButton>(
-		_panel,
-		tr::lng_intro_server_check_copy(tr::now));
-	_compareLabel = Ui::CreateChild<Ui::FlatLabel>(
-		_panel,
-		tr::lng_intro_server_key_id_label(),
-		st::introDescription);
-	_compare = Ui::CreateChild<Ui::InputField>(
-		_panel,
-		st::introServerCompareField,
-		Ui::InputField::Mode::SingleLine,
-		tr::lng_intro_server_check_ph());
-	_verdict = Ui::CreateChild<Ui::FlatLabel>(
-		_panel,
-		QString(),
-		st::introDescription);
-	_verdictMeasure = Ui::CreateChild<Ui::FlatLabel>(
-		_panel,
-		QString(),
-		st::introDescription);
-	_verdictMeasure->hide();
-	_secondary = Ui::CreateChild<Ui::FlatLabel>(
-		_content,
-		tr::lng_intro_server_check_secondary(),
-		st::introDescription);
-	_replace = Ui::CreateChild<Ui::LinkButton>(
-		_content,
-		tr::lng_intro_server_replace(tr::now));
-	_confirm = Ui::CreateChild<Ui::RoundButton>(
-		_content,
-		tr::lng_intro_server_confirm(),
-		st::introNextButton);
-
-	_endpoint->setSelectable(true);
-	_endpoint->setLayoutDirection(Qt::LeftToRight);
-	_endpoint->setBreakEverywhere(true);
-	_endpoint->setFocusPolicy(Qt::TabFocus);
-	_endpoint->setContextCopyText(tr::lng_context_copy_selected(tr::now));
-	_endpoint->setAccessibleName(
-		tr::lng_intro_server_address_label(tr::now));
-	_identity->setSelectable(true);
-	_identity->setLayoutDirection(Qt::LeftToRight);
-	_identity->setFocusPolicy(Qt::TabFocus);
-	_panelA11yBase = tr::lng_intro_server_check_value_a11y(
-		tr::now,
-		lt_groups,
-		IdentityGroupsForAccessibility(_check.identity));
-	_identity->setAccessibleName(_panelA11yBase);
-	_identity->setContextCopyText(tr::lng_context_copy_selected(tr::now));
-
-	ConfigureEnrollmentField(_compare);
-	_compare->setMinHeight(st::introServerCompareField.heightMin);
-	_compare->setMaxHeight(st::introServerCompareField.heightMin);
-	_compare->setAccessibleName(
-		tr::lng_intro_server_key_id_label(tr::now));
-	_compare->setLayoutDirection(Qt::LeftToRight);
-	_compare->rawTextEdit()->installEventFilter(this);
-	_compare->changes() | rpl::on_next([=] {
-		updateVerdict();
-	}, _compare->lifetime());
-
-	_copy->setClickedCallback([=] { copyIdentity(); });
-	_replace->setClickedCallback([=] { replaceEnrollment(); });
-	_confirm->setClickedCallback([=] { submit(); });
-
-	_panel->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_identityLabel),
-		st::introServerPanelIdentityLabelMargins,
-		style::al_justify);
-	_panel->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_identity),
-		st::introServerPanelIdentityMargins,
-		style::al_justify);
-	_panel->add(
-		object_ptr<Ui::LinkButton>::fromRaw(_copy),
-		st::introServerPanelCopyMargins,
-		style::al_left);
-	_panel->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_compareLabel),
-		st::introServerPanelCompareLabelMargins,
-		style::al_justify);
-	_panel->add(
-		object_ptr<Ui::InputField>::fromRaw(_compare),
-		st::introServerPanelCompareMargins,
-		style::al_justify);
-	_panel->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_verdict),
-		st::introServerPanelVerdictMargins,
-		style::al_justify);
-
-	_content->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_endpointLabel),
-		st::introServerEndpointLabelMargins,
-		style::al_justify);
-	_content->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_endpoint),
-		st::introServerEndpointMargins,
-		style::al_justify);
-	_content->add(
-		object_ptr<Ui::VerticalLayout>::fromRaw(_panel),
-		st::introServerPanelMargins,
-		style::al_justify);
-	_content->add(
-		object_ptr<Ui::FlatLabel>::fromRaw(_secondary),
-		st::introServerSecondaryMargins,
-		style::al_justify);
-	_content->add(
-		object_ptr<Ui::LinkButton>::fromRaw(_replace),
-		st::introServerReplaceMargins,
-		style::al_left);
-	_content->add(
-		object_ptr<Ui::RoundButton>::fromRaw(_confirm),
-		st::introServerConfirmMargins,
-		style::al_justify);
-	QWidget::setTabOrder(_endpoint, _identity);
-	QWidget::setTabOrder(_identity, _copy);
-	QWidget::setTabOrder(_copy, _compare);
-	QWidget::setTabOrder(_compare, _replace);
-	QWidget::setTabOrder(_replace, _confirm);
-
-	_panel->setNaturalWidth(st::introServerPanelWidth);
-	setVerdict(MTP::KeyIdCompare::None);
-
-	_panel->paintRequest() | rpl::on_next([=](QRect) {
-		auto painter = QPainter(_panel);
-		PaintPanel(_panel, _compareLabel, painter);
-	}, _panel->lifetime());
-	_panel->setLayoutDirection(Qt::LeftToRight);
-	descriptionGeometryValue() | rpl::on_next([=](QRect) {
-		if (_content) {
-			layoutContent();
-		}
-	}, lifetime());
-	layoutContent();
-}
-
-int ServerKeyWidget::nextButtonTop() const {
-	return contentTop() + st::introServerNextTop;
-}
-
-void ServerKeyWidget::setInnerFocus() {
-	if (_endpoint) {
-		_endpoint->setFocus(Qt::OtherFocusReason);
-	}
-}
-
-void ServerKeyWidget::activate() {
-	Step::activate();
-	if (_confirming
-		&& !account().sessionExists()
-		&& !account().mtp().dcOptions().isAuthorized(2)) {
-		// Returning from a credential step after the pin was committed leaves
-		// this step in the history. It is eligible for correction until auth
-		// creates server-scoped account data, so make the deliberate replace
-		// path usable again instead of trapping the user in "Saving server…".
-		_confirming = false;
-		_confirm->setText(tr::lng_intro_server_confirm());
-		_confirm->setDisabled(
-			!MTP::KeyIdCompareAllowsAdvance(_compareStatus));
-		_compare->setDisabled(false);
-		_replace->setDisabled(false);
-	}
-	_scroll->show();
 	setInnerFocus();
 }
 
-void ServerKeyWidget::cancelled() {
-	if (account().sessionExists()
-		|| account().mtp().dcOptions().isAuthorized(2)) {
+void ServerWidget::submit() {
+	if (!_readOnly) {
+		submitSelection();
 		return;
 	}
-	getData()->selectServerEnrollment = true;
+	if (account().mtp().dcOptions().blocked()) {
+		return;
+	}
+	if (account().sessionExists()) {
+		return;
+	}
+	// A freshly restarted account is intentionally paused until its stored
+	// binding is selected again. The binding was durably committed before
+	// this point, so resuming here cannot send an unbound request.
+	account().mtp().resume();
+	getData()->serverEndpoint = CustomServerEndpoint(
+		account().mtp().dcOptions().customServer());
+	goNext<UsernameWidget>();
+}
 
-	// Credential widgets cancel their own in-flight requests when Back pops
-	// them. Stop this account's transport as well, then discard every value
-	// that could otherwise be reused after the enrollment is corrected.
+void ServerWidget::cancelled() {
+	if (_connecting) {
+		cancelDiscovery();
+	}
+	if (_readOnly) {
+		return;
+	}
 	account().mtp().stopForServerEnrollment();
 	getData()->phone.clear();
 	getData()->phoneHash.clear();
@@ -872,229 +401,558 @@ void ServerKeyWidget::cancelled() {
 	getData()->termsLock = Window::TermsLock();
 }
 
-void ServerKeyWidget::resizeEvent(QResizeEvent *e) {
+void ServerWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
 	layoutContent();
 }
 
-void ServerKeyWidget::keyPressEvent(QKeyEvent *e) {
-	if (MTP::ConsumeServerEnrollmentActivationKey(*e)) {
-		return;
-	}
-	QWidget::keyPressEvent(e);
-}
-
-void ServerKeyWidget::layoutContent() {
+void ServerWidget::layoutContent() {
 	const auto scrollWidth = std::min(st::introStepWidth, width());
 	const auto scrollLeft = (width() - scrollWidth) / 2;
 	const auto scrollTop = std::max(
 		st::introServerScrollTop,
-		descriptionBottom()
-			- contentTop()
-			+ st::introServerScrollGap);
+		descriptionBottom() - contentTop() + st::introServerScrollGap);
 	const auto scrollHeight = std::max(
 		0,
-		height()
-			- contentTop()
-			- scrollTop
-			- st::introServerScrollBottom);
+		height() - contentTop() - scrollTop - st::introServerScrollBottom);
 	_scroll->setGeometry(
 		scrollLeft,
 		contentTop() + scrollTop,
 		scrollWidth,
 		scrollHeight);
 	_content->resizeToWidth(scrollWidth);
-	reserveVerdictHeight();
-	if (_identity && !_check.identity.isEmpty()) {
-		const auto rows = IdentityRows(
-			_check.identity,
-			std::max(_identity->width(), 1));
-		if (rows != _identityRows) {
-			_identityRows = rows;
-			_identity->setText(rows);
-		}
+}
+
+QWidget *ServerWidget::firstTabWidget() const {
+	if (_readOnly && account().mtp().dcOptions().blocked()) {
+		return _addAccount;
 	}
-	_panel->update();
+	return _readOnly
+		? static_cast<QWidget*>(_savedAddress)
+		: static_cast<QWidget*>(_address);
 }
 
-void ServerKeyWidget::reserveVerdictHeight() {
-	if (!_verdict || !_verdictMeasure) {
-		return;
+QWidget *ServerWidget::lastTabWidget() const {
+	return _readOnly
+		? static_cast<QWidget*>(_addAccount)
+		: static_cast<QWidget*>(_continue);
+}
+
+QWidget *ServerWidget::nextButtonFocusWidget() const {
+	if (!_readOnly) {
+		return _continue;
+	} else if (account().mtp().dcOptions().blocked()
+		|| account().sessionExists()) {
+		return _addAccount;
+	} else {
+		return _savedContinue;
 	}
-	const auto width = std::max(_verdict->width(), 1);
-	const auto verdicts = {
-		tr::lng_intro_server_check_none(tr::now),
-		tr::lng_intro_server_check_unreadable(tr::now),
-		tr::lng_intro_server_check_match(tr::now),
-		tr::lng_intro_server_check_mismatch(tr::now),
-		tr::lng_intro_server_save_failed(tr::now),
-	};
-	auto height = 0;
-	for (const auto &text : verdicts) {
-		_verdictMeasure->setText(text);
-		_verdictMeasure->resizeToWidth(width);
-		height = std::max(height, _verdictMeasure->height());
-	}
-	_verdict->setMinimumHeight(height);
 }
 
-QWidget *ServerKeyWidget::firstTabWidget() const {
-	return _endpoint;
-}
-
-QWidget *ServerKeyWidget::lastTabWidget() const {
-	return _confirm;
-}
-
-QWidget *ServerKeyWidget::nextButtonFocusWidget() const {
-	return _confirm;
-}
-
-rpl::producer<QString> ServerKeyWidget::nextButtonText() const {
+rpl::producer<QString> ServerWidget::nextButtonText() const {
 	return rpl::single(QString());
 }
 
-bool ServerKeyWidget::eventFilter(QObject *receiver, QEvent *event) {
-	if (receiver == _compare->rawTextEdit()
-		&& event->type() == QEvent::KeyPress) {
-		const auto key = static_cast<QKeyEvent*>(event)->key();
-		if (key == Qt::Key_Enter || key == Qt::Key_Return) {
-			event->accept();
-			return true;
-		}
-	}
-	return QWidget::eventFilter(receiver, event);
-}
-
-void ServerKeyWidget::updateVerdict() {
-	if (_confirming || _saveFailed) {
+void ServerWidget::selectionChanged() {
+	if (_suppressChanges || !_address || _connecting) {
 		return;
 	}
-	const auto typed = MTP::ExtractKeyId(_compare->getLastText());
-	setVerdict(MTP::CompareKeyId(typed, _check.identity));
+	getData()->serverSelection = _address->getLastText();
+	_address->hideError();
+	clearStatus();
+	_continue->setText(tr::lng_intro_server_continue(tr::now));
 }
 
-void ServerKeyWidget::setVerdict(MTP::KeyIdCompare status) {
-	const auto changed = (_compareStatus != status);
-	_compareStatus = status;
-	QString text;
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic error "-Wswitch-enum"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic error "-Wswitch-enum"
-#elif defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(4:4062)
-#pragma warning(error:4062)
-#endif
-	switch (_compareStatus) {
-	case MTP::KeyIdCompare::None:
-		text = tr::lng_intro_server_check_none(tr::now);
-		_verdict->setTextColorOverride(st::windowSubTextFg->c);
-		break;
-	case MTP::KeyIdCompare::Unreadable:
-		text = tr::lng_intro_server_check_unreadable(tr::now);
-		_verdict->setTextColorOverride(st::boxTextFgError->c);
-		break;
-	case MTP::KeyIdCompare::Mismatch:
-		text = tr::lng_intro_server_check_mismatch(tr::now);
-		_verdict->setTextColorOverride(st::boxTextFgError->c);
-		break;
-	case MTP::KeyIdCompare::Match:
-		text = tr::lng_intro_server_check_match(tr::now);
-		_verdict->setTextColorOverride(st::activeLineFg->c);
-		break;
+QString ServerWidget::selectionError(MTP::ServerSelectionStatus status) const {
+	switch (status) {
+	case MTP::ServerSelectionStatus::Valid:
+		return {};
+	case MTP::ServerSelectionStatus::Empty:
+		return tr::lng_intro_server_address_empty(tr::now);
+	case MTP::ServerSelectionStatus::NoPort:
+		return tr::lng_intro_server_address_no_port(tr::now);
+	case MTP::ServerSelectionStatus::BadPort:
+		return tr::lng_intro_server_address_bad_port(tr::now);
+	case MTP::ServerSelectionStatus::EmptyHost:
+		return tr::lng_intro_server_address_empty_host(tr::now);
+	case MTP::ServerSelectionStatus::BadHost:
+		return tr::lng_intro_server_address_invalid(tr::now);
+	case MTP::ServerSelectionStatus::HostTooLong:
+		return tr::lng_intro_server_address_too_long(tr::now);
+	case MTP::ServerSelectionStatus::UnbracketedIPv6:
+		return tr::lng_intro_server_address_ipv6(tr::now);
+	case MTP::ServerSelectionStatus::InvalidSpecialAddress:
+		return tr::lng_intro_server_address_invalid(tr::now);
 	}
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#elif defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-	_verdict->setText(text);
-	_verdict->setAccessibleName(text);
-	_compare->setAccessibleDescription(text);
-	setAccessibleDescription(text);
-	_confirm->setDisabled(!MTP::KeyIdCompareAllowsAdvance(_compareStatus));
-	_panel->update();
-	if (changed) {
-		announceVerdict();
+	Unexpected("Unhandled server selection status.");
+}
+
+void ServerWidget::submitSelection() {
+	if (_readOnly || _connecting || !_address) {
+		return;
+	}
+	const auto checked = MTP::CheckServerSelection(_address->getLastText());
+	if (!checked) {
+		_address->showError();
+		showStatus(selectionError(checked.status), true);
+		_address->setFocusFast();
+		return;
+	}
+	_selection = checked;
+	getData()->serverSelection = _selection.normalizedSelection;
+	_connecting = true;
+	++_attempt;
+	_address->rawTextEdit()->setReadOnly(true);
+	_continue->setDisabled(true);
+	_continue->setText(tr::lng_intro_server_connecting(tr::now));
+	_address->setAccessibleDescription(
+		tr::lng_intro_server_connecting(tr::now));
+	showStatus(tr::lng_intro_server_connecting(tr::now), false);
+	_deadline->start(kDiscoveryTimeout);
+	if (_selection.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
+		beginPublicDiscovery();
+	} else {
+		beginLocalDiscovery();
 	}
 }
 
-void ServerKeyWidget::showSaveFailure() {
-	const auto text = tr::lng_intro_server_save_failed(tr::now);
-	_saveFailed = true;
-	_confirm->setDisabled(true);
-	_compare->setDisabled(true);
-	_verdict->setTextColorOverride(st::boxTextFgError->c);
-	_verdict->setText(text);
-	_verdict->setAccessibleName(text);
-	_compare->setAccessibleDescription(text);
-	setAccessibleDescription(text);
-	_panel->update();
-	announceVerdict();
+void ServerWidget::beginPublicDiscovery() {
+	if (!_network) {
+		_network = new QNetworkAccessManager(this);
+		_network->setProxy(QNetworkProxy::NoProxy);
+	}
+	_publicResponse.clear();
+	const auto url = QUrl(MTP::PublicDiscoveryUrl(_selection));
+	QNetworkRequest request(url);
+	request.setAttribute(
+		QNetworkRequest::RedirectPolicyAttribute,
+		QNetworkRequest::ManualRedirectPolicy);
+	request.setAttribute(
+		QNetworkRequest::CacheLoadControlAttribute,
+		QNetworkRequest::AlwaysNetwork);
+	request.setAttribute(
+		QNetworkRequest::CacheSaveControlAttribute,
+		false);
+	_reply = _network->get(request);
+	const auto reply = _reply;
+	reply->setReadBufferSize(kMaxDiscoveryBody);
+	connect(reply, &QNetworkReply::readyRead, this, [=] {
+		if (!_connecting || _reply != reply) {
+			return;
+		}
+		if (!DiscoveryHeadersWithinBound(reply)) {
+			discoveryFailed(false);
+			return;
+		}
+		const auto contentLength = reply->header(
+			QNetworkRequest::ContentLengthHeader).toLongLong();
+		if (contentLength > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+			return;
+		}
+		_publicResponse += reply->readAll();
+		if (_publicResponse.size() > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+		}
+	});
+	connect(reply, &QNetworkReply::sslErrors, this, [=](const auto &) {
+		if (_connecting && _reply == reply) {
+			discoveryFailed(false);
+		}
+	});
+	connect(reply, &QNetworkReply::redirected, this, [=](const QUrl &) {
+		if (_connecting && _reply == reply) {
+			discoveryFailed(false);
+		}
+	});
+	connect(reply, &QNetworkReply::finished, this, [=] {
+		if (!_connecting || _reply != reply) {
+			return;
+		}
+		if (reply->error() != QNetworkReply::NoError) {
+			discoveryFailed(true);
+			return;
+		}
+		if (!DiscoveryHeadersWithinBound(reply)) {
+			discoveryFailed(false);
+			return;
+		}
+		const auto status = reply->attribute(
+			QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		const auto contentType = reply->header(
+			QNetworkRequest::ContentTypeHeader).toString()
+			.section(QChar::fromLatin1(';'), 0, 0)
+			.trimmed();
+		_publicResponse += reply->readAll();
+		if (status != 200
+			|| contentType.compare(
+				u"application/json"_q,
+				Qt::CaseInsensitive) != 0
+			|| !reply->rawHeader("Content-Encoding").isEmpty()
+			|| _publicResponse.size() > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+			return;
+		}
+		discoveryFinished(MTP::ParsePublicDiscoveryResponse(
+			_selection,
+			_publicResponse));
+	});
 }
 
-void ServerKeyWidget::announceVerdict() {
-	auto event = QAccessibleEvent(_verdict, QAccessible::Alert);
+void ServerWidget::beginLocalDiscovery() {
+	_localNonce.resize(32);
+	base::RandomFill(_localNonce.data(), _localNonce.size());
+	_localRequest = MTP::BuildLocalDiscoveryRequest(_localNonce);
+	_localResponse.clear();
+	_localWriteOffset = 0;
+	_localWriteClosed = false;
+	_socket = new QTcpSocket(this);
+	_socket->setProxy(QNetworkProxy::NoProxy);
+	const auto socket = _socket;
+	connect(socket, &QTcpSocket::connected, this, [=] {
+		if (_connecting && _socket == socket) {
+			sendLocalRequest();
+		}
+	});
+	connect(socket, &QTcpSocket::bytesWritten, this, [=](qint64) {
+		if (_connecting && _socket == socket) {
+			sendLocalRequest();
+		}
+	});
+	connect(socket, &QTcpSocket::readyRead, this, [=] {
+		if (_connecting && _socket == socket) {
+			localReadyRead();
+		}
+	});
+	connect(socket, &QTcpSocket::errorOccurred, this,
+		[=](QAbstractSocket::SocketError error) {
+		if (_connecting
+			&& _socket == socket
+			&& error != QAbstractSocket::RemoteHostClosedError) {
+			discoveryFailed(true);
+		}
+	});
+	connect(socket, &QTcpSocket::disconnected, this, [=] {
+		if (!_connecting || _socket != socket) {
+			return;
+		}
+		_localResponse += socket->readAll();
+		if (_localResponse.size() > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+			return;
+		}
+		if (!IsCompleteLocalResponse(_localResponse)) {
+			discoveryFailed(false);
+			return;
+		}
+		discoveryFinished(MTP::ParseLocalDiscoveryResponse(
+			_selection,
+			_localNonce,
+			_localResponse));
+	});
+	socket->connectToHost(_selection.host, _selection.operationalPort);
+}
+
+void ServerWidget::sendLocalRequest() {
+	if (!_socket || !_connecting || _localWriteClosed) {
+		return;
+	}
+	while (_localWriteOffset < _localRequest.size()) {
+		const auto written = _socket->write(
+			_localRequest.constData() + _localWriteOffset,
+			_localRequest.size() - _localWriteOffset);
+		if (written < 0) {
+			discoveryFailed(true);
+			return;
+		}
+		if (written == 0) {
+			return;
+		}
+		_localWriteOffset += int(written);
+	}
+	_localWriteClosed = true;
+	// QTcpSocket drains queued bytes before closing its write side. The
+	// server therefore observes EOF while its response remains readable.
+	_socket->disconnectFromHost();
+}
+
+void ServerWidget::localReadyRead() {
+	if (!_socket) {
+		return;
+	}
+	_localResponse += _socket->readAll();
+	if (_localResponse.size() > kMaxDiscoveryBody) {
+		discoveryFailed(false);
+		return;
+	}
+}
+
+void ServerWidget::discoveryTimeout() {
+	if (_connecting) {
+		discoveryFailed(true);
+	}
+}
+
+void ServerWidget::discoveryFinished(MTP::ServerDiscoveryResult result) {
+	if (!_connecting) {
+		return;
+	}
+	if (!result) {
+		discoveryFailed(false);
+		return;
+	}
+	if (_reply) {
+		const auto reply = _reply;
+		_reply = nullptr;
+		reply->deleteLater();
+	}
+	if (_socket) {
+		if (result.policy == MTP::ServerDiscoveryPolicy::LocalDirect) {
+			const auto peer = _socket->peerAddress();
+			if (!peer.isNull()) {
+				result.resolvedAddress = peer.toString();
+			}
+		}
+		const auto socket = _socket;
+		_socket = nullptr;
+		socket->abort();
+		socket->deleteLater();
+	}
+	if (result.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
+		resolvePublicEndpoint(std::move(result));
+	} else {
+		_deadline->stop();
+		commitBinding(std::move(result));
+	}
+}
+
+void ServerWidget::resolvePublicEndpoint(
+		MTP::ServerDiscoveryResult result) {
+	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
+	if (!MTP::IsPublicDiscoveryEndpoint(endpoint)) {
+		discoveryFailed(false);
+		return;
+	}
+	auto address = QHostAddress();
+	if (address.setAddress(endpoint.host)) {
+		if (address.protocol() != QAbstractSocket::IPv4Protocol
+			&& address.protocol() != QAbstractSocket::IPv6Protocol) {
+			discoveryFailed(false);
+			return;
+		}
+		if (!MTP::IsPublicAddress(address)) {
+			discoveryFailed(false);
+			return;
+		}
+		result.resolvedAddress = address.toString();
+		commitBinding(std::move(result));
+		return;
+	}
+
+	const auto attempt = _attempt;
+	_hostLookupId = QHostInfo::lookupHost(
+		endpoint.host,
+		this,
+		[=](const QHostInfo &info) {
+			if (!_connecting || _attempt != attempt) {
+				return;
+			}
+			_hostLookupId = -1;
+			publicEndpointResolved(result, info);
+		});
+	if (_hostLookupId < 0) {
+		discoveryFailed(true);
+	}
+}
+
+void ServerWidget::publicEndpointResolved(
+		MTP::ServerDiscoveryResult result,
+		const QHostInfo &info) {
+	if (!_connecting) {
+		return;
+	}
+	if (info.error() != QHostInfo::NoError) {
+		discoveryFailed(true);
+		return;
+	}
+	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
+	if (!MTP::IsPublicDiscoveryEndpoint(endpoint)
+		|| result.policy != MTP::ServerDiscoveryPolicy::PublicHttps) {
+		discoveryFailed(false);
+		return;
+	}
+	for (const auto &address : info.addresses()) {
+		if (address.protocol() != QAbstractSocket::IPv4Protocol
+			&& address.protocol() != QAbstractSocket::IPv6Protocol) {
+			continue;
+		}
+		if (MTP::IsPublicAddress(address)) {
+			result.resolvedAddress = address.toString();
+			commitBinding(std::move(result));
+			return;
+		}
+	}
+	discoveryFailed(false);
+}
+
+void ServerWidget::discoveryFailed(bool connectionFailure) {
+	if (!_connecting) {
+		return;
+	}
+	_connecting = false;
+	++_attempt;
+	_deadline->stop();
+	if (_hostLookupId >= 0) {
+		QHostInfo::abortHostLookup(_hostLookupId);
+		_hostLookupId = -1;
+	}
+	if (_reply) {
+		const auto reply = _reply;
+		_reply = nullptr;
+		disconnect(reply, nullptr, this, nullptr);
+		reply->abort();
+		reply->deleteLater();
+	}
+	if (_socket) {
+		const auto socket = _socket;
+		_socket = nullptr;
+		disconnect(socket, nullptr, this, nullptr);
+		socket->abort();
+		socket->deleteLater();
+	}
+	_address->rawTextEdit()->setReadOnly(false);
+	_continue->setDisabled(false);
+	_continue->setText(tr::lng_intro_server_try_again(tr::now));
+	_address->setAccessibleDescription(connectionFailure
+		? tr::lng_intro_server_connect_failed(tr::now)
+		: tr::lng_intro_server_unsupported(tr::now));
+	showStatus(
+		connectionFailure
+			? tr::lng_intro_server_connect_failed(tr::now)
+			: tr::lng_intro_server_unsupported(tr::now),
+		true);
+	_address->setFocusFast();
+}
+
+void ServerWidget::cancelDiscovery() {
+	if (!_connecting) {
+		return;
+	}
+	_connecting = false;
+	++_attempt;
+	_deadline->stop();
+	if (_hostLookupId >= 0) {
+		QHostInfo::abortHostLookup(_hostLookupId);
+		_hostLookupId = -1;
+	}
+	if (_reply) {
+		const auto reply = _reply;
+		_reply = nullptr;
+		disconnect(reply, nullptr, this, nullptr);
+		reply->abort();
+		reply->deleteLater();
+	}
+	if (_socket) {
+		const auto socket = _socket;
+		_socket = nullptr;
+		disconnect(socket, nullptr, this, nullptr);
+		socket->abort();
+		socket->deleteLater();
+	}
+	_address->rawTextEdit()->setReadOnly(false);
+	_continue->setDisabled(false);
+	_continue->setText(tr::lng_intro_server_continue(tr::now));
+	_address->hideError();
+	clearStatus();
+}
+
+void ServerWidget::showStatus(const QString &text, bool error) {
+	_status->setTextColorOverride(error
+		? std::optional<QColor>(st::boxTextFgError->c)
+		: std::optional<QColor>(st::windowSubTextFg->c));
+	_status->setText(text);
+	_status->show();
+	setAccessibleDescription(text);
+	announceStatus();
+}
+
+void ServerWidget::clearStatus() {
+	_status->setText(QString());
+	_status->hide();
+	setAccessibleDescription(QString());
+	_address->setAccessibleDescription(
+		tr::lng_intro_server_address_ph(tr::now));
+}
+
+void ServerWidget::announceStatus() {
+	auto event = QAccessibleEvent(this, QAccessible::Alert);
 	QAccessible::updateAccessibility(&event);
 }
 
-void ServerKeyWidget::copyIdentity() {
-	if (_check.identity.isEmpty()) {
+void ServerWidget::commitBinding(
+		const MTP::ServerDiscoveryResult &result) {
+	if (result.policy != MTP::ServerDiscoveryPolicy::PublicHttps
+		&& result.policy != MTP::ServerDiscoveryPolicy::LocalDirect) {
+		discoveryFailed(false);
 		return;
 	}
-	QGuiApplication::clipboard()->setText(_check.identity);
-	getData()->controller->showToast(tr::lng_text_copied(tr::now));
-}
-
-void ServerKeyWidget::replaceEnrollment() {
+	const auto expectedOrigin = (result.policy
+		== MTP::ServerDiscoveryPolicy::PublicHttps)
+		? MTP::PublicDiscoveryUrl(_selection)
+		: (u"local:"_q + _selection.normalizedSelection);
+	if (result.origin != expectedOrigin || result.dcId <= 0) {
+		discoveryFailed(false);
+		return;
+	}
+	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
+	const auto endpointAllowed = (result.policy
+		== MTP::ServerDiscoveryPolicy::PublicHttps)
+		? MTP::IsPublicDiscoveryEndpoint(endpoint)
+		: (endpoint && endpoint.policy == result.policy);
+	if (!endpointAllowed
+		|| !result.key.valid()) {
+		discoveryFailed(false);
+		return;
+	}
+	const auto connectionHost = result.resolvedAddress.isEmpty()
+		? endpoint.host
+		: result.resolvedAddress;
+	auto connectionAddress = QHostAddress();
+	const auto connectionIsLiteral = connectionAddress.setAddress(
+		connectionHost);
+	const auto connectionEndpoint = MTP::CheckServerSelection(
+		connectionIsLiteral
+			? AddressWithPort(connectionAddress, endpoint.operationalPort)
+			: connectionHost + u":"_q
+				+ QString::number(endpoint.operationalPort));
+	const auto connectionSafe = (result.policy
+		== MTP::ServerDiscoveryPolicy::PublicHttps)
+		? (connectionIsLiteral && MTP::IsPublicAddress(connectionAddress))
+		: (connectionEndpoint
+			&& connectionEndpoint.policy
+				== MTP::ServerDiscoveryPolicy::LocalDirect);
+	if (!connectionSafe) {
+		discoveryFailed(false);
+		return;
+	}
+	_deadline->stop();
 	if (account().sessionExists()
-		|| account().mtp().dcOptions().isAuthorized(2)) {
-		showSaveFailure();
+		|| account().mtp().dcOptions().hasCustomServer()) {
+		// A concurrent authorization or binding won the race. The existing
+		// account remains immutable and this candidate is discarded.
+		discoveryFailed(false);
 		return;
 	}
-	getData()->selectServerEnrollment = true;
-	goBack();
-}
-
-void ServerKeyWidget::commitAndAdvance() {
-	if (_confirming
-		|| !_check.valid()
-		|| !_check.key.valid()
-		|| _compareStatus != MTP::KeyIdCompare::Match) {
-		return;
-	}
-
-	const auto endpointCheck = MTP::CheckServerEndpoint(
-		QString::fromStdString(_check.endpoint));
-	if (!endpointCheck) {
-		showSaveFailure();
-		return;
-	}
-	if (account().sessionExists()
-		|| account().mtp().dcOptions().isAuthorized(2)) {
-		showSaveFailure();
-		return;
-	}
-
-	_confirming = true;
-	_confirm->setText(tr::lng_intro_server_saving());
-	_confirm->setDisabled(true);
-	_compare->setDisabled(true);
-	_replace->setDisabled(true);
-
-	const auto key = std::make_shared<MTP::details::RSAPublicKey>(_check.key);
+	const auto key = std::make_shared<MTP::details::RSAPublicKey>(result.key);
 	const auto server = MTP::CustomServer{
-		.dcId = 2,
-		.ip = endpointCheck.host,
-		.port = endpointCheck.port,
-		.ipv6 = endpointCheck.ipv6,
+		.dcId = result.dcId,
+		.ip = connectionEndpoint.host.toStdString(),
+		.port = endpoint.operationalPort,
+		.ipv6 = connectionEndpoint.ipv6,
 		.key = key,
+		.serverSelection = _selection.normalizedSelection.toStdString(),
+		.discoveryPolicy = result.policy,
+		.discoveryOrigin = result.origin.toStdString(),
 	};
 	const auto previousOptions = account().mtp().dcOptions().serialize();
 	const auto previousWasBlocked = account().mtp().dcOptions().blocked();
@@ -1103,11 +961,7 @@ void ServerKeyWidget::commitAndAdvance() {
 			return account().mtp().dcOptions().setCustomServer(server);
 		},
 		[&] {
-			if (!account().local().writeMtpConfig(true)) {
-				return false;
-			}
-			getData()->serverEndpoint = QString::fromStdString(_check.endpoint);
-			return true;
+			return account().local().writeMtpConfig(true);
 		},
 		[&] {
 			account().mtp().resume();
@@ -1120,30 +974,28 @@ void ServerKeyWidget::commitAndAdvance() {
 				account().mtp().dcOptions().constructBlocked();
 			}
 		})) {
-		const auto current = account().mtp().dcOptions().customServer();
-		if (current.key
-			&& account().mtp().dcOptions().isAuthorized(current.dcId)) {
-			// Another path authorized this account between the eligibility
-			// check and the pin write. Rebuild the step as the immutable
-			// read-only view instead of offering an enrollment edit.
-			goReplace<ServerWidget>(Animate::Back);
-			return;
-		}
-		_confirming = false;
-		_confirm->setText(tr::lng_intro_server_confirm());
-		_replace->setDisabled(false);
-		showSaveFailure();
+		_connecting = false;
+		++_attempt;
+		_deadline->stop();
+		_readOnly = false;
+		_addressLabel->show();
+		_address->show();
+		_status->show();
+		_continue->show();
+		_address->rawTextEdit()->setReadOnly(false);
+		_continue->setDisabled(false);
+		_continue->setText(tr::lng_intro_server_try_again(tr::now));
+		showStatus(tr::lng_intro_server_save_failed(tr::now), true);
+		_address->setAccessibleDescription(
+			tr::lng_intro_server_save_failed(tr::now));
+		_address->setFocusFast();
 		return;
 	}
 
+	_connecting = false;
+	getData()->serverEndpoint = result.endpoint;
+	switchToBound();
 	goNext<UsernameWidget>();
-}
-
-void ServerKeyWidget::submit() {
-	if (!MTP::KeyIdCompareAllowsAdvance(_compareStatus)) {
-		return;
-	}
-	commitAndAdvance();
 }
 
 } // namespace details

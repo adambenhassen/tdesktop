@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/sender.h"
-#include "mtproto/mtproto_server_enrollment.h"
 #include "intro/intro_username_validation.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
@@ -78,13 +77,11 @@ struct Data {
 
 	Window::TermsLock termsLock;
 
-	// Set by ServerWidget after the complete artifact has validated, then
-	// consumed by ServerKeyWidget. No endpoint or key is kept on a failed
-	// parse, and the artifact itself is never sent to MTProto.
-	QString serverEnrollmentArtifact;
-	std::optional<MTP::ServerEnrollmentCheck> serverEnrollment;
+	// The editable draft stays local to this new account while the user
+	// corrects discovery or walks back from the username step. It is never
+	// sent to MTProto and is cleared by the account lifecycle.
+	QString serverSelection;
 	QString serverEndpoint;
-	bool selectServerEnrollment = false;
 
 	// The phone_code_hash UsernameWidget obtained for its username, so
 	// a back-and-forward loop reuses it instead of burning another

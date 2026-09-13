@@ -66,6 +66,7 @@ PRIVATE
     tests/unit/mtproto_dc_options_tests.cpp
     tests/unit/mtp_instance_tests.cpp
     tests/unit/passport_credentials_secret_tests.cpp
+    tests/unit/server_discovery_tests.cpp
     tests/unit/server_enrollment_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
