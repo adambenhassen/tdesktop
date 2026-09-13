@@ -1773,6 +1773,9 @@ official_endpoint="$(head -n 1 "$EVIDENCE_DIR/official-endpoints.txt")"
 telegramd_endpoint="$(head -n 1 "$EVIDENCE_DIR/telegramd-endpoints.txt")"
 assert_not_equal "endpoint independence" "$official_endpoint" "$telegramd_endpoint"
 
+if ! focus_application_process "$FORK_PID" "$EVIDENCE_DIR/telegramd-activate.txt" 30; then
+	unavailable "System Events could not focus the Telegramd process"
+fi
 if ! FRONTMOST_AFTER="$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')"; then
 	unavailable "System Events cannot report the post-launch frontmost application"
 fi
