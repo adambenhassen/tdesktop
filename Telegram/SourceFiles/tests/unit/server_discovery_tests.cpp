@@ -242,6 +242,64 @@ TEST_CASE(LocalResponseTransportCompletesAtDisconnect) {
 	peer->deleteLater();
 }
 
+TEST_CASE(LocalDiscoveryStartsSocketForLiteralAndLocalName) {
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+
+	const auto port = server.serverPort();
+	for (const auto &host : { u"127.0.0.1"_q, u"localhost"_q }) {
+		const auto selection = CheckServerSelection(
+			host + u":"_q + QString::number(port));
+		CHECK(selection.valid());
+		if (!selection) {
+			continue;
+		}
+
+		QTcpSocket client;
+		auto connected = false;
+		auto address = QHostAddress();
+		if (address.setAddress(selection.host)) {
+			CHECK(StartLocalDiscoverySocket(client, selection, address));
+			connected = client.waitForConnected(1000);
+		} else {
+			const auto resolved = QHostInfo::fromName(selection.host);
+			CHECK(resolved.error() == QHostInfo::NoError);
+			CHECK(!resolved.addresses().isEmpty());
+			if (resolved.error() != QHostInfo::NoError) {
+				continue;
+			}
+			for (const auto &resolvedAddress : resolved.addresses()) {
+				if (!StartLocalDiscoverySocket(
+						client,
+						selection,
+						resolvedAddress)) {
+					continue;
+				}
+				if (client.waitForConnected(1000)) {
+					connected = true;
+					break;
+				}
+				client.abort();
+			}
+		}
+		CHECK(connected);
+		if (!connected) {
+			continue;
+		}
+		CHECK(server.waitForNewConnection(1000));
+		const auto peer = server.nextPendingConnection();
+		CHECK(peer != nullptr);
+		if (peer) {
+			peer->deleteLater();
+		}
+		client.disconnectFromHost();
+		client.waitForDisconnected(1000);
+	}
+}
+
 TEST_CASE(PublicDiscoveryRequestsDoNotUseCookies) {
 	QNetworkRequest request(QUrl(
 		u"https://example.com/.well-known/telegramd/client"_q));

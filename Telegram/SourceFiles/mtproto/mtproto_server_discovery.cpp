@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkRequest>
+#include <QtNetwork/QTcpSocket>
 
 #include <algorithm>
 #include <atomic>
@@ -828,6 +829,26 @@ QByteArray BuildLocalDiscoveryRequest(const QByteArray &nonce) {
 		return {};
 	}
 	return QByteArray(kLocalRequestMagic, 16) + nonce;
+}
+
+bool StartLocalDiscoverySocket(
+		QTcpSocket &socket,
+		const ServerSelectionCheck &selection,
+		const QHostAddress &address) {
+	if (!selection.valid()
+		|| selection.policy != ServerDiscoveryPolicy::LocalDirect
+		|| !selection.explicitPort
+		|| selection.operationalPort < 1
+		|| selection.operationalPort > 65535
+		|| address.isNull()
+		|| (address.protocol() != QAbstractSocket::IPv4Protocol
+			&& address.protocol() != QAbstractSocket::IPv6Protocol)) {
+		return false;
+	}
+	socket.connectToHost(
+		address,
+		quint16(selection.operationalPort));
+	return true;
 }
 
 bool IsCompleteLocalDiscoveryResponse(const QByteArray &response) {

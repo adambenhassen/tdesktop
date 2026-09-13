@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <optional>
 
 class QNetworkRequest;
+class QTcpSocket;
 
 namespace MTP {
 
@@ -144,6 +145,13 @@ struct ServerDiscoveryResult {
 
 // MAIN-736 local/direct preflight framing.
 [[nodiscard]] QByteArray BuildLocalDiscoveryRequest(const QByteArray &nonce);
+
+// Start a local/direct socket only after the selected host has resolved to a
+// concrete IPv4 or IPv6 address. The caller owns the socket and its signals.
+[[nodiscard]] bool StartLocalDiscoverySocket(
+	QTcpSocket &socket,
+	const ServerSelectionCheck &selection,
+	const QHostAddress &address);
 
 [[nodiscard]] bool IsCompleteLocalDiscoveryResponse(
 	const QByteArray &response);

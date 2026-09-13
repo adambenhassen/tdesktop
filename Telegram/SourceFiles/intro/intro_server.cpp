@@ -632,7 +632,42 @@ void ServerWidget::beginLocalDiscovery() {
 			_localNonce,
 			_localResponse));
 	});
-	socket->connectToHost(_selection.host, _selection.operationalPort);
+	const auto address = QHostAddress(_selection.host);
+	if (!address.isNull()) {
+		if (!MTP::StartLocalDiscoverySocket(
+				*socket,
+				_selection,
+				address)) {
+			discoveryFailed(true);
+		}
+		return;
+	}
+	const auto attempt = _attempt;
+	_hostLookupId = QHostInfo::lookupHost(
+		_selection.host,
+		this,
+		[=](const QHostInfo &info) {
+			if (!_connecting || _attempt != attempt || _socket != socket) {
+				return;
+			}
+			_hostLookupId = -1;
+			if (info.error() != QHostInfo::NoError) {
+				discoveryFailed(true);
+				return;
+			}
+			for (const auto &address : info.addresses()) {
+				if (MTP::StartLocalDiscoverySocket(
+						*socket,
+						_selection,
+						address)) {
+					return;
+				}
+			}
+			discoveryFailed(true);
+		});
+	if (_hostLookupId < 0) {
+		discoveryFailed(true);
+	}
 }
 
 void ServerWidget::sendLocalRequest() {
