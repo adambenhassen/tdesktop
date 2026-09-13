@@ -222,12 +222,19 @@ TEST_CASE(DiscoveryAttemptsAreLimitedAndReleased) {
 }
 
 TEST_CASE(DiscoveryAttemptMoveReleasesExactlyOnce) {
-	auto source = ServerDiscoveryAttempt::Acquire();
-	CHECK(source.has_value());
-	auto moved = std::move(*source);
-	CHECK(moved.has_value());
-	source.reset();
-	moved.reset();
+	auto first = ServerDiscoveryAttempt::Acquire();
+	auto second = ServerDiscoveryAttempt::Acquire();
+	auto third = ServerDiscoveryAttempt::Acquire();
+	auto fourth = ServerDiscoveryAttempt::Acquire();
+	CHECK(first.has_value());
+	CHECK(second.has_value());
+	CHECK(third.has_value());
+	CHECK(fourth.has_value());
+	{
+		auto moved = std::move(*first);
+		first.reset();
+		CHECK(!ServerDiscoveryAttempt::Acquire().has_value());
+	}
 	CHECK(ServerDiscoveryAttempt::Acquire().has_value());
 }
 
