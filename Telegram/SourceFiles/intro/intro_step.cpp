@@ -525,6 +525,14 @@ int Step::contentTop() const {
 	return result;
 }
 
+int Step::descriptionBottom() const {
+	return _description->y() + _description->height();
+}
+
+rpl::producer<QRect> Step::descriptionGeometryValue() const {
+	return _description->geometryValue();
+}
+
 void Step::setErrorCentered(bool centered) {
 	_errorCentered = centered;
 	_error.destroy();

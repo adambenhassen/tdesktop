@@ -203,6 +203,7 @@ introServerPanelWidth: 340px;
 introServerPanelRadius: 6px;
 introServerPanelBg: windowBgOver;
 introServerScrollTop: 124px;
+introServerScrollGap: 8px;
 introServerScrollBottom: 8px;
 introServerPanelSideMargin: 20px;
 introServerFieldSideMargin: 40px;

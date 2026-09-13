@@ -234,6 +234,11 @@ ServerWidget::ServerWidget(
 	} else {
 		setupEnrollment();
 	}
+	descriptionGeometryValue() | rpl::on_next([=](QRect) {
+		if (_content) {
+			layoutContent();
+		}
+	}, lifetime());
 	layoutContent();
 }
 
@@ -471,15 +476,20 @@ void ServerWidget::resizeEvent(QResizeEvent *e) {
 void ServerWidget::layoutContent() {
 	const auto scrollWidth = std::min(st::introStepWidth, width());
 	const auto scrollLeft = (width() - scrollWidth) / 2;
+	const auto scrollTop = std::max(
+		st::introServerScrollTop,
+		descriptionBottom()
+			- contentTop()
+			+ st::introServerScrollGap);
 	const auto scrollHeight = std::max(
 		0,
 		height()
 			- contentTop()
-			- st::introServerScrollTop
+			- scrollTop
 			- st::introServerScrollBottom);
 	_scroll->setGeometry(
 		scrollLeft,
-		contentTop() + st::introServerScrollTop,
+		contentTop() + scrollTop,
 		scrollWidth,
 		scrollHeight);
 	_content->resizeToWidth(scrollWidth);
@@ -799,6 +809,11 @@ ServerKeyWidget::ServerKeyWidget(
 		PaintPanel(_panel, _compareLabel, painter);
 	}, _panel->lifetime());
 	_panel->setLayoutDirection(Qt::LeftToRight);
+	descriptionGeometryValue() | rpl::on_next([=](QRect) {
+		if (_content) {
+			layoutContent();
+		}
+	}, lifetime());
 	layoutContent();
 }
 
@@ -872,15 +887,20 @@ void ServerKeyWidget::keyPressEvent(QKeyEvent *e) {
 void ServerKeyWidget::layoutContent() {
 	const auto scrollWidth = std::min(st::introStepWidth, width());
 	const auto scrollLeft = (width() - scrollWidth) / 2;
+	const auto scrollTop = std::max(
+		st::introServerScrollTop,
+		descriptionBottom()
+			- contentTop()
+			+ st::introServerScrollGap);
 	const auto scrollHeight = std::max(
 		0,
 		height()
 			- contentTop()
-			- st::introServerScrollTop
+			- scrollTop
 			- st::introServerScrollBottom);
 	_scroll->setGeometry(
 		scrollLeft,
-		contentTop() + st::introServerScrollTop,
+		contentTop() + scrollTop,
 		scrollWidth,
 		scrollHeight);
 	_content->resizeToWidth(scrollWidth);
