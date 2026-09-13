@@ -489,7 +489,7 @@ run_lifecycle_observer_control() {
 	CONTROL_TRACE="$EVIDENCE_DIR/lifecycle-observer-control-trace.txt"
 	rm -f "$CONTROL_READY" "$CONTROL_RELEASE" "$CONTROL_RESULT" "$CONTROL_TRACE"
 	{
-		echo "observer=dtrace syscall fork:return"
+		echo "observer=dtrace syscall write readiness and fork:return"
 		echo "control=python os.fork child os._exit without exec"
 		echo "result=NOT_RUN"
 	} > "$EVIDENCE_DIR/lifecycle-observer-control.txt"
@@ -506,6 +506,7 @@ with open(ready_path, "w", encoding="utf-8") as ready:
     ready.write(str(os.getpid()) + "\n")
     ready.flush()
 while not os.path.exists(release_path):
+    os.write(1, b"observer-heartbeat\n")
     time.sleep(0.01)
 child_pid = os.fork()
 if child_pid == 0:
@@ -524,7 +525,7 @@ PY
 	if ! [[ "$CONTROL_PID" =~ ^[0-9]+$ ]]; then
 		control_observer_unavailable "fork observer control reported an invalid parent pid"
 	fi
-	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
 	{
 		echo "parent_pid=$CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
@@ -1517,7 +1518,7 @@ trap cleanup EXIT
 	echo "observer_mode=kernel-filtered-fs_usage-exec-and-dtrace-fork-observer-per-tracked-pid"
 	echo "descendant_policy=every-tracked-pid-must-have-independent-observer"
 	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
-	echo "fork_observer_control=short-lived-fork-only-child"
+	echo "fork_observer_control=readiness-gated-dtrace-write-and-short-lived-fork-only-child"
 	echo "spawn_observer_control=readiness-gated-dtrace-write-and-posix_spawn-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
