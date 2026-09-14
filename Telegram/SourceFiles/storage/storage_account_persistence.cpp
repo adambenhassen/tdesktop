@@ -122,6 +122,12 @@ Account::~Account() {
 }
 
 bool Account::writeMtpAuthorization() {
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	if (qEnvironmentVariableIsSet(
+			"TDESKTOP_FAIL_MTP_AUTHORIZATION_WRITE")) {
+		return false;
+	}
+#endif
 #ifdef TDESKTOP_UNIT_TESTS
 	if (_writeMtpAuthorizationOverride) {
 		return _writeMtpAuthorizationOverride();

@@ -467,6 +467,7 @@ TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
 		[&](const QByteArray &value) { restored = value; });
 	restarted->readMtpAuthorizationFailureMarkerForTest();
 	CHECK(restarted->mtpAuthorizationWriteFailed());
+	restarted->readMtpDataForTest();
 	const auto config = ReadEnrollmentConfig(basePath, key);
 	CHECK(config != nullptr);
 	CHECK(config && config->hasCustomServer());

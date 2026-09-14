@@ -96,6 +96,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/cached_webview_availability.h"
 #include "test/test_agent.h"
 #include "tests/signup_controls_regression.h"
+#include "tests/account_lifecycle_regression.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
@@ -304,8 +305,13 @@ void Application::run() {
 	Ui::StartCachedCorners();
 	Ui::Emoji::Init();
 
+	auto regressionResult = 0;
 	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
-		QCoreApplication::exit(RunSignupControlsRegression());
+		regressionResult = RunSignupControlsRegression();
+	}
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")
+		&& !qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
+		QCoreApplication::exit(regressionResult);
 		return;
 	}
 
@@ -394,6 +400,12 @@ void Application::run() {
 	DEBUG_LOG(("Application Info: window created..."));
 
 	startDomain();
+
+	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
+		regressionResult |= Tests::RunAccountLifecycleRegression();
+		QCoreApplication::exit(regressionResult);
+		return;
+	}
 	startTray();
 
 	_lastActivePrimaryWindow->firstShow();

@@ -1431,6 +1431,8 @@ PRIVATE
     main/session/session_show.h
     tests/signup_controls_regression.cpp
     tests/signup_controls_regression.h
+    tests/account_lifecycle_regression.cpp
+    tests/account_lifecycle_regression.h
     media/audio/media_audio.cpp
     media/audio/media_audio.h
     media/audio/media_audio_edit.cpp
@@ -2340,6 +2342,7 @@ target_compile_definitions(Telegram
 PRIVATE
     TDESKTOP_API_ID=${TDESKTOP_API_ID}
     TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
+    TDESKTOP_LIFECYCLE_REGRESSION
     G_LOG_DOMAIN="Telegram"
 )
 

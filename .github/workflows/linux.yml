@@ -242,7 +242,9 @@ jobs:
           $IMAGE_TAG \
           bash -lc '
             /usr/src/tdesktop/out/Debug/test_unit &&
-            TDESKTOP_SIGNUP_UI_REGRESSION=1 QT_QPA_PLATFORM=offscreen \
+            TDESKTOP_SIGNUP_UI_REGRESSION=1 \
+            TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
+            QT_QPA_PLATFORM=offscreen \
             /usr/src/tdesktop/out/Debug/Telegram
           '
 
