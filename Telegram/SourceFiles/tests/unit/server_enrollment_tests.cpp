@@ -323,7 +323,7 @@ TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
 	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
 }
 
-TEST_CASE(MtpAuthorizationSurvivesCleanAccountRestart) {
+TEST_CASE(MtpAuthorizationSyncWriteSurvivesCleanAccountRestart) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());
 
@@ -342,9 +342,8 @@ TEST_CASE(MtpAuthorizationSurvivesCleanAccountRestart) {
 			key,
 			[serialized] { return serialized; });
 		CHECK(account->writeMtpConfig(true));
-		account->writeMtpData();
+		account->writeMtpData(true);
 	}
-	Storage::details::Sync();
 
 	auto restored = QByteArray();
 	{

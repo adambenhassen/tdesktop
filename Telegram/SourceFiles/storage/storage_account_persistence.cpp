@@ -113,7 +113,7 @@ Account::~Account() {
 	}
 }
 
-void Account::writeMtpData() {
+void Account::writeMtpData(bool sync) {
 	Expects(_localKey != nullptr);
 
 #ifdef TDESKTOP_UNIT_TESTS
@@ -126,7 +126,7 @@ void Account::writeMtpData() {
 #endif
 	const auto size = sizeof(quint32) + Serialize::bytearraySize(serialized);
 
-	FileWriteDescriptor mtp(ToFilePart(_dataNameKey), BaseGlobalPath());
+	FileWriteDescriptor mtp(ToFilePart(_dataNameKey), BaseGlobalPath(), sync);
 	EncryptedDescriptor data(size);
 	data.stream << quint32(dbiMtpAuthorization) << serialized;
 	mtp.writeEncrypted(data, _localKey);

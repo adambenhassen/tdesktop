@@ -132,7 +132,7 @@ Account::~Account() {
 	// shutdown the event loop can finish before that callback runs, so take a
 	// final snapshot while the MTP instance still owns the current key.
 	if (_mtp) {
-		_local->writeMtpData();
+		_local->writeMtpData(true);
 	}
 	if (const auto session = maybeSession()) {
 		session->saveSettingsNowIfNeeded();
@@ -345,7 +345,7 @@ void Account::createSession(
 	// The key-write notification is postponed from the MTP session thread.
 	// Persist once the account is actually authorized, before the main UI can
 	// be closed by a shutdown or crash.
-	local().writeMtpData();
+	local().writeMtpData(true);
 
 	Ensures(_session != nullptr);
 }
