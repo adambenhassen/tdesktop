@@ -19,7 +19,7 @@ dnf -y install cmake autoconf automake libtool pkgconfig make patch git \
 	xorg-x11-util-macros xorg-x11-server-Xvfb $TOOLSET-gcc $TOOLSET-gcc-c++ $TOOLSET-binutils \
 	$TOOLSET-gdb $TOOLSET-libasan-devel libffi-devel fontconfig-devel \
 	freetype-devel libX11-devel wayland-devel alsa-lib-devel \
-	pulseaudio-libs-devel mesa-libGL-devel mesa-libEGL-devel mesa-libgbm-devel \
+	pulseaudio-libs-devel mesa-libGL-devel mesa-libEGL-devel mesa-libgbm-devel mesa-dri-drivers \
 	libdrm-devel vulkan-devel libva-devel libvdpau-devel libselinux-devel \
 	libmount-devel systemd-devel glib2-devel gobject-introspection-devel \
 	at-spi2-core-devel gtk3-devel
