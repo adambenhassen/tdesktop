@@ -984,7 +984,7 @@ start_pid_observer() {
 	# One fs_usage owner is serialized across tracked PIDs because the
 	# kernel ktrace facility rejects overlapping fs_usage sessions.
 	exec_observer_pid="$observer_pid"
-	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_pending[args[0]->pr_pid] = 1; } proc:::exec /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-stopped parent=%d child=%d\\n\", fork_child_parent[pid], pid); stop(); } syscall:::entry /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-stopped parent=%d child=%d\\n\", fork_child_parent[pid], pid); stop(); }"
+	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_pending[args[0]->pr_pid] = 1; } proc:::exec /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-detected parent=%d child=%d\\n\", fork_child_parent[pid], pid); } syscall:::entry /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-detected parent=%d child=%d\\n\", fork_child_parent[pid], pid); }"
 	start_privileged_observer /usr/sbin/dtrace -w -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
 	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
@@ -1024,7 +1024,7 @@ observe_fork_children() {
 		fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 		[ -e "$fork_trace" ] || continue
 		while IFS= read -r event; do
-			if ! [[ "$event" =~ ^fork-child-stopped\ parent=([0-9]+)\ child=([0-9]+)$ ]]; then
+			if ! [[ "$event" =~ ^fork-child-detected\ parent=([0-9]+)\ child=([0-9]+)$ ]]; then
 				printf 'invalid fork child event for pid=%s\n' "$target_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
@@ -1047,7 +1047,7 @@ observe_fork_children() {
 					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			if ! wait_for_stopped "$child_pid" 5; then
+			if ! kill -STOP "$child_pid" 2>/dev/null || ! wait_for_stopped "$child_pid" 5; then
 				child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
 				if [ -z "$child_state" ] || [[ "$child_state" == Z* ]]; then
 					printf 'fork observer reported an exited child before attachment parent=%s child=%s\n' \
@@ -1056,6 +1056,11 @@ observe_fork_children() {
 					printf 'fork observer did not stop child before attachment parent=%s child=%s state=%s\n' \
 						"$target_pid" "$child_pid" "$child_state" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				fi
+				return 1
+			fi
+			if ! printf 'fork-child-stopped parent=%s child=%s\n' "$target_pid" "$child_pid" >> "$fork_trace"; then
+				printf 'fork observer could not record stopped child parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
 			if ! record_tracked_pid "$child_pid" || ! start_pid_observer "$child_pid"; then
@@ -1074,7 +1079,7 @@ observe_fork_children() {
 				return 1
 			fi
 			record "PID-filtered fork observer attached before child execution parent=$target_pid child=$child_pid"
-		done < <(grep -E '^fork-child-stopped parent=[0-9]+ child=[0-9]+$' "$fork_trace" || true)
+		done < <(grep -E '^fork-child-detected parent=[0-9]+ child=[0-9]+$' "$fork_trace" || true)
 	done < "$TARGET_OBSERVER_FILE"
 }
 
@@ -1995,10 +2000,10 @@ trap cleanup EXIT
 	echo "relaunch_process_wait_seconds=30"
 	echo "filesystem_switch_wait_seconds=10"
 	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
-	echo "observer_mode=kernel-filtered-serialized-combined-fs_usage-filesys-exec-and-pre-execution-stopping-dtrace-fork-observer-per-tracked-pid"
+	echo "observer_mode=kernel-filtered-serialized-combined-fs_usage-filesys-exec-and-manager-stopped-dtrace-fork-observer-per-tracked-pid"
 	echo "filesystem_observer_policy=one-ktrace-owner-at-a-time; manager-reaped-SIGINT-flush-before-each-PID-switch"
 	echo "descendant_policy=independent-observer-attached-before-each-fork-child-resumes"
-	echo "fork_observer=event-driven-dtrace-syscall-fork-return-with-child-stop"
+	echo "fork_observer=event-driven-dtrace-syscall-fork-return-with-manager-SIGSTOP-before-attachment"
 	echo "fork_observer_control=readiness-gated-dtrace-write-and-short-lived-fork-only-child"
 	echo "spawn_observer_control=readiness-gated-dtrace-write-and-posix_spawn-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
