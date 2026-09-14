@@ -659,7 +659,10 @@ void ServerWidget::discoveryTimeout() {
 	}
 	if (_selection.policy == MTP::ServerDiscoveryPolicy::LocalDirect
 		&& _localDiscovery->running()) {
-		_localDiscovery->timeout();
+		const auto advanced = _localDiscovery->timeout();
+		if (!advanced && _connecting) {
+			discoveryFailed(true);
+		}
 		return;
 	}
 	discoveryFailed(true);
