@@ -78,6 +78,10 @@ bool ServerWidgetDiscovery::timeout() {
 	if (!_running) {
 		return false;
 	}
+	if (!_response.isEmpty()) {
+		fail(false);
+		return false;
+	}
 	if (_nextAddress >= _addresses.size()) {
 		fail(true);
 		return false;

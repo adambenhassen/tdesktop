@@ -760,6 +760,71 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	CHECK(!failed);
 }
 
+TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"localhost:"_q + QString::number(server.serverPort()));
+	CHECK(selection.valid());
+	if (!selection) {
+		return;
+	}
+	const auto nonce = QByteArray(32, '\x07');
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+	auto accepted = 0;
+	auto timeoutCalled = false;
+	auto finished = false;
+	auto failed = false;
+	QObject::connect(&server, &QTcpServer::newConnection, &owner, [&] {
+		while (server.hasPendingConnections()) {
+			const auto peer = server.nextPendingConnection();
+			++accepted;
+			if (accepted == 1) {
+				peer->write(QByteArrayLiteral("telegramd-key-r1"));
+				peer->flush();
+				QTimer::singleShot(50, &owner, [&] {
+					timeoutCalled = true;
+					CHECK(!discovery.timeout());
+				});
+			}
+		}
+	});
+
+	discovery.start(
+		selection,
+		nonce,
+		{ server.serverAddress(), server.serverAddress() },
+		{
+			.finished = [&](ServerDiscoveryResult) {
+				finished = true;
+				loop.quit();
+			},
+			.failed = [&](bool connectionFailure) {
+				failed = true;
+				CHECK(!connectionFailure);
+				loop.quit();
+			},
+		});
+	loop.exec();
+
+	CHECK(timeoutCalled);
+	CHECK(failed);
+	CHECK(!finished);
+	CHECK_EQ(accepted, 1);
+	CHECK(!discovery.running());
+}
+
 TEST_CASE(ServerWidgetDiscoveryLimitIsRetryable) {
 	using Intro::details::ServerWidgetDiscovery;
 
