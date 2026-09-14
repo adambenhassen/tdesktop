@@ -298,6 +298,36 @@ focus_application_process() {
 	return 1
 }
 
+wait_for_frontmost_bundle() {
+	local pid="$1"
+	local expected_bundle="$2"
+	local bundle_output="$3"
+	local diagnostics="$4"
+	local seconds="$5"
+	local i
+	local frontmost_pid
+	local frontmost_bundle
+	for i in $(seq 1 "$seconds"); do
+		frontmost_pid="$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>>"$diagnostics" || true)"
+		frontmost_pid="$(printf '%s' "$frontmost_pid" | tr -d '[:space:]')"
+		if [ "$frontmost_pid" = "$pid" ]; then
+			frontmost_bundle="$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true' 2>>"$diagnostics" || true)"
+			frontmost_bundle="$(printf '%s' "$frontmost_bundle" | tr -d '[:space:]')"
+			printf 'settle_attempt=%s frontmost_pid=%s frontmost_bundle=%s expected_bundle=%s\n' \
+				"$i" "${frontmost_pid:-unavailable}" "${frontmost_bundle:-unavailable}" "$expected_bundle" >> "$diagnostics"
+			if [ "$frontmost_bundle" = "$expected_bundle" ]; then
+				printf '%s\n' "$frontmost_bundle" > "$bundle_output"
+				return 0
+			fi
+		else
+			printf 'settle_attempt=%s frontmost_pid=%s expected_pid=%s\n' \
+				"$i" "${frontmost_pid:-unavailable}" "$pid" >> "$diagnostics"
+		fi
+		sleep 1
+	done
+	return 1
+}
+
 wait_for_stopped() {
 	local pid="$1"
 	local seconds="$2"
@@ -2207,11 +2237,16 @@ assert_not_equal "endpoint independence" "$official_endpoint" "$telegramd_endpoi
 if ! focus_application_process "$FORK_PID" "$EVIDENCE_DIR/telegramd-activate.txt" 30; then
 	unavailable "System Events could not focus the Telegramd process"
 fi
-if ! FRONTMOST_AFTER="$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')"; then
-	unavailable "System Events cannot report the post-launch frontmost application"
+if ! wait_for_frontmost_bundle \
+	"$FORK_PID" \
+	"$bundle_identifier" \
+	"$EVIDENCE_DIR/frontmost-after.txt" \
+	"$EVIDENCE_DIR/telegramd-activate.txt" \
+	30; then
+	unavailable "System Events could not settle the Telegramd process as frontmost"
 fi
-printf '%s\n' "$FRONTMOST_AFTER" > "$EVIDENCE_DIR/frontmost-after.txt"
-assert_not_equal "Telegramd launch focus" "$OFFICIAL_BUNDLE_ID" "$FRONTMOST_AFTER"
+FRONTMOST_AFTER="$(cat "$EVIDENCE_DIR/frontmost-after.txt")"
+assert_equal "Telegramd launch focus" "$bundle_identifier" "$FRONTMOST_AFTER"
 assert_alive "official coexistence" "$OFFICIAL_PID"
 official_command="$(process_command "$OFFICIAL_PID")"
 assert_equal "official command stability" "$OFFICIAL_EXE -noupdate -debug -workdir $OLD" "$official_command"
@@ -2292,11 +2327,16 @@ assert_nonempty "Telegramd relaunch endpoint" "$EVIDENCE_DIR/telegramd-endpoints
 official_relaunch_endpoint="$(head -n 1 "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt")"
 telegramd_relaunch_endpoint="$(head -n 1 "$EVIDENCE_DIR/telegramd-endpoints-after-relaunch.txt")"
 assert_not_equal "relaunch endpoint independence" "$official_relaunch_endpoint" "$telegramd_relaunch_endpoint"
-if ! FRONTMOST_RELAUNCH="$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')"; then
-	unavailable "System Events cannot report the post-relaunch frontmost application"
+if ! wait_for_frontmost_bundle \
+	"$RELAUNCH_PID" \
+	"$bundle_identifier" \
+	"$EVIDENCE_DIR/frontmost-relaunch.txt" \
+	"$EVIDENCE_DIR/telegramd-activate.txt" \
+	30; then
+	unavailable "System Events could not settle the Telegramd relaunch process as frontmost"
 fi
-printf '%s\n' "$FRONTMOST_RELAUNCH" > "$EVIDENCE_DIR/frontmost-relaunch.txt"
-assert_not_equal "Telegramd relaunch focus" "$OFFICIAL_BUNDLE_ID" "$FRONTMOST_RELAUNCH"
+FRONTMOST_RELAUNCH="$(cat "$EVIDENCE_DIR/frontmost-relaunch.txt")"
+assert_equal "Telegramd relaunch focus" "$bundle_identifier" "$FRONTMOST_RELAUNCH"
 assert_alive "official survives relaunch" "$OFFICIAL_PID"
 relaunch_official_command="$(process_command "$OFFICIAL_PID")"
 assert_equal "official relaunch command stability" "$OFFICIAL_EXE -noupdate -debug -workdir $OLD" "$relaunch_official_command"
