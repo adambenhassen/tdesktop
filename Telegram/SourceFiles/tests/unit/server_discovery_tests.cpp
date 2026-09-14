@@ -768,6 +768,13 @@ TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
 	if (!server.isListening()) {
 		return;
 	}
+	server.pauseAccepting();
+	const auto nonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(nonBlocking);
+	if (!nonBlocking) {
+		return;
+	}
 
 	const auto selection = CheckServerSelection(
 		u"localhost:"_q + QString::number(server.serverPort()));
@@ -780,26 +787,44 @@ TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
 	QObject owner;
 	ServerWidgetDiscovery discovery(&owner);
 	QEventLoop loop;
+	QTimer poll;
 	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
 
+#if defined Q_OS_WIN
+	const auto invalidPeer = INVALID_SOCKET;
+#else
+	const auto invalidPeer = -1;
+#endif
+	NativeTestSocket peer = invalidPeer;
+	const auto partialResponse = QByteArrayLiteral("telegramd-key-r1");
+	auto started = 0;
 	auto accepted = 0;
 	auto timeoutCalled = false;
 	auto finished = false;
 	auto failed = false;
-	QObject::connect(&server, &QTcpServer::newConnection, &owner, [&] {
-		while (server.hasPendingConnections()) {
-			const auto peer = server.nextPendingConnection();
-			++accepted;
-			if (accepted == 1) {
-				peer->write(QByteArrayLiteral("telegramd-key-r1"));
-				peer->flush();
-				QTimer::singleShot(50, &owner, [&] {
-					timeoutCalled = true;
-					CHECK(!discovery.timeout());
-				});
-			}
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		const auto nextPeer = AcceptNativeTestSocket(server.socketDescriptor());
+		if (nextPeer == invalidPeer) {
+			return;
+		}
+		++accepted;
+		if (peer == invalidPeer) {
+			peer = nextPeer;
+			CHECK_EQ(
+				SendNativeTestSocket(
+					peer,
+					partialResponse.constData(),
+					partialResponse.size()),
+				partialResponse.size());
+			QTimer::singleShot(50, &owner, [&] {
+				timeoutCalled = true;
+				CHECK(!discovery.timeout());
+			});
+		} else {
+			CloseNativeTestSocket(nextPeer);
 		}
 	});
+	poll.start(1);
 
 	discovery.start(
 		selection,
@@ -815,12 +840,20 @@ TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
 				CHECK(!connectionFailure);
 				loop.quit();
 			},
+			.candidateStarted = [&] {
+				++started;
+			},
 		});
 	loop.exec();
+	poll.stop();
+	if (peer != invalidPeer) {
+		CloseNativeTestSocket(peer);
+	}
 
 	CHECK(timeoutCalled);
 	CHECK(failed);
 	CHECK(!finished);
+	CHECK_EQ(started, 1);
 	CHECK_EQ(accepted, 1);
 	CHECK(!discovery.running());
 }
