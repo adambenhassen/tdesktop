@@ -7,11 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "intro/intro_server_discovery.h"
 #include "mtproto/mtproto_server_discovery.h"
 
+#include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QList>
+#include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QNetworkRequest>
@@ -21,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #if defined Q_OS_WIN
 #include <winsock2.h>
 #else
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -86,6 +90,20 @@ using NativeTestSocket = int;
 		AsNativeTestSocket(descriptor),
 		nullptr,
 		nullptr);
+}
+
+[[nodiscard]] bool SetNativeTestNonBlocking(qintptr descriptor) {
+#if defined Q_OS_WIN
+	u_long mode = 1;
+	return ::ioctlsocket(
+		AsNativeTestSocket(descriptor),
+		FIONBIO,
+		&mode) == 0;
+#else
+	const auto socket = AsNativeTestSocket(descriptor);
+	const auto flags = ::fcntl(socket, F_GETFL, 0);
+	return flags >= 0 && ::fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
 }
 
 void CloseNativeTestSocket(NativeTestSocket socket) {
@@ -606,6 +624,160 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 		selection,
 		nonce,
 		receivedResponse).valid());
+}
+
+TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	server.pauseAccepting();
+	const auto nonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(nonBlocking);
+	if (!nonBlocking) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"localhost:"_q + QString::number(server.serverPort()));
+	CHECK(selection.valid());
+	if (!selection) {
+		return;
+	}
+	const auto nonce = QByteArray(32, '\x06');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+	const QList<QHostAddress> addresses{
+		QHostAddress(u"127.0.0.2"_q),
+		server.serverAddress(),
+		server.serverAddress(),
+		server.serverAddress(),
+	};
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer poll;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+	auto started = 0;
+	auto accepted = 0;
+	auto finished = false;
+	auto failed = false;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+#if defined Q_OS_WIN
+		const auto invalidPeer = INVALID_SOCKET;
+#else
+		const auto invalidPeer = -1;
+#endif
+		const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
+		if (peer == invalidPeer) {
+			return;
+		}
+		++accepted;
+		if (accepted == 1) {
+			CloseNativeTestSocket(peer);
+			return;
+		}
+		if (accepted == 2) {
+			CHECK(discovery.timeout());
+			CloseNativeTestSocket(peer);
+			return;
+		}
+		if (accepted != 3) {
+			CloseNativeTestSocket(peer);
+			return;
+		}
+
+		CHECK(SetNativeTestReceiveTimeout(peer));
+		QByteArray receivedRequest;
+		auto peerSawEof = false;
+		while (receivedRequest.size() <= request.size()) {
+			char buffer[256];
+			const auto read = ReceiveNativeTestSocket(
+				peer,
+				buffer,
+				int(sizeof(buffer)));
+			if (read > 0) {
+				receivedRequest.append(buffer, int(read));
+				continue;
+			}
+			if (read == 0) {
+				peerSawEof = true;
+			}
+			break;
+		}
+		CHECK(peerSawEof);
+		CHECK_EQ(receivedRequest, request);
+		auto responseOffset = 0;
+		while (responseOffset < response.size()) {
+			const auto written = SendNativeTestSocket(
+				peer,
+				response.constData() + responseOffset,
+				response.size() - responseOffset);
+			CHECK(written > 0);
+			if (written <= 0) {
+				break;
+			}
+			responseOffset += int(written);
+		}
+		CHECK_EQ(responseOffset, response.size());
+		CloseNativeTestSocket(peer);
+	});
+	poll.start(1);
+
+	discovery.start(
+		selection,
+		nonce,
+		addresses,
+		{
+			.finished = [&](ServerDiscoveryResult result) {
+				finished = true;
+				CHECK(result.valid());
+				CHECK_EQ(
+					result.resolvedAddress,
+					server.serverAddress().toString());
+				loop.quit();
+			},
+			.failed = [&](bool) {
+				failed = true;
+				loop.quit();
+			},
+			.candidateStarted = [&] {
+				++started;
+			},
+		});
+	loop.exec();
+	poll.stop();
+
+	CHECK_EQ(started, 4);
+	CHECK_EQ(accepted, 3);
+	CHECK(finished);
+	CHECK(!failed);
+}
+
+TEST_CASE(ServerWidgetDiscoveryLimitIsRetryable) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	auto first = discovery.acquireAttempt();
+	auto second = discovery.acquireAttempt();
+	auto third = discovery.acquireAttempt();
+	auto fourth = discovery.acquireAttempt();
+	CHECK(first.token.has_value());
+	CHECK(second.token.has_value());
+	CHECK(third.token.has_value());
+	CHECK(fourth.token.has_value());
+
+	const auto fifth = discovery.acquireAttempt();
+	CHECK(!fifth.token.has_value());
+	CHECK(fifth.fieldEditable);
+	CHECK(fifth.retryable);
 }
 
 TEST_CASE(PublicDiscoveryRequestsUseRestrictedPolicy) {

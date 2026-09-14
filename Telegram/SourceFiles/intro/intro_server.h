@@ -16,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class QNetworkAccessManager;
 class QNetworkReply;
 class QHostInfo;
-class QTcpSocket;
 class QTimer;
 
 namespace Ui {
@@ -30,6 +29,8 @@ class VerticalLayout;
 
 namespace Intro {
 namespace details {
+
+class ServerWidgetDiscovery;
 
 class ServerWidget final : public Step {
 public:
@@ -66,9 +67,7 @@ private:
 	void submitSelection();
 	void beginPublicDiscovery();
 	void beginLocalDiscovery();
-	void startNextLocalAddress();
-	void sendLocalRequest();
-	void localReadyRead();
+	void startLocalDiscovery(const QList<QHostAddress> &addresses);
 	void discoveryTimeout();
 	void discoveryFinished(MTP::ServerDiscoveryResult result);
 	void resolvePublicEndpoint(MTP::ServerDiscoveryResult result);
@@ -101,20 +100,14 @@ private:
 	QNetworkReply *_reply = nullptr;
 	QByteArray _publicResponse;
 	int _hostLookupId = -1;
-	QTcpSocket *_socket = nullptr;
-	QList<QHostAddress> _localAddresses;
-	int _localAddressIndex = 0;
+	ServerWidgetDiscovery *_localDiscovery = nullptr;
 	QTimer *_deadline = nullptr;
 	QByteArray _localNonce;
-	QByteArray _localRequest;
-	QByteArray _localResponse;
-	int _localWriteOffset = 0;
 	std::optional<MTP::ServerDiscoveryAttempt> _discoveryAttempt;
 
 	MTP::ServerSelectionCheck _selection;
 	bool _readOnly = false;
 	bool _connecting = false;
-	bool _localWriteClosed = false;
 	bool _suppressChanges = false;
 	uint64 _attempt = 0;
 };

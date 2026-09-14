@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "intro/intro_server.h"
 
+#include "intro/intro_server_discovery.h"
 #include "intro/intro_username.h"
 #include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
@@ -35,7 +36,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QSslError>
-#include <QtNetwork/QTcpSocket>
 #include <QtWidgets/QTextEdit>
 
 #include <algorithm>
@@ -104,6 +104,7 @@ ServerWidget::ServerWidget(
 		not_null<Data*> data)
 : Step(parent, account, data)
 , _scroll(this)
+, _localDiscovery(new ServerWidgetDiscovery(this))
 , _deadline(new QTimer(this))
 , _readOnly(readOnly()) {
 	_deadline->setSingleShot(true);
@@ -483,13 +484,17 @@ void ServerWidget::submitSelection() {
 		_address->setFocusFast();
 		return;
 	}
-	auto discoveryAttempt = MTP::ServerDiscoveryAttempt::Acquire();
-	if (!discoveryAttempt) {
+	auto acquisition = _localDiscovery->acquireAttempt();
+	if (!acquisition.token) {
 		const auto error = tr::lng_intro_server_connect_failed(tr::now);
 		_address->showError();
-		_address->rawTextEdit()->setReadOnly(false);
-		_continue->setDisabled(false);
-		_continue->setText(tr::lng_intro_server_try_again());
+		_address->rawTextEdit()->setReadOnly(acquisition.fieldEditable
+			? false
+			: true);
+		_continue->setDisabled(!acquisition.retryable);
+		if (acquisition.retryable) {
+			_continue->setText(tr::lng_intro_server_try_again());
+		}
 		_address->setAccessibleDescription(error);
 		showStatus(error, true);
 		_address->setFocusFast();
@@ -498,7 +503,7 @@ void ServerWidget::submitSelection() {
 	}
 	_selection = checked;
 	getData()->serverSelection = _selection.normalizedSelection;
-	_discoveryAttempt = std::move(discoveryAttempt);
+	_discoveryAttempt = std::move(acquisition.token);
 	_connecting = true;
 	++_attempt;
 	_address->rawTextEdit()->setReadOnly(true);
@@ -593,16 +598,9 @@ void ServerWidget::beginPublicDiscovery() {
 void ServerWidget::beginLocalDiscovery() {
 	_localNonce.resize(32);
 	base::RandomFill(_localNonce.data(), _localNonce.size());
-	_localRequest = MTP::BuildLocalDiscoveryRequest(_localNonce);
-	_localAddresses.clear();
-	_localAddressIndex = 0;
-	_localResponse.clear();
-	_localWriteOffset = 0;
-	_localWriteClosed = false;
 	const auto address = QHostAddress(_selection.host);
 	if (!address.isNull()) {
-		_localAddresses.append(address);
-		startNextLocalAddress();
+		startLocalDiscovery({ address });
 		return;
 	}
 	const auto attempt = _attempt;
@@ -618,127 +616,53 @@ void ServerWidget::beginLocalDiscovery() {
 				discoveryFailed(true);
 				return;
 			}
-			_localAddresses = info.addresses();
-			_localAddressIndex = 0;
-			if (_localAddresses.isEmpty()) {
+			if (info.addresses().isEmpty()) {
 				discoveryFailed(true);
 				return;
 			}
-			startNextLocalAddress();
+			_deadline->start(kDiscoveryTimeout);
+			startLocalDiscovery(info.addresses());
 		});
 	if (_hostLookupId < 0) {
 		discoveryFailed(true);
 	}
 }
 
-void ServerWidget::startNextLocalAddress() {
-	if (!_connecting) {
-		return;
-	}
-	if (_socket) {
-		const auto socket = _socket;
-		_socket = nullptr;
-		disconnect(socket, nullptr, this, nullptr);
-		socket->abort();
-		socket->deleteLater();
-	}
-	if (_localAddressIndex >= _localAddresses.size()) {
-		discoveryFailed(true);
-		return;
-	}
-	_localResponse.clear();
-	_localWriteOffset = 0;
-	_localWriteClosed = false;
-	_socket = new QTcpSocket(this);
-	_socket->setProxy(QNetworkProxy::NoProxy);
-	const auto socket = _socket;
-	connect(socket, &QTcpSocket::connected, this, [=] {
-		if (_connecting && _socket == socket) {
-			sendLocalRequest();
-		}
-	});
-	connect(socket, &QTcpSocket::bytesWritten, this, [=](qint64) {
-		if (_connecting && _socket == socket) {
-			sendLocalRequest();
-		}
-	});
-	connect(socket, &QTcpSocket::readyRead, this, [=] {
-		if (_connecting && _socket == socket) {
-			localReadyRead();
-		}
-	});
-	connect(socket, &QTcpSocket::errorOccurred, this,
-		[=](QAbstractSocket::SocketError error) {
-		if (!_connecting
-			|| _socket != socket
-			|| error == QAbstractSocket::RemoteHostClosedError) {
-			return;
-		}
-		if (_localResponse.isEmpty()) {
-			startNextLocalAddress();
-		} else {
-			discoveryFailed(false);
-		}
-	});
-	connect(socket, &QTcpSocket::disconnected, this, [=] {
-		if (!_connecting || _socket != socket) {
-			return;
-		}
-		_localResponse += socket->readAll();
-		if (_localResponse.size() > kMaxDiscoveryBody) {
-			discoveryFailed(false);
-			return;
-		}
-		if (_localResponse.isEmpty()) {
-			startNextLocalAddress();
-			return;
-		}
-		if (!MTP::IsCompleteLocalDiscoveryResponse(_localResponse)) {
-			discoveryFailed(false);
-			return;
-		}
-		discoveryFinished(MTP::ParseLocalDiscoveryResponse(
-			_selection,
-			_localNonce,
-			_localResponse));
-	});
-	if (!MTP::StartNextLocalDiscoverySocket(
-			*socket,
-			_selection,
-			_localAddresses,
-			_localAddressIndex)) {
-		discoveryFailed(true);
-	}
-}
-
-void ServerWidget::sendLocalRequest() {
-	if (!_socket || !_connecting || _localWriteClosed) {
-		return;
-	}
-	if (!MTP::SendLocalDiscoveryRequest(
-			*_socket,
-			_localRequest,
-			_localWriteOffset,
-			_localWriteClosed)) {
-		startNextLocalAddress();
-	}
-}
-
-void ServerWidget::localReadyRead() {
-	if (!_socket) {
-		return;
-	}
-	_localResponse += _socket->readAll();
-	if (_localResponse.size() > kMaxDiscoveryBody) {
-		discoveryFailed(false);
-		return;
-	}
+void ServerWidget::startLocalDiscovery(
+		const QList<QHostAddress> &addresses) {
+	_localDiscovery->start(
+		_selection,
+		_localNonce,
+		addresses,
+		{
+			.finished = [=](MTP::ServerDiscoveryResult result) {
+				if (_connecting) {
+					discoveryFinished(std::move(result));
+				}
+			},
+			.failed = [=](bool connectionFailure) {
+				if (_connecting) {
+					discoveryFailed(connectionFailure);
+				}
+			},
+			.candidateStarted = [=] {
+				if (_connecting) {
+					_deadline->start(kDiscoveryTimeout);
+				}
+			},
+		});
 }
 
 void ServerWidget::discoveryTimeout() {
-	if (_connecting) {
-		discoveryFailed(true);
+	if (!_connecting) {
+		return;
 	}
+	if (_selection.policy == MTP::ServerDiscoveryPolicy::LocalDirect
+		&& _localDiscovery->running()) {
+		_localDiscovery->timeout();
+		return;
+	}
+	discoveryFailed(true);
 }
 
 void ServerWidget::discoveryFinished(MTP::ServerDiscoveryResult result) {
@@ -753,18 +677,6 @@ void ServerWidget::discoveryFinished(MTP::ServerDiscoveryResult result) {
 		const auto reply = _reply;
 		_reply = nullptr;
 		reply->deleteLater();
-	}
-	if (_socket) {
-		if (result.policy == MTP::ServerDiscoveryPolicy::LocalDirect) {
-			const auto peer = _socket->peerAddress();
-			if (!peer.isNull()) {
-				result.resolvedAddress = peer.toString();
-			}
-		}
-		const auto socket = _socket;
-		_socket = nullptr;
-		socket->abort();
-		socket->deleteLater();
 	}
 	if (result.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
 		resolvePublicEndpoint(std::move(result));
@@ -849,6 +761,7 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 		return;
 	}
 	_connecting = false;
+	_localDiscovery->cancel();
 	_discoveryAttempt.reset();
 	++_attempt;
 	_deadline->stop();
@@ -862,13 +775,6 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 		disconnect(reply, nullptr, this, nullptr);
 		reply->abort();
 		reply->deleteLater();
-	}
-	if (_socket) {
-		const auto socket = _socket;
-		_socket = nullptr;
-		disconnect(socket, nullptr, this, nullptr);
-		socket->abort();
-		socket->deleteLater();
 	}
 	_address->rawTextEdit()->setReadOnly(false);
 	_continue->setDisabled(false);
@@ -890,6 +796,7 @@ void ServerWidget::cancelDiscovery() {
 		return;
 	}
 	_connecting = false;
+	_localDiscovery->cancel();
 	_discoveryAttempt.reset();
 	++_attempt;
 	_deadline->stop();
@@ -903,13 +810,6 @@ void ServerWidget::cancelDiscovery() {
 		disconnect(reply, nullptr, this, nullptr);
 		reply->abort();
 		reply->deleteLater();
-	}
-	if (_socket) {
-		const auto socket = _socket;
-		_socket = nullptr;
-		disconnect(socket, nullptr, this, nullptr);
-		socket->abort();
-		socket->deleteLater();
 	}
 	_address->rawTextEdit()->setReadOnly(false);
 	_continue->setDisabled(false);

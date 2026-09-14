@@ -1367,6 +1367,8 @@ PRIVATE
     intro/intro_signup_password.h
     intro/intro_server.cpp
     intro/intro_server.h
+    intro/intro_server_discovery.cpp
+    intro/intro_server_discovery.h
     intro/intro_start.cpp
     intro/intro_start.h
     intro/intro_username.cpp
