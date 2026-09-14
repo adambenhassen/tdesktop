@@ -13,6 +13,7 @@ nice_target_sources(test_text ${src_loc}
 PRIVATE
     tests/test_main.cpp
     tests/test_main.h
+    tests/test_signup_controls.cpp
     tests/test_text.cpp
 )
 

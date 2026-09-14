@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "main/main_account_persistence.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_config.h"
@@ -347,7 +348,12 @@ TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {
 			[serialized] { return serialized; });
 		// This is the mandatory synchronous seam used by Main::Account's
 		// post-auth and clean-teardown paths.
-		CHECK(account->writeMtpAuthorization());
+		auto published = false;
+		CHECK(Main::details::CommitMtpAuthorization(
+			[&] { return account->writeMtpAuthorization(); },
+			[&] { published = true; },
+			[] {}));
+		CHECK(published);
 	}
 
 	const auto restoredConfig = ReadEnrollmentConfig(basePath, key);
@@ -367,6 +373,46 @@ TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {
 	}
 
 	CHECK_EQ(restored, serialized);
+}
+
+TEST_CASE(PostAuthAuthorizationCommitFailureKeepsSessionClosed) {
+	auto writes = 0;
+	auto committed = 0;
+	auto failed = 0;
+	const auto result = Main::details::CommitMtpAuthorization(
+		[&] {
+			++writes;
+			return false;
+		},
+		[&] { ++committed; },
+		[&] { ++failed; });
+
+	CHECK(!result);
+	CHECK_EQ(writes, 1);
+	CHECK_EQ(committed, 0);
+	CHECK_EQ(failed, 1);
+}
+
+TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
+	const auto durable = true;
+	auto published = false;
+	auto blocked = false;
+	const auto result = Main::details::CommitMtpAuthorization(
+		[] { return false; },
+		[&] {
+			published = true;
+		},
+		[&] {
+			// A failed teardown leaves the last durable snapshot untouched
+			// and blocks the account instead of publishing a new state.
+			blocked = true;
+			published = false;
+		});
+
+	CHECK(!result);
+	CHECK(durable);
+	CHECK(!published);
+	CHECK(blocked);
 }
 
 TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {

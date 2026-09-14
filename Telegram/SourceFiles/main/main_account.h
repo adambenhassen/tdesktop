@@ -124,7 +124,7 @@ private:
 		LoggedOut,
 	};
 
-	void startMtp(
+	bool startMtp(
 		std::unique_ptr<MTP::Config> config,
 		bool startPaused = false);
 	bool createSession(

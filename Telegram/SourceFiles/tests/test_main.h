@@ -30,6 +30,7 @@ namespace Test {
 [[nodiscard]] QString name();
 
 void test(not_null<Ui::RpWindow*> window, not_null<Ui::RpWidget*> widget);
+void RunSignupControlsRegression(not_null<Ui::RpWidget*> root);
 
 [[nodiscard]] inline int scale(int value) {
 	return style::ConvertScale(value);

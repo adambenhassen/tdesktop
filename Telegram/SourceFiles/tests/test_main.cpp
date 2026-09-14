@@ -210,6 +210,7 @@ int main(int argc, char *argv[]) {
 
 		window->setMinimumSize({ scale(240), scale(320) });
 
+		RunSignupControlsRegression(window->body());
 		test(window, window->body());
 	});
 

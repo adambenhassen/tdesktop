@@ -28,6 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "styles/style_layers.h"
 #include "main/main_app_config.h"
+#include "main/main_account_persistence.h"
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
@@ -133,7 +134,17 @@ Account::~Account() {
 	// final durable authorization snapshot while the MTP instance still owns
 	// the current key and pin.
 	if (_mtp) {
-		_local->writeMtpAuthorization();
+		static_cast<void>(details::CommitMtpAuthorization(
+			[=] { return _local->writeMtpAuthorization(); },
+			[] {},
+			[=] {
+				// Keep the last recoverable on-disk binding and key snapshot;
+				// never leave a live instance looking usable after its final
+				// authorization commit failed.
+				LOG(("MTP Error: final authorization snapshot failed; "
+					"keeping the account blocked for restart."));
+				_mtp->dcOptions().constructBlocked();
+			}));
 	}
 	if (const auto session = maybeSession()) {
 		session->saveSettingsNowIfNeeded();
@@ -215,7 +226,9 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 	const auto startPaused = !_sessionUserId
 		&& (!customServer.key
 			|| !config->dcOptions().isAuthorized(customServer.dcId));
-	startMtp(std::move(config), startPaused);
+	if (!startMtp(std::move(config), startPaused)) {
+		return;
+	}
 	if (!startPaused) {
 		_appConfig->start();
 	}
@@ -289,11 +302,12 @@ bool Account::createSession(
 	const auto flags = MTPDuser::Flag::f_self | (phone.isEmpty()
 		? MTPDuser::Flag()
 		: MTPDuser::Flag::f_phone);
+	const auto sessionUserId = _sessionUserId;
 
 	return createSession(
 		MTP_user(
 			MTP_flags(flags),
-			MTP_long(base::take(_sessionUserId).bare),
+			MTP_long(sessionUserId.bare),
 			MTPlong(), // access_hash
 			MTPstring(), // first_name
 			MTPstring(), // last_name
@@ -344,24 +358,31 @@ bool Account::createSession(
 			_mtp->dcOptions().constructBlocked();
 		}
 	};
-	if (!_mtpKeysToDestroy.empty()) {
-		destroyMtpKeys(base::take(_mtpKeysToDestroy));
-	}
-	if (!local().writeMtpAuthorization()) {
-		LOG(("MTP Error: could not synchronously persist the authorization "
-			"state; keeping the account closed."));
-		if (markedAuthorized) {
-			restoreOptions();
-			if (!local().writeMtpConfig(true)) {
+	const auto committed = details::CommitMtpAuthorization(
+		[=] { return local().writeMtpAuthorization(); },
+		[=] {
+			if (!_mtpKeysToDestroy.empty()) {
+				destroyMtpKeys(base::take(_mtpKeysToDestroy));
+			}
+			_sessionValue = _session.get();
+			_sessionUserId = 0;
+		},
+		[=] {
+			LOG(("MTP Error: could not synchronously persist the authorization "
+				"state; keeping the account closed."));
+			if (markedAuthorized) {
+				restoreOptions();
+				if (!local().writeMtpConfig(true)) {
+					_mtp->dcOptions().constructBlocked();
+				}
+			} else {
 				_mtp->dcOptions().constructBlocked();
 			}
-		} else {
-			_mtp->dcOptions().constructBlocked();
-		}
-		_session.reset();
+			_session.reset();
+		});
+	if (!committed) {
 		return false;
 	}
-	_sessionValue = _session.get();
 
 	Ensures(_session != nullptr);
 	return true;
@@ -485,9 +506,13 @@ QByteArray Account::serializeMtpAuthorization() const {
 	};
 	if (_mtp) {
 		const auto keys = _mtp->getKeysForWrite();
-		const auto keysToDestroy = _mtpForKeysDestroy
+		auto keysToDestroy = _mtpForKeysDestroy
 			? _mtpForKeysDestroy->getKeysForWrite()
 			: MTP::AuthKeysList();
+		keysToDestroy.insert(
+			keysToDestroy.end(),
+			_mtpKeysToDestroy.begin(),
+			_mtpKeysToDestroy.end());
 		return serialize(_mtp->mainDcId(), keys, keysToDestroy);
 	}
 	const auto &keys = _mtpFields.keys;
@@ -580,16 +605,18 @@ void Account::setMtpAuthorization(const QByteArray &serialized) {
 		).arg(_mtpKeysToDestroy.size()));
 }
 
-void Account::startMtp(
+bool Account::startMtp(
 		std::unique_ptr<MTP::Config> config,
 		bool startPaused) {
 	Expects(!_mtp);
 
+	const auto restoringSession = bool(_sessionUserId);
+	const auto pausedUntilSessionCommit = startPaused || restoringSession;
 	auto fields = base::take(_mtpFields);
 	fields.config = std::move(config);
 	fields.deviceModel = Platform::DeviceModelPretty();
 	fields.systemVersion = Platform::SystemVersionPretty();
-	fields.startPaused = startPaused;
+	fields.startPaused = pausedUntilSessionCommit;
 	_mtp = std::make_unique<MTP::Instance>(
 		MTP::Instance::Mode::Normal,
 		std::move(fields));
@@ -647,18 +674,29 @@ void Account::startMtp(
 	// A paused enrollment account must not create the separate key-destroyer
 	// instance either. Keep these keys until the account has authenticated,
 	// when createSession() resumes their normal cleanup path.
-	if (!startPaused && !_mtpKeysToDestroy.empty()) {
+	if (!pausedUntilSessionCommit && !_mtpKeysToDestroy.empty()) {
 		destroyMtpKeys(base::take(_mtpKeysToDestroy));
 	}
 
-	if (_sessionUserId) {
-		createSession(
+	if (restoringSession) {
+		if (!createSession(
 			_sessionUserId,
-			base::take(_sessionUserSerialized),
-			base::take(_sessionUserStreamVersion),
+			_sessionUserSerialized,
+			_sessionUserStreamVersion,
 			(_storedSessionSettings
 				? std::move(_storedSessionSettings)
-				: std::make_unique<SessionSettings>()));
+				: std::make_unique<SessionSettings>()))) {
+			// The instance was held behind the enrollment gate until the
+			// authorization snapshot committed. Do not publish it, resume
+			// network traffic, or consume the stored user id after failure.
+			_mtp->dcOptions().constructBlocked();
+			LOG(("MTP Error: stored authorization could not be restored; "
+				"keeping the account blocked."));
+			return false;
+		}
+		_sessionUserSerialized = {};
+		_sessionUserStreamVersion = 0;
+		_mtp->resume();
 	}
 	_storedSessionSettings = nullptr;
 
@@ -668,6 +706,7 @@ void Account::startMtp(
 	}
 
 	_mtpValue = _mtp.get();
+	return true;
 }
 
 bool Account::checkForUpdates(const MTP::Response &message) {

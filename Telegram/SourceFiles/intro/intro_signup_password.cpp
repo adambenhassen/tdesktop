@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_signup_password.h"
 
 #include "config.h"
+#include "intro/intro_signup_controls.h"
 #include "intro/intro_username_validation.h"
 #include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
@@ -91,6 +92,9 @@ void SignUpPasswordWidget::setInnerFocus() {
 
 void SignUpPasswordWidget::activate() {
 	Step::activate();
+	// showAnimated() hides every child while it paints the transition. Both
+	// password controls must be restored before the first focus request.
+	ShowSignupControls(this);
 	_password->setFocusFast();
 }
 
