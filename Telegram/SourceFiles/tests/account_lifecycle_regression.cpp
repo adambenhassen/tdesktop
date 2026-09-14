@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_config.h"
+#include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 
 #include <QtCore/QByteArray>

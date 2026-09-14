@@ -54,6 +54,16 @@ void FinishStepAnimation(not_null<Intro::details::Step*> step) {
 	}
 }
 
+template <typename Widget>
+Widget *FindWidget(QWidget *parent) {
+	for (const auto child : parent->findChildren<QWidget*>()) {
+		if (const auto result = dynamic_cast<Widget*>(child)) {
+			return result;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace
 
 int RunSignupControlsRegression() {
@@ -86,7 +96,7 @@ int RunSignupControlsRegression() {
 		QApplication::processEvents();
 		intro->startSignupControlsRegressionStep();
 
-		auto name = intro->findChild<Intro::details::SignUpNameWidget*>();
+		auto name = FindWidget<Intro::details::SignUpNameWidget>(intro.get());
 		if (!name) {
 			return 1;
 		}
@@ -103,7 +113,8 @@ int RunSignupControlsRegression() {
 		nameField->setText(u"Regression User"_q);
 		name->submit();
 
-		auto password = intro->findChild<Intro::details::SignUpPasswordWidget*>();
+		auto password = FindWidget<Intro::details::SignUpPasswordWidget>(
+			intro.get());
 		if (!password) {
 			return 1;
 		}
