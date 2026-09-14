@@ -130,9 +130,10 @@ Account::Account(not_null<Domain*> domain, const QString &dataName, int index)
 Account::~Account() {
 	// Auth keys are normally persisted from a postponed write request. During
 	// shutdown the event loop can finish before that callback runs, so take a
-	// final snapshot while the MTP instance still owns the current key.
+	// final durable authorization snapshot while the MTP instance still owns
+	// the current key and pin.
 	if (_mtp) {
-		_local->writeMtpData(true);
+		_local->writeMtpAuthorization();
 	}
 	if (const auto session = maybeSession()) {
 		session->saveSettingsNowIfNeeded();
@@ -343,27 +344,19 @@ bool Account::createSession(
 			_mtp->dcOptions().constructBlocked();
 		}
 	};
-	if (markedAuthorized && !local().writeMtpConfig(true)) {
-		LOG(("MTP Error: could not synchronously persist the authorization "
-			"marker; keeping the account closed."));
-		restoreOptions();
-		_session.reset();
-		return false;
-	}
 	if (!_mtpKeysToDestroy.empty()) {
 		destroyMtpKeys(base::take(_mtpKeysToDestroy));
 	}
-	// The key-write notification is postponed from the MTP session thread.
-	// Persist once the account is actually authorized, before the main UI can
-	// be closed by a shutdown or crash.
-	if (!local().writeMtpData(true)) {
+	if (!local().writeMtpAuthorization()) {
 		LOG(("MTP Error: could not synchronously persist the authorization "
-			"keys; keeping the account closed."));
+			"state; keeping the account closed."));
 		if (markedAuthorized) {
 			restoreOptions();
 			if (!local().writeMtpConfig(true)) {
 				_mtp->dcOptions().constructBlocked();
 			}
+		} else {
+			_mtp->dcOptions().constructBlocked();
 		}
 		_session.reset();
 		return false;

@@ -323,7 +323,7 @@ TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
 	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
 }
 
-TEST_CASE(MtpAuthorizationSyncWriteSurvivesCleanAccountRestart) {
+TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());
 
@@ -345,8 +345,9 @@ TEST_CASE(MtpAuthorizationSyncWriteSurvivesCleanAccountRestart) {
 			std::move(config),
 			false,
 			[serialized] { return serialized; });
-		CHECK(account->writeMtpConfig(true));
-		CHECK(account->writeMtpData(true));
+		// This is the mandatory synchronous seam used by Main::Account's
+		// post-auth and clean-teardown paths.
+		CHECK(account->writeMtpAuthorization());
 	}
 
 	const auto restoredConfig = ReadEnrollmentConfig(basePath, key);

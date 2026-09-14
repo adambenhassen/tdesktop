@@ -112,6 +112,10 @@ public:
 	void clearCustomServerBlocked();
 
 	void writeSessionSettings();
+	// The durable authorization boundary used by post-auth and clean teardown.
+	// Both the pin marker/config and the current authorization snapshot are
+	// written synchronously before either lifecycle path exposes or closes it.
+	bool writeMtpAuthorization();
 	bool writeMtpData(bool sync = false);
 	bool writeMtpConfig(bool sync = false);
 #ifdef TDESKTOP_UNIT_TESTS

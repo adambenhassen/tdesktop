@@ -113,6 +113,10 @@ Account::~Account() {
 	}
 }
 
+bool Account::writeMtpAuthorization() {
+	return writeMtpConfig(true) && writeMtpData(true);
+}
+
 bool Account::writeMtpData(bool sync) {
 	Expects(_localKey != nullptr);
 
