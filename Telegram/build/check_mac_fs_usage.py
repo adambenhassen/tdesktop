@@ -71,12 +71,13 @@ def contains_path_under_root(body, root):
     return False
 
 
-def scan(lines, old_root, pids):
+def scan(lines, old_root, pids, empty_pids=()):
     # fs_usage labels events with a process name and thread id. The numeric
     # suffix is not the OS pid collected by the lifecycle observer, so each
     # section must carry the OS pid used for its kernel-side filter.
     old_root = canonical(old_root)
     tracked_pids = set(pids)
+    empty_pids = set(empty_pids)
     process_pattern = re.compile(r"(?P<name>[^\s]+)\.(?P<thread>[0-9]+)\s*$")
     observer_pattern = re.compile(r"^# observer-pid=(?P<pid>[0-9]+)\s*$")
     timestamp_pattern = re.compile(r"^[0-9]{2}:[0-9]{2}:[0-9]{2}\.")
@@ -158,7 +159,7 @@ def scan(lines, old_root, pids):
     missing_pids = sorted(tracked_pids - observed_pids)
     for pid in missing_pids:
         coverage.append((0, "missing observer section pid=%d" % pid, ""))
-    missing_event_pids = sorted(tracked_pids - parseable_pids)
+    missing_event_pids = sorted(tracked_pids - parseable_pids - empty_pids)
     for pid in missing_event_pids:
         coverage.append((0, "missing parseable filesystem event pid=%d" % pid, ""))
     return (
@@ -416,6 +417,29 @@ def self_test():
         ):
             raise AssertionError("observer accepted a header-only tracked PID section")
         (
+            empty_event_violations,
+            empty_event_ambiguous,
+            empty_event_coverage,
+            _,
+            empty_event_target_events,
+            empty_event_observed_pids,
+            empty_event_parseable_pids,
+        ) = scan(
+            ["# observer-pid=%d" % target_pid],
+            old_alias,
+            (target_pid,),
+            (target_pid,),
+        )
+        if (
+            empty_event_violations
+            or empty_event_ambiguous
+            or empty_event_coverage
+            or empty_event_target_events
+            or empty_event_observed_pids != {target_pid}
+            or empty_event_parseable_pids
+        ):
+            raise AssertionError("observer rejected a pre-execution empty child section")
+        (
             unknown_violations,
             unknown_ambiguous,
             unknown_coverage,
@@ -453,13 +477,27 @@ def main(argv):
     if argv == ["--self-test"]:
         sys.stdout.write(self_test())
         return 0
-    if len(argv) != 4:
-        print("usage: check_mac_fs_usage.py TRACE OLD_ROOT PID_FILE REPORT", file=sys.stderr)
+    if len(argv) not in (4, 5):
+        print("usage: check_mac_fs_usage.py TRACE OLD_ROOT PID_FILE REPORT [EMPTY_PID_FILE]", file=sys.stderr)
         return 2
 
-    trace_path, old_root, pid_path, report_path = argv
+    trace_path, old_root, pid_path, report_path = argv[:4]
     with open(pid_path, encoding="utf-8") as pid_file:
         pids = [int(line.strip()) for line in pid_file if line.strip()]
+    empty_pids = []
+    if len(argv) == 5:
+        with open(argv[4], encoding="utf-8") as empty_pid_file:
+            for line in empty_pid_file:
+                value = line.strip()
+                if not value:
+                    continue
+                if not value.isdigit():
+                    print("invalid pre-execution empty PID: %s" % value, file=sys.stderr)
+                    return 2
+                empty_pids.append(int(value))
+    if not set(empty_pids).issubset(set(pids)):
+        print("pre-execution empty PID is not tracked", file=sys.stderr)
+        return 2
     with open(trace_path, encoding="utf-8", errors="replace") as trace_file:
         lines = trace_file.readlines()
     (
@@ -474,6 +512,7 @@ def main(argv):
         lines,
         old_root,
         pids,
+        empty_pids,
     )
     report = format_report(
         violations,
@@ -484,6 +523,9 @@ def main(argv):
         set(pids),
         observed_pids,
         parseable_pids,
+    )
+    report += "pre_execution_empty_os_pids=%s\n" % ",".join(
+        str(pid) for pid in sorted(empty_pids)
     )
     with open(report_path, "w", encoding="utf-8") as output:
         output.write(report)

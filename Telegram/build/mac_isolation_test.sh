@@ -52,6 +52,8 @@ PID_ROOTS_FILE=""
 PID_FILE=""
 PID_LOCK_DIR=""
 TRACK_STOP_FILE=""
+FORK_CHILDREN_FILE=""
+FORK_ONLY_PID_FILE=""
 TARGET_TRACE_DIR=""
 TARGET_EXEC_DIR=""
 TARGET_FORK_DIR=""
@@ -926,8 +928,8 @@ start_pid_observer() {
 	# One fs_usage owner is serialized across tracked PIDs because the
 	# kernel ktrace facility rejects overlapping fs_usage sessions.
 	exec_observer_pid="$observer_pid"
-	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
-	start_privileged_observer /usr/sbin/dtrace -q -n "$fork_program" > "$fork_trace" 2>&1
+	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } syscall::*fork*:return /ppid == $target_pid && arg1 == 0/ { printf(\"fork-child-stopped parent=%d child=%d\\n\", ppid, pid); stop(); }"
+	start_privileged_observer /usr/sbin/dtrace -w -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
 	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
 		record "PID-filtered lifecycle observer could not record pid=$target_pid"
@@ -941,7 +943,7 @@ start_pid_observer() {
 		echo "exec_observer_pid=$exec_observer_pid"
 		echo "fork_observer_pid=$fork_observer_pid"
 		echo "filesystem_exec_filter=/usr/bin/fs_usage -w -F -f filesys -f exec $target_pid"
-		echo "fork_filter=/usr/sbin/dtrace -q -n $fork_program"
+		echo "fork_filter=/usr/sbin/dtrace -w -q -n $fork_program"
 	} >> "$EVIDENCE_DIR/observer-commands.txt"
 	sleep 1
 	if ! process_alive "$observer_pid" || ! process_alive "$exec_observer_pid" || ! process_alive "$fork_observer_pid"; then
@@ -950,6 +952,72 @@ start_pid_observer() {
 		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
 		return 1
 	fi
+}
+
+observe_fork_children() {
+	local target_pid
+	local observer_pid
+	local exec_observer_pid
+	local fork_observer_pid
+	local fork_trace
+	local event
+	local child_pid
+	local child_state
+	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
+		[ -n "$target_pid" ] || continue
+		fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
+		[ -e "$fork_trace" ] || continue
+		while IFS= read -r event; do
+			if ! [[ "$event" =~ ^fork-child-stopped\ parent=([0-9]+)\ child=([0-9]+)$ ]]; then
+				printf 'invalid fork child event for pid=%s\n' "$target_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				return 1
+			fi
+			if [ "${BASH_REMATCH[1]}" != "$target_pid" ]; then
+				printf 'fork child event attributed to wrong parent pid=%s event=%s\n' "$target_pid" "$event" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				return 1
+			fi
+			child_pid="${BASH_REMATCH[2]}"
+			if grep -Fx "$target_pid $child_pid" "$FORK_CHILDREN_FILE" >/dev/null 2>&1; then
+				if process_present "$child_pid"; then
+					child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+					case "$child_state" in
+						T*) kill -CONT "$child_pid" 2>/dev/null || true ;;
+					esac
+				fi
+				continue
+			fi
+			if ! process_present "$child_pid"; then
+				printf 'fork observer reported an exited child before attachment parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				return 1
+			fi
+			child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+			case "$child_state" in
+				T*) ;;
+				*)
+					printf 'fork observer did not stop child before attachment parent=%s child=%s state=%s\n' \
+						"$target_pid" "$child_pid" "$child_state" > "$OBSERVER_MANAGER_FAILURE_FILE"
+					return 1
+					;;
+			esac
+			if ! record_tracked_pid "$child_pid" || ! start_pid_observer "$child_pid"; then
+				printf 'PID-filtered lifecycle observer could not attach to fork child parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				return 1
+			fi
+			if ! printf '%s %s\n' "$target_pid" "$child_pid" >> "$FORK_CHILDREN_FILE"; then
+				printf 'fork observer could not record child coverage parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				return 1
+			fi
+			if ! kill -CONT "$child_pid" 2>/dev/null; then
+				printf 'fork observer could not resume attached child parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				return 1
+			fi
+			record "PID-filtered fork observer attached before child execution parent=$target_pid child=$child_pid"
+		done < <(grep -E '^fork-child-stopped parent=[0-9]+ child=[0-9]+$' "$fork_trace" || true)
+	done < "$TARGET_OBSERVER_FILE"
 }
 
 ensure_observer_coverage() {
@@ -979,6 +1047,12 @@ observe_tracked_pids() {
 				printf '%s\n' "observer manager could not service filesystem observer switch" > "$OBSERVER_MANAGER_FAILURE_FILE"
 			break
 		fi
+		if ! observe_fork_children; then
+			manager_failed=1
+			[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
+				printf '%s\n' "observer manager could not attach fork child before execution" > "$OBSERVER_MANAGER_FAILURE_FILE"
+			break
+		fi
 		if ! ensure_observer_coverage; then
 			manager_failed=1
 			[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
@@ -987,6 +1061,11 @@ observe_tracked_pids() {
 		fi
 		sleep 0.2
 	done
+	if [ "$manager_failed" -eq 0 ] && ! observe_fork_children; then
+		manager_failed=1
+		[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
+			printf '%s\n' "observer manager final fork-child coverage pass failed" > "$OBSERVER_MANAGER_FAILURE_FILE"
+	fi
 	if [ "$manager_failed" -eq 0 ] && ! ensure_observer_coverage; then
 		manager_failed=1
 		[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
@@ -1143,6 +1222,7 @@ check_process_observer_coverage() {
 	local fork_events
 	local event
 	local child_pid
+	local fork_child_observer
 	: > "$EVIDENCE_DIR/descendant-fork-events.txt"
 	: > "$EVIDENCE_DIR/descendant-spawn-events.txt"
 	if [ -n "$OBSERVER_MANAGER_FAILURE_FILE" ] && [ -s "$OBSERVER_MANAGER_FAILURE_FILE" ]; then
@@ -1167,10 +1247,21 @@ check_process_observer_coverage() {
 		fi
 		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
 		fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
-		if [ ! -s "$TARGET_TRACE_DIR/$target_pid.txt" ]; then
-			unavailable "PID-filtered fs_usage captured no filesystem events for pid=$target_pid"
+		fork_child_observer=0
+		if [ -f "$FORK_CHILDREN_FILE" ] && grep -Fx "$target_pid" "$FORK_CHILDREN_FILE" >/dev/null 2>&1; then
+			fork_child_observer=1
 		fi
-		if [ ! -s "$exec_trace" ]; then
+		if ! -s "$TARGET_TRACE_DIR/$target_pid.txt"; then
+			if [ "$fork_child_observer" -eq 0 ]; then
+				unavailable "PID-filtered fs_usage captured no filesystem events for pid=$target_pid"
+			fi
+			if ! grep -Fx "$target_pid" "$FORK_ONLY_PID_FILE" >/dev/null 2>&1 && \
+				! printf '%s\n' "$target_pid" >> "$FORK_ONLY_PID_FILE"; then
+				unavailable "could not record empty pre-execution observer coverage pid=$target_pid"
+			fi
+			record "PID-filtered fork child observer captured no filesystem events after pre-execution attachment pid=$target_pid"
+		fi
+		if ! -s "$exec_trace" && [ "$fork_child_observer" -eq 0 ]; then
 			unavailable "PID-filtered process observer captured no exec events for pid=$target_pid"
 		fi
 		if [ ! -e "$fork_trace" ]; then
@@ -1295,6 +1386,36 @@ refresh_pid_file() {
 	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
 }
 
+record_tracked_pid() {
+	local pid="$1"
+	local merged="${PID_FILE}.child-merged"
+	local i
+	if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+		printf 'invalid fork child pid=%s\n' "$pid" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+		return 1
+	fi
+	for i in $(seq 1 100); do
+		if mkdir "$PID_LOCK_DIR" 2>/dev/null; then
+			break
+		fi
+		if [ "$i" -eq 100 ]; then
+			printf '%s\n' "pid tracker could not acquire its lock for a fork child" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+			return 1
+		fi
+		sleep 0.05
+	done
+	if ! grep -Fx "$pid" "$PID_FILE" >/dev/null 2>&1; then
+		printf '%s\n' "$pid" >> "$PID_FILE"
+	fi
+	if ! sort -nu "$PID_FILE" > "$merged" || ! mv "$merged" "$PID_FILE"; then
+		printf '%s\n' "pid tracker could not preserve a fork child pid" > "$EVIDENCE_DIR/pid-tracking-failure.txt"
+		rm -f "$merged"
+		rmdir "$PID_LOCK_DIR" 2>/dev/null || true
+		return 1
+	fi
+	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
+}
+
 track_pids() {
 	while [ ! -e "$TRACK_STOP_FILE" ]; do
 		if ! refresh_pid_file; then
@@ -1309,6 +1430,8 @@ start_pid_tracking() {
 	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
 	PID_LOCK_DIR="$EVIDENCE_DIR/.telegramd-pids.lock"
 	TRACK_STOP_FILE="$EVIDENCE_DIR/.stop-pid-tracker"
+	FORK_CHILDREN_FILE="$EVIDENCE_DIR/fork-child-observers.txt"
+	FORK_ONLY_PID_FILE="$EVIDENCE_DIR/fork-only-pids.txt"
 	OBSERVER_STOP_FILE="$EVIDENCE_DIR/.stop-observer-manager"
 	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
 	OBSERVER_STOP_RESULT_FILE="$EVIDENCE_DIR/observer-stop-result.txt"
@@ -1318,7 +1441,10 @@ start_pid_tracking() {
 	: > "$PID_FILE"
 	rm -f "$TRACK_STOP_FILE" "$OBSERVER_STOP_FILE" \
 		"$EVIDENCE_DIR/pid-tracking-failure.txt" "$OBSERVER_MANAGER_FAILURE_FILE" \
-		"$OBSERVER_STOP_RESULT_FILE" "$FILESYSTEM_ACTIVE_FILE" "$FILESYSTEM_REQUEST_FILE"
+		"$OBSERVER_STOP_RESULT_FILE" "$FILESYSTEM_ACTIVE_FILE" "$FILESYSTEM_REQUEST_FILE" \
+		"$FORK_CHILDREN_FILE" "$FORK_ONLY_PID_FILE"
+	: > "$FORK_CHILDREN_FILE"
+	: > "$FORK_ONLY_PID_FILE"
 	: > "$FILESYSTEM_ACTIVE_FILE"
 	: > "$FILESYSTEM_REQUEST_FILE"
 	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
@@ -1642,6 +1768,32 @@ terminate_process_tree() {
 	return "$tree_failed"
 }
 
+resume_observed_fork_children() {
+	[ -n "$FORK_CHILDREN_FILE" ] && [ -f "$FORK_CHILDREN_FILE" ] || return 0
+	local parent_pid
+	local child_pid
+	local child_state
+	local resume_failed=0
+	while read -r parent_pid child_pid; do
+		[ -n "$child_pid" ] || continue
+		if ! [[ "$parent_pid" =~ ^[0-9]+$ ]] || ! [[ "$child_pid" =~ ^[0-9]+$ ]]; then
+			resume_failed=1
+			continue
+		fi
+		if process_present "$child_pid"; then
+			child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+			case "$child_state" in
+				T*)
+					if ! kill -CONT "$child_pid" 2>/dev/null; then
+						resume_failed=1
+					fi
+					;;
+			esac
+		fi
+	done < "$FORK_CHILDREN_FILE"
+	return "$resume_failed"
+}
+
 terminate_unclaimed_launcher() {
 	local pid="$1"
 	local command
@@ -1689,6 +1841,7 @@ cleanup() {
 	if [ -n "$SPAWN_CONTROL_RELEASE" ]; then
 		touch "$SPAWN_CONTROL_RELEASE" 2>/dev/null || true
 	fi
+	resume_observed_fork_children || cleanup_failed=1
 	stop_lifecycle_observer_control || cleanup_failed=1
 	stop_spawn_observer_control || cleanup_failed=1
 	stop_pid_tracking || cleanup_failed=1
@@ -1784,10 +1937,10 @@ trap cleanup EXIT
 	echo "relaunch_process_wait_seconds=30"
 	echo "filesystem_switch_wait_seconds=10"
 	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
-	echo "observer_mode=kernel-filtered-serialized-combined-fs_usage-filesys-exec-and-dtrace-fork-observer-per-tracked-pid"
+	echo "observer_mode=kernel-filtered-serialized-combined-fs_usage-filesys-exec-and-pre-execution-stopping-dtrace-fork-observer-per-tracked-pid"
 	echo "filesystem_observer_policy=one-ktrace-owner-at-a-time; manager-reaped-SIGINT-flush-before-each-PID-switch"
-	echo "descendant_policy=every-tracked-pid-must-have-independent-observer"
-	echo "fork_observer=event-driven-dtrace-syscall-fork-return"
+	echo "descendant_policy=independent-observer-attached-before-each-fork-child-resumes"
+	echo "fork_observer=event-driven-dtrace-syscall-fork-return-with-child-stop"
 	echo "fork_observer_control=readiness-gated-dtrace-write-and-short-lived-fork-only-child"
 	echo "spawn_observer_control=readiness-gated-dtrace-write-and-posix_spawn-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
@@ -2161,7 +2314,7 @@ awk 'NR == FNR { roots[$1] = 1; next } !($1 in roots) { print }' \
 check_process_observer_coverage
 assemble_pid_trace
 parser_status=0
-python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/telegramd-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt" || parser_status=$?
+python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/telegramd-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt" "$FORK_ONLY_PID_FILE" || parser_status=$?
 case "$parser_status" in
 	0) ;;
 	2) unavailable "filesystem observer PID attribution is incomplete; see fs_usage-report.txt" ;;
