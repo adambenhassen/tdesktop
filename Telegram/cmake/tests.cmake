@@ -8,6 +8,10 @@ add_executable(test_text WIN32)
 init_target(test_text "(tests)")
 
 target_include_directories(test_text PRIVATE ${src_loc})
+target_compile_definitions(test_text PRIVATE
+    TDESKTOP_API_ID=${TDESKTOP_API_ID}
+    TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
+)
 
 nice_target_sources(test_text ${src_loc}
 PRIVATE
@@ -38,6 +42,7 @@ PRIVATE
 	tdesktop::td_mtproto
 	tdesktop::td_scheme
 	tdesktop::td_lang
+	tdesktop::td_ui
 	desktop-app::lib_base
 	desktop-app::lib_crl
 	desktop-app::lib_storage
