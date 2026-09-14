@@ -197,6 +197,32 @@ wait_for_file() {
 	return 1
 }
 
+capture_working_log() {
+	local working_dir="$1"
+	local destination="$2"
+	local candidate
+	local i
+	for i in $(seq 1 60); do
+		candidate="$working_dir/log.txt"
+		if [ -f "$candidate" ] \
+			&& grep -F "Working dir: $working_dir" "$candidate" >/dev/null 2>&1 \
+			&& cp "$candidate" "$destination" 2>/dev/null; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+		for candidate in "$working_dir"/log_start*.txt; do
+			if [ -f "$candidate" ] \
+				&& grep -F "Working dir: $working_dir" "$candidate" >/dev/null 2>&1 \
+				&& cp "$candidate" "$destination" 2>/dev/null; then
+				printf '%s\n' "$candidate"
+				return 0
+			fi
+		done
+		sleep 1
+	done
+	return 1
+}
+
 wait_for_trace_marker() {
 	local pid="$1"
 	local path="$2"
@@ -2162,20 +2188,11 @@ printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/telegramd-pid.txt"
 if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd namespace creation" "missing path=$NEW/tdata"
 fi
-WORKING_LOG=""
-for i in $(seq 1 60); do
-	WORKING_LOG="$(find "$NEW" -maxdepth 1 -type f -name 'log*.txt' -print -quit 2>/dev/null || true)"
-	if [ -n "$WORKING_LOG" ] && grep -F "Working dir: $NEW" "$WORKING_LOG" >/dev/null 2>&1; then
-		break
-	fi
-	WORKING_LOG=""
-	sleep 1
-done
-if [ -z "$WORKING_LOG" ]; then
+if ! WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-working-dir.log")"; then
 	fail "Telegramd startup log" "working-directory record did not appear"
 fi
-cp "$WORKING_LOG" "$EVIDENCE_DIR/telegramd-working-dir.log"
-assert_grep "Telegramd startup log" "Working dir: $NEW" "$WORKING_LOG"
+record "captured Telegramd startup log path=$WORKING_LOG"
+assert_grep "Telegramd startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-working-dir.log"
 process_command "$FORK_PID" > "$EVIDENCE_DIR/telegramd-command.txt"
 
 NEW_HASH="$(printf '%s' "$NEW" | md5 -q)"
@@ -2263,20 +2280,11 @@ wait_for_process "$RELAUNCH_PID" 30 || fail "Telegramd relaunch process lifetime
 if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd relaunch namespace" "missing path=$NEW/tdata"
 fi
-RELAUNCH_WORKING_LOG=""
-for i in $(seq 1 60); do
-	RELAUNCH_WORKING_LOG="$(find "$NEW" -maxdepth 1 -type f -name 'log*.txt' -print -quit 2>/dev/null || true)"
-	if [ -n "$RELAUNCH_WORKING_LOG" ] && grep -F "Working dir: $NEW" "$RELAUNCH_WORKING_LOG" >/dev/null 2>&1; then
-		break
-	fi
-	RELAUNCH_WORKING_LOG=""
-	sleep 1
-done
-if [ -z "$RELAUNCH_WORKING_LOG" ]; then
+if ! RELAUNCH_WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log")"; then
 	fail "Telegramd relaunch startup log" "working-directory record did not appear"
 fi
-cp "$RELAUNCH_WORKING_LOG" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log"
-assert_grep "Telegramd relaunch startup log" "Working dir: $NEW" "$RELAUNCH_WORKING_LOG"
+record "captured Telegramd relaunch startup log path=$RELAUNCH_WORKING_LOG"
+assert_grep "Telegramd relaunch startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log"
 wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt" "official relaunch endpoint" 30
 wait_for_endpoint "$NEW_HASH" "$EVIDENCE_DIR/telegramd-endpoints-after-relaunch.txt" "Telegramd relaunch endpoint" 30
 assert_nonempty "official relaunch endpoint" "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt"
