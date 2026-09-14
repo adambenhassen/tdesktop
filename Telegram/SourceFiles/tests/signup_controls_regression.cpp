@@ -48,7 +48,9 @@ bool CheckSignupControl(
 
 void FinishStepAnimation(not_null<Intro::details::Step*> step) {
 	for (auto i = 0; i != 20 && step->animating(); ++i) {
-		QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+		QCoreApplication::processEvents(
+			QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents,
+			50);
 	}
 }
 
