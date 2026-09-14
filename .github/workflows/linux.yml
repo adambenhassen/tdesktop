@@ -241,11 +241,31 @@ jobs:
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
           bash -lc '
-            /usr/src/tdesktop/out/Debug/test_unit &&
+            /usr/src/tdesktop/out/Debug/test_unit
+            TEST_STATUS=$?
+            if test "$TEST_STATUS" -ne 0; then
+              exit "$TEST_STATUS"
+            fi
+            Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+            XVFB_PID=$!
+            for i in {1..50}; do
+              if test -S /tmp/.X11-unix/X99; then
+                break
+              fi
+              sleep 0.1
+            done
+            if ! test -S /tmp/.X11-unix/X99; then
+              kill "$XVFB_PID"
+              exit 1
+            fi
+            DISPLAY=:99 \
+            QT_QPA_PLATFORM=xcb \
             TDESKTOP_SIGNUP_UI_REGRESSION=1 \
             TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
-            QT_QPA_PLATFORM=offscreen \
             /usr/src/tdesktop/out/Debug/Telegram
+            TEST_STATUS=$?
+            kill "$XVFB_PID"
+            exit "$TEST_STATUS"
           '
 
       - name: Move artifact.
