@@ -139,6 +139,12 @@ public:
 
 	void setInnerFocus();
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	// Test-only entry point that uses the same history/animation wiring as
+	// the production intro flow before the signup steps are driven.
+	void startSignupControlsRegressionStep();
+#endif
+
 	[[nodiscard]] rpl::producer<> showSettingsRequested() const;
 
 protected:

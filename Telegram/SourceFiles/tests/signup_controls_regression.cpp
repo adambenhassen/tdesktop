@@ -7,13 +7,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/signup_controls_regression.h"
 
+#include "core/application.h"
 #include "intro/intro_signup_name.h"
 #include "intro/intro_signup_password.h"
 #include "intro/intro_widget.h"
+#include "main/main_domain.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
 #include "ui/widgets/rp_window.h"
 
 #include <QApplication>
+#include <QEventLoop>
 #include <QSize>
 
 namespace {
@@ -41,46 +45,68 @@ bool CheckSignupControl(
 	return hit && (hit == control || control->isAncestorOf(hit));
 }
 
+void FinishStepAnimation(not_null<Intro::details::Step*> step) {
+	for (auto i = 0; i != 20 && step->animating(); ++i) {
+		QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+	}
+}
+
 } // namespace
 
 int RunSignupControlsRegression() {
+	const auto primary = Core::App().activePrimaryWindow();
+	const auto &domain = Core::App().domain();
+	if (!primary || !domain.started() || domain.accounts().empty()) {
+		return 1;
+	}
+	const auto controller = not_null<Window::Controller*>(primary);
+	const auto account = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+
 	auto window = std::make_unique<Ui::RpWindow>();
 	window->setGeometry({ 100, 100, 1100, 780 });
 	window->show();
 	QApplication::processEvents();
-
-	const auto account = not_null<Main::Account*>(
-		reinterpret_cast<Main::Account*>(quintptr(1)));
-	const auto controller = not_null<Window::Controller*>(
-		reinterpret_cast<Window::Controller*>(quintptr(1)));
-	auto data = Intro::details::Data{ controller };
-	data.phone = u"+15550000000"_q;
 
 	for (const auto size : {
 		QSize(500, 522),
 		QSize(818, 642),
 		QSize(1100, 780),
 	}) {
-		auto name = new Intro::details::SignUpNameWidget(
+		auto intro = std::make_unique<Intro::Widget>(
 			window->body(),
+			controller,
 			account,
-			&data);
-		name->resize(size);
-		name->showAnimated(Intro::details::Animate::Forward);
+			Intro::EnterPoint::Start,
+			nullptr);
+		intro->setGeometry({ 0, 0, size.width(), size.height() });
+		intro->show();
+		QApplication::processEvents();
+		intro->startSignupControlsRegressionStep();
+
+		auto name = intro->findChild<Intro::details::SignUpNameWidget*>();
+		if (!name) {
+			return 1;
+		}
+		FinishStepAnimation(name);
 		if (!CheckSignupControl(name->firstTabWidget(), name)) {
-			delete name;
 			return 1;
 		}
 
-		auto password = new Intro::details::SignUpPasswordWidget(
-			window->body(),
-			account,
-			&data);
-		password->resize(size);
-		password->showAnimated(Intro::details::Animate::Forward);
+		const auto nameField = dynamic_cast<Ui::InputField*>(
+			name->firstTabWidget());
+		if (!nameField) {
+			return 1;
+		}
+		nameField->setText(u"Regression User"_q);
+		name->submit();
+
+		auto password = intro->findChild<Intro::details::SignUpPasswordWidget*>();
+		if (!password) {
+			return 1;
+		}
+		FinishStepAnimation(password);
 		if (!CheckSignupControl(password->firstTabWidget(), password)) {
-			delete name;
-			delete password;
 			return 1;
 		}
 
@@ -91,8 +117,6 @@ int RunSignupControlsRegression() {
 		for (const auto field : fields) {
 			if (dynamic_cast<Ui::PasswordInput*>(field)
 				&& !CheckSignupControl(field, password)) {
-				delete name;
-				delete password;
 				return 1;
 			}
 			if (dynamic_cast<Ui::PasswordInput*>(field)) {
@@ -100,13 +124,8 @@ int RunSignupControlsRegression() {
 			}
 		}
 		if (found != 2) {
-			delete name;
-			delete password;
 			return 1;
 		}
-
-		delete name;
-		delete password;
 	}
 
 	window->close();

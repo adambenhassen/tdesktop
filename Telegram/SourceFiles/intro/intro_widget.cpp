@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_phone.h"
 #include "intro/intro_server.h"
 #include "intro/intro_code.h"
+#include "intro/intro_signup_name.h"
 #include "intro/intro_password_check.h"
 #include "lang/lang_keys.h"
 #include "lang/lang_instance.h"
@@ -204,6 +205,15 @@ Widget::Widget(
 rpl::producer<> Widget::showSettingsRequested() const {
 	return _settings->entity()->clicks() | rpl::to_empty;
 }
+
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+void Widget::startSignupControlsRegressionStep() {
+	moveToStep(
+		new details::SignUpNameWidget(this, _account, getData()),
+		details::StackAction::Forward,
+		details::Animate::Forward);
+}
+#endif
 
 not_null<Media::Player::FloatDelegate*> Widget::floatPlayerDelegate() {
 	return static_cast<Media::Player::FloatDelegate*>(this);

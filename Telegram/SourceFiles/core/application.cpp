@@ -306,14 +306,6 @@ void Application::run() {
 	Ui::Emoji::Init();
 
 	auto regressionResult = 0;
-	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
-		regressionResult = RunSignupControlsRegression();
-	}
-	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")
-		&& !qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
-		QCoreApplication::exit(regressionResult);
-		return;
-	}
 
 	Ui::PreloadTextSpoilerMask();
 	startShortcuts();
@@ -401,8 +393,16 @@ void Application::run() {
 
 	startDomain();
 
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
+		regressionResult |= RunSignupControlsRegression();
+	}
+
 	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
 		regressionResult |= Tests::RunAccountLifecycleRegression();
+		QCoreApplication::exit(regressionResult);
+		return;
+	}
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
 		QCoreApplication::exit(regressionResult);
 		return;
 	}
