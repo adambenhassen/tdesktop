@@ -984,7 +984,7 @@ start_pid_observer() {
 	# One fs_usage owner is serialized across tracked PIDs because the
 	# kernel ktrace facility rejects overlapping fs_usage sessions.
 	exec_observer_pid="$observer_pid"
-	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { printf(\"fork-child-stopped parent=%d child=%d\\n\", args[0]->pr_ppid, args[0]->pr_pid); stop(); }"
+	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_pending[args[0]->pr_pid] = 1; } proc:::exec /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-stopped parent=%d child=%d\\n\", fork_child_parent[pid], pid); stop(); } syscall:::entry /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-stopped parent=%d child=%d\\n\", fork_child_parent[pid], pid); stop(); }"
 	start_privileged_observer /usr/sbin/dtrace -w -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
 	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
@@ -1047,15 +1047,17 @@ observe_fork_children() {
 					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
-			case "$child_state" in
-				T*) ;;
-				*)
+			if ! wait_for_stopped "$child_pid" 5; then
+				child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+				if [ -z "$child_state" ] || [[ "$child_state" == Z* ]]; then
+					printf 'fork observer reported an exited child before attachment parent=%s child=%s\n' \
+						"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				else
 					printf 'fork observer did not stop child before attachment parent=%s child=%s state=%s\n' \
 						"$target_pid" "$child_pid" "$child_state" > "$OBSERVER_MANAGER_FAILURE_FILE"
-					return 1
-					;;
-			esac
+				fi
+				return 1
+			fi
 			if ! record_tracked_pid "$child_pid" || ! start_pid_observer "$child_pid"; then
 				printf 'PID-filtered lifecycle observer could not attach to fork child parent=%s child=%s\n' \
 					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
