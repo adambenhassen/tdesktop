@@ -740,7 +740,7 @@ QString PublicDiscoveryUrl(const ServerSelectionCheck &selection) {
 }
 
 void ConfigurePublicDiscoveryRequest(QNetworkRequest &request) {
-	request.setRawHeader("User-Agent", QByteArrayLiteral(" "));
+	request.setRawHeader("User-Agent", QByteArrayLiteral("-"));
 	request.setAttribute(
 		QNetworkRequest::RedirectPolicyAttribute,
 		QNetworkRequest::ManualRedirectPolicy);

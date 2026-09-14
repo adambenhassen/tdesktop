@@ -630,8 +630,7 @@ TEST_CASE(PublicDiscoveryRequestsUseRestrictedPolicy) {
 	}
 	CHECK(hasUserAgent);
 	const auto userAgent = request.rawHeader(QByteArray("User-Agent"));
-	CHECK(!userAgent.isEmpty());
-	CHECK(userAgent.trimmed().isEmpty());
+	CHECK_EQ(userAgent, QByteArrayLiteral("-"));
 }
 
 TEST_CASE(DiscoveryAttemptsAreLimitedAndReleased) {
