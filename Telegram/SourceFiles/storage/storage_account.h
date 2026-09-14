@@ -112,7 +112,7 @@ public:
 	void clearCustomServerBlocked();
 
 	void writeSessionSettings();
-	void writeMtpData(bool sync = false);
+	bool writeMtpData(bool sync = false);
 	bool writeMtpConfig(bool sync = false);
 #ifdef TDESKTOP_UNIT_TESTS
 	void readMtpDataForTest();

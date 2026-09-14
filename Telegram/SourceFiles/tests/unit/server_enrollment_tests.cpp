@@ -52,7 +52,7 @@ MakeEnrollmentServerKey() {
 		sizeof(kEnrollmentServerKey) - 1));
 }
 
-[[nodiscard]] std::shared_ptr<const MTP::Config> MakeEnrollmentConfig() {
+[[nodiscard]] std::shared_ptr<MTP::Config> MakeEnrollmentConfig() {
 	auto result = std::make_shared<MTP::Config>(MTP::Environment::Production);
 	Expects(result->dcOptions().setCustomServer(CustomServer{
 		.dcId = 2,
@@ -337,12 +337,22 @@ TEST_CASE(MtpAuthorizationSyncWriteSurvivesCleanAccountRestart) {
 	const auto key = MakeEnrollmentStorageKey();
 	const auto serialized = QByteArray("persisted-auth-key");
 	{
-		auto account = MakeEnrollmentStorageAccount(
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		auto account = std::make_unique<Storage::Account>(
 			basePath,
 			key,
+			std::move(config),
+			false,
 			[serialized] { return serialized; });
 		CHECK(account->writeMtpConfig(true));
-		account->writeMtpData(true);
+		CHECK(account->writeMtpData(true));
+	}
+
+	const auto restoredConfig = ReadEnrollmentConfig(basePath, key);
+	CHECK(restoredConfig != nullptr);
+	if (restoredConfig) {
+		CHECK(restoredConfig->dcOptions().isAuthorized(2));
 	}
 
 	auto restored = QByteArray();

@@ -267,17 +267,17 @@ uint64 Account::willHaveSessionUniqueId(MTP::Config *config) const {
 		| (config && config->isTestMode() ? 0x0100'0000'0000'0000ULL : 0ULL);
 }
 
-void Account::createSession(
+bool Account::createSession(
 		const MTPUser &user,
 		std::unique_ptr<SessionSettings> settings) {
-	createSession(
+	return createSession(
 		user,
 		QByteArray(),
 		0,
 		settings ? std::move(settings) : std::make_unique<SessionSettings>());
 }
 
-void Account::createSession(
+bool Account::createSession(
 		UserId id,
 		QByteArray serialized,
 		int streamVersion,
@@ -289,7 +289,7 @@ void Account::createSession(
 		? MTPDuser::Flag()
 		: MTPDuser::Flag::f_phone);
 
-	createSession(
+	return createSession(
 		MTP_user(
 			MTP_flags(flags),
 			MTP_long(base::take(_sessionUserId).bare),
@@ -318,7 +318,7 @@ void Account::createSession(
 		std::move(settings));
 }
 
-void Account::createSession(
+bool Account::createSession(
 		const MTPUser &user,
 		QByteArray serialized,
 		int streamVersion,
@@ -331,13 +331,24 @@ void Account::createSession(
 	if (!serialized.isEmpty()) {
 		local().readSelf(_session.get(), serialized, streamVersion);
 	}
-	_sessionValue = _session.get();
+	const auto previousOptions = _mtp->dcOptions().serialize();
 	const auto customServer = _mtp->dcOptions().customServer();
 	const auto authorizedDcId = customServer.key
 		? customServer.dcId
 		: _mtp->mainDcId();
-	if (_mtp->dcOptions().markAuthorized(authorizedDcId)) {
-		local().writeMtpConfig();
+	const auto markedAuthorized = _mtp->dcOptions().markAuthorized(
+		authorizedDcId);
+	const auto restoreOptions = [&] {
+		if (!_mtp->dcOptions().constructFromSerialized(previousOptions)) {
+			_mtp->dcOptions().constructBlocked();
+		}
+	};
+	if (markedAuthorized && !local().writeMtpConfig(true)) {
+		LOG(("MTP Error: could not synchronously persist the authorization "
+			"marker; keeping the account closed."));
+		restoreOptions();
+		_session.reset();
+		return false;
 	}
 	if (!_mtpKeysToDestroy.empty()) {
 		destroyMtpKeys(base::take(_mtpKeysToDestroy));
@@ -345,9 +356,22 @@ void Account::createSession(
 	// The key-write notification is postponed from the MTP session thread.
 	// Persist once the account is actually authorized, before the main UI can
 	// be closed by a shutdown or crash.
-	local().writeMtpData(true);
+	if (!local().writeMtpData(true)) {
+		LOG(("MTP Error: could not synchronously persist the authorization "
+			"keys; keeping the account closed."));
+		if (markedAuthorized) {
+			restoreOptions();
+			if (!local().writeMtpConfig(true)) {
+				_mtp->dcOptions().constructBlocked();
+			}
+		}
+		_session.reset();
+		return false;
+	}
+	_sessionValue = _session.get();
 
 	Ensures(_session != nullptr);
+	return true;
 }
 
 void Account::destroySession(DestroyReason reason) {
@@ -450,8 +474,8 @@ QByteArray Account::serializeMtpAuthorization() const {
 			QDataStream stream(&result, QIODevice::WriteOnly);
 			stream.setVersion(QDataStream::Qt_5_1);
 
-			const auto currentUserId = sessionExists()
-				? session().userId()
+			const auto currentUserId = _session
+				? _session->userId()
 				: UserId();
 			stream
 				<< quint64(kWideIdsTag)

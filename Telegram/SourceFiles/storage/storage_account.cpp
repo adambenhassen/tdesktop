@@ -1014,11 +1014,13 @@ void Account::readMtpData() {
 		quint32 blockId;
 		mtp.stream >> blockId;
 		if (!CheckStreamStatus(mtp.stream)) {
-			return writeMtpData();
+			writeMtpData();
+			return;
 		}
 
 		if (!ReadSetting(blockId, mtp.stream, mtp.version, context)) {
-			return writeMtpData();
+			writeMtpData();
+			return;
 		}
 	}
 	applyReadContext(std::move(context));

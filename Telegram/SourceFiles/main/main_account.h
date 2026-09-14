@@ -49,10 +49,10 @@ public:
 	void start(std::unique_ptr<MTP::Config> config);
 
 	[[nodiscard]] uint64 willHaveSessionUniqueId(MTP::Config *config) const;
-	void createSession(
+	bool createSession(
 		const MTPUser &user,
 		std::unique_ptr<SessionSettings> settings = nullptr);
-	void createSession(
+	bool createSession(
 		UserId id,
 		QByteArray serialized,
 		int streamVersion,
@@ -127,7 +127,7 @@ private:
 	void startMtp(
 		std::unique_ptr<MTP::Config> config,
 		bool startPaused = false);
-	void createSession(
+	bool createSession(
 		const MTPUser &user,
 		QByteArray serialized,
 		int streamVersion,

@@ -113,7 +113,7 @@ Account::~Account() {
 	}
 }
 
-void Account::writeMtpData(bool sync) {
+bool Account::writeMtpData(bool sync) {
 	Expects(_localKey != nullptr);
 
 #ifdef TDESKTOP_UNIT_TESTS
@@ -130,6 +130,7 @@ void Account::writeMtpData(bool sync) {
 	EncryptedDescriptor data(size);
 	data.stream << quint32(dbiMtpAuthorization) << serialized;
 	mtp.writeEncrypted(data, _localKey);
+	return mtp.finish();
 }
 
 #ifdef TDESKTOP_UNIT_TESTS
