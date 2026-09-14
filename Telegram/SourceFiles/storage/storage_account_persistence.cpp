@@ -8,10 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_account.h"
 
 #include "base/const_string.h"
+#include "main/main_account.h"
 #include "mtproto/mtproto_config.h"
 #include "storage/details/storage_file_utilities.h"
+#include "storage/details/storage_settings_scheme.h"
 #include "storage/serialize_common.h"
 #include "storage/serialize_peer.h"
+#include "settings.h"
 
 #include <QtCore/QDir>
 
@@ -59,6 +62,14 @@ enum { // Local Storage Keys
 constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
 constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
 
+[[nodiscard]] QString BaseGlobalPath() {
+#ifdef TDESKTOP_UNIT_TESTS
+	return QDir::currentPath() + u"/tdata/"_q;
+#else
+	return cWorkingDir() + u"tdata/"_q;
+#endif
+}
+
 } // namespace
 
 #ifdef TDESKTOP_UNIT_TESTS
@@ -67,7 +78,9 @@ Account::Account(
 		const QString &basePath,
 		MTP::AuthKeyPtr localKey,
 		std::shared_ptr<const MTP::Config> config,
-		bool hasStoredCustomServer)
+		bool hasStoredCustomServer,
+		Fn<QByteArray()> serializeMtpAuthorization,
+		Fn<void(const QByteArray &)> restoreMtpAuthorization)
 : _owner(nullptr)
 , _basePath(basePath.endsWith(QDir::separator())
 	? basePath
@@ -77,6 +90,8 @@ Account::Account(
 , _mtpConfig([config = std::move(config)]() -> const MTP::Config & {
 	return *config;
 })
+, _serializeMtpAuthorization(std::move(serializeMtpAuthorization))
+, _restoreMtpAuthorization(std::move(restoreMtpAuthorization))
 , _serializeSelf(nullptr)
 , _queueMapWrite(nullptr)
 , _writeMapTimer([this] { writeMap(); })
@@ -97,6 +112,53 @@ Account::~Account() {
 		}
 	}
 }
+
+void Account::writeMtpData() {
+	Expects(_localKey != nullptr);
+
+	const auto serialized = _serializeMtpAuthorization
+		? _serializeMtpAuthorization()
+		: _owner->serializeMtpAuthorization();
+	const auto size = sizeof(quint32) + Serialize::bytearraySize(serialized);
+
+	FileWriteDescriptor mtp(ToFilePart(_dataNameKey), BaseGlobalPath());
+	EncryptedDescriptor data(size);
+	data.stream << quint32(dbiMtpAuthorization) << serialized;
+	mtp.writeEncrypted(data, _localKey);
+}
+
+#ifdef TDESKTOP_UNIT_TESTS
+
+void Account::readMtpDataForTest() {
+	FileReadDescriptor mtp;
+	if (!ReadEncryptedFile(
+			mtp,
+			ToFilePart(_dataNameKey),
+			BaseGlobalPath(),
+			_localKey)) {
+		return;
+	}
+
+	while (!mtp.stream.atEnd()) {
+		quint32 blockId = 0;
+		mtp.stream >> blockId;
+		if (!CheckStreamStatus(mtp.stream)
+			|| blockId != dbiMtpAuthorization) {
+			return;
+		}
+		QByteArray serialized;
+		mtp.stream >> serialized;
+		if (!CheckStreamStatus(mtp.stream)) {
+			return;
+		}
+		if (_restoreMtpAuthorization) {
+			_restoreMtpAuthorization(serialized);
+		}
+		return;
+	}
+}
+
+#endif // TDESKTOP_UNIT_TESTS
 
 void Account::writeMapDelayed() {
 	_mapChanged = true;

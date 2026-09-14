@@ -182,6 +182,12 @@ Account::Account(not_null<Main::Account*> owner, const QString &dataName)
 , _mtpConfig([owner]() -> const MTP::Config & {
 	return owner->mtp().config();
 })
+, _serializeMtpAuthorization([owner] {
+	return owner->serializeMtpAuthorization();
+})
+, _restoreMtpAuthorization([owner](const QByteArray &serialized) {
+	owner->setMtpAuthorization(serialized);
+})
 , _serializeSelf([owner] {
 	if (!owner->sessionExists()) {
 		DEBUG_LOG(("AuthSelf Warning: Session does not exist."));
@@ -967,7 +973,11 @@ std::unique_ptr<Main::SessionSettings> Account::applyReadContext(
 	}
 
 	if (!context.mtpAuthorization.isEmpty()) {
-		_owner->setMtpAuthorization(context.mtpAuthorization);
+		if (_restoreMtpAuthorization) {
+			_restoreMtpAuthorization(context.mtpAuthorization);
+		} else {
+			_owner->setMtpAuthorization(context.mtpAuthorization);
+		}
 	} else {
 		for (auto &key : context.mtpLegacyKeys) {
 			_owner->setLegacyMtpKey(std::move(key));
@@ -984,18 +994,6 @@ std::unique_ptr<Main::SessionSettings> Account::applyReadContext(
 	}
 
 	return std::move(context.sessionSettingsStorage);
-}
-
-void Account::writeMtpData() {
-	Expects(_localKey != nullptr);
-
-	const auto serialized = _owner->serializeMtpAuthorization();
-	const auto size = sizeof(quint32) + Serialize::bytearraySize(serialized);
-
-	FileWriteDescriptor mtp(ToFilePart(_dataNameKey), BaseGlobalPath());
-	EncryptedDescriptor data(size);
-	data.stream << quint32(dbiMtpAuthorization) << serialized;
-	mtp.writeEncrypted(data, _localKey);
 }
 
 void Account::readMtpData() {

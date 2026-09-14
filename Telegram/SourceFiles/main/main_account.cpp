@@ -128,6 +128,12 @@ Account::Account(not_null<Domain*> domain, const QString &dataName, int index)
 }
 
 Account::~Account() {
+	// Auth keys are normally persisted from a postponed write request. During
+	// shutdown the event loop can finish before that callback runs, so take a
+	// final snapshot while the MTP instance still owns the current key.
+	if (_mtp) {
+		_local->writeMtpData();
+	}
 	if (const auto session = maybeSession()) {
 		session->saveSettingsNowIfNeeded();
 		_local->writeSearchSuggestionsIfNeeded();
@@ -336,6 +342,10 @@ void Account::createSession(
 	if (!_mtpKeysToDestroy.empty()) {
 		destroyMtpKeys(base::take(_mtpKeysToDestroy));
 	}
+	// The key-write notification is postponed from the MTP session thread.
+	// Persist once the account is actually authorized, before the main UI can
+	// be closed by a shutdown or crash.
+	local().writeMtpData();
 
 	Ensures(_session != nullptr);
 }

@@ -68,7 +68,9 @@ public:
 		const QString &basePath,
 		MTP::AuthKeyPtr localKey,
 		std::shared_ptr<const MTP::Config> config,
-		bool hasStoredCustomServer);
+		bool hasStoredCustomServer,
+		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
+		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr);
 #endif
 	~Account();
 
@@ -112,6 +114,9 @@ public:
 	void writeSessionSettings();
 	void writeMtpData();
 	bool writeMtpConfig(bool sync = false);
+#ifdef TDESKTOP_UNIT_TESTS
+	void readMtpDataForTest();
+#endif
 
 	void registerDraftSource(
 		not_null<History*> history,
@@ -367,6 +372,8 @@ private:
 	QByteArray _downloadsSerialized;
 	Fn<std::optional<QByteArray>()> _downloadsSerialize;
 	Fn<const MTP::Config&()> _mtpConfig;
+	Fn<QByteArray()> _serializeMtpAuthorization;
+	Fn<void(const QByteArray &)> _restoreMtpAuthorization;
 	Fn<QByteArray()> _serializeSelf;
 	Fn<void()> _queueMapWrite;
 

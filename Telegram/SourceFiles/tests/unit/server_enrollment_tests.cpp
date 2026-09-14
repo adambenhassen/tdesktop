@@ -70,12 +70,16 @@ MakeEnrollmentServerKey() {
 
 [[nodiscard]] std::unique_ptr<Storage::Account> MakeEnrollmentStorageAccount(
 		const QString &basePath,
-		const MTP::AuthKeyPtr &key) {
+		const MTP::AuthKeyPtr &key,
+		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
+		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr) {
 	return std::make_unique<Storage::Account>(
 		basePath,
 		key,
 		MakeEnrollmentConfig(),
-		false);
+		false,
+		std::move(serializeMtpAuthorization),
+		std::move(restoreMtpAuthorization));
 }
 
 [[nodiscard]] bool HasReadableEnrollmentMap(
@@ -317,6 +321,42 @@ TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
 		false));
 	CHECK(!MTP::ShouldOpenServerEnrollment(false, false));
 	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
+}
+
+TEST_CASE(MtpAuthorizationSurvivesCleanAccountRestart) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	const auto serialized = QByteArray("persisted-auth-key");
+	{
+		auto account = MakeEnrollmentStorageAccount(
+			basePath,
+			key,
+			[serialized] { return serialized; });
+		CHECK(account->writeMtpConfig(true));
+		account->writeMtpData();
+	}
+	Storage::details::Sync();
+
+	auto restored = QByteArray();
+	{
+		auto account = MakeEnrollmentStorageAccount(
+			basePath,
+			key,
+			[] { return QByteArray(); },
+			[&](const QByteArray &value) { restored = value; });
+		account->readMtpDataForTest();
+	}
+
+	CHECK_EQ(restored, serialized);
 }
 
 TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {
