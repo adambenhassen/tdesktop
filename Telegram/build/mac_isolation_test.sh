@@ -984,7 +984,7 @@ start_pid_observer() {
 	# One fs_usage owner is serialized across tracked PIDs because the
 	# kernel ktrace facility rejects overlapping fs_usage sessions.
 	exec_observer_pid="$observer_pid"
-	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } syscall::*fork*:return /ppid == $target_pid && arg1 == 0/ { printf(\"fork-child-stopped parent=%d child=%d\\n\", ppid, pid); stop(); }"
+	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } syscall::*fork*:return /pid != $target_pid && ppid == $target_pid/ { printf(\"fork-child-stopped parent=%d child=%d\\n\", ppid, pid); stop(); }"
 	start_privileged_observer /usr/sbin/dtrace -w -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
 	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
