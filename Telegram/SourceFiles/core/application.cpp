@@ -266,6 +266,15 @@ Application::~Application() {
 }
 
 void Application::run() {
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")
+		|| qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
+		// The regression exercises QWidget paths only. Keep unrelated GPU
+		// probing out of the headless process before its first RpWindow.
+		Ui::GL::ForceDisable(true);
+	}
+#endif // TDESKTOP_LIFECYCLE_REGRESSION
+
 	// Depends on OpenSSL on macOS, so on ThirdParty::start().
 	// Depends on notifications settings.
 	_notifications = std::make_unique<Window::Notifications::System>();
