@@ -203,8 +203,6 @@ jobs:
           ready=false
           if [ "${{ steps.isolation.outcome }}" = "success" ]; then
             ready=true
-          elif [ -s "$evidence/status.txt" ] && grep -q '^UNAVAILABLE:' "$evidence/status.txt"; then
-            ready=true
           fi
           printf 'artifact_ready=%s\n' "$ready" > "$evidence/artifact-publication.txt"
           echo "ARTIFACT_READY=$ready" >> "$GITHUB_ENV"

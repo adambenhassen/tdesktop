@@ -717,6 +717,7 @@ stop_spawn_observer_control() {
 
 control_observer_unavailable() {
 	local detail="$*"
+	record_lifecycle_observer_diagnostics
 	if [ -n "$CONTROL_RELEASE" ]; then
 		touch "$CONTROL_RELEASE"
 	fi
@@ -724,11 +725,41 @@ control_observer_unavailable() {
 	unavailable "$detail; see lifecycle-observer-control.txt and lifecycle-observer-control-trace.txt"
 }
 
+record_lifecycle_observer_diagnostics() {
+	local owner_pid="${CONTROL_DTRACE_PID:-}"
+	local trace_bytes
+	trace_bytes="$(wc -c < "${CONTROL_TRACE:-/dev/null}" 2>/dev/null || printf 'unavailable')"
+	{
+		echo "startup_diagnostics=begin"
+		echo "observer_owner_pid=${owner_pid:-missing}"
+		if [ -n "$owner_pid" ]; then
+			echo "observer_owner_state=$(ps -p "$owner_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+			echo "observer_owner_command=$(process_command "$owner_pid")"
+			echo "observer_children_begin"
+			ps -axo pid=,ppid=,state=,command= 2>/dev/null | awk -v parent="$owner_pid" '$2 == parent' || true
+			echo "observer_children_end"
+		fi
+		echo "trace_path=${CONTROL_TRACE:-missing}"
+		echo "trace_bytes=$trace_bytes"
+		echo "trace_tail_begin"
+		if [ -n "${CONTROL_TRACE:-}" ] && [ -e "$CONTROL_TRACE" ]; then
+			tail -n 20 "$CONTROL_TRACE" || true
+		else
+			echo "trace_missing"
+		fi
+		echo "trace_tail_end"
+		echo "startup_diagnostics=end"
+	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
+}
+
 run_lifecycle_observer_control() {
 	local control_log="$EVIDENCE_DIR/lifecycle-observer-control-helper.log"
 	local dtrace_program
 	local helper_status=0
 	local child_pid
+	local readiness_attempt
+	local readiness_attempts=3
+	local ready=0
 	CONTROL_READY="$RUN_ROOT/observer-control-ready"
 	CONTROL_RELEASE="$RUN_ROOT/observer-control-release"
 	CONTROL_RESULT="$RUN_ROOT/observer-control-result"
@@ -737,6 +768,7 @@ run_lifecycle_observer_control() {
 	{
 		echo "observer=dtrace syscall write readiness and fork:return"
 		echo "control=python os.fork child os._exit without exec"
+		echo "readiness_attempts=$readiness_attempts"
 		echo "result=NOT_RUN"
 	} > "$EVIDENCE_DIR/lifecycle-observer-control.txt"
 	if [ ! -x /usr/sbin/dtrace ]; then
@@ -776,9 +808,33 @@ PY
 		echo "parent_pid=$CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
 	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
-	start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1
-	CONTROL_DTRACE_PID=$OBSERVER_LAUNCH_PID
-	if ! wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" "observer-ready" 10; then
+	for readiness_attempt in $(seq 1 "$readiness_attempts"); do
+		if [ "$readiness_attempt" -gt 1 ]; then
+			: > "$CONTROL_TRACE"
+		fi
+		start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1
+		CONTROL_DTRACE_PID=$OBSERVER_LAUNCH_PID
+		printf 'readiness_attempt=%s observer_owner_pid=%s\n' \
+			"$readiness_attempt" "$CONTROL_DTRACE_PID" >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
+		if wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" "observer-ready" 10; then
+			printf 'readiness_attempt=%s result=PASS\n' "$readiness_attempt" >> \
+				"$EVIDENCE_DIR/lifecycle-observer-control.txt"
+			ready=1
+			break
+		fi
+		record_lifecycle_observer_diagnostics
+		cp "$CONTROL_TRACE" \
+			"$EVIDENCE_DIR/lifecycle-observer-control-trace-attempt-$readiness_attempt.txt" 2>/dev/null || true
+		if ! stop_observer_process "lifecycle-dtrace-startup-$readiness_attempt" \
+			"$CONTROL_DTRACE_PID" "dtrace" "$CONTROL_TRACE"; then
+			control_observer_unavailable "fork observer control dtrace startup attempt $readiness_attempt could not shut down cleanly"
+		fi
+		CONTROL_DTRACE_PID=""
+		if [ "$readiness_attempt" -lt "$readiness_attempts" ]; then
+			sleep 1
+		fi
+	done
+	if [ "$ready" -ne 1 ]; then
 		control_observer_unavailable "fork observer control did not report dtrace readiness"
 	fi
 	touch "$CONTROL_RELEASE"
