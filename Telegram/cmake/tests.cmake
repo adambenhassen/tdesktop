@@ -13,6 +13,11 @@ target_compile_definitions(test_text PRIVATE
     TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
 )
 
+target_precompile_headers(test_text PRIVATE
+    ${src_loc}/stdafx.h
+    ${src_loc}/mtproto/mtproto_pch.h
+)
+
 nice_target_sources(test_text ${src_loc}
 PRIVATE
     intro/intro_signup_name.cpp
