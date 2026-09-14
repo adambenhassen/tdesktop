@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
 #include "ui/widgets/rp_window.h"
+#include "window/window_controller.h"
 
 #include <QApplication>
 #include <QEventLoop>
@@ -54,12 +55,11 @@ void FinishStepAnimation(not_null<Intro::details::Step*> step) {
 } // namespace
 
 int RunSignupControlsRegression() {
-	const auto primary = Core::App().activePrimaryWindow();
 	const auto &domain = Core::App().domain();
-	if (!primary || !domain.started() || domain.accounts().empty()) {
+	if (!domain.started() || domain.accounts().empty()) {
 		return 1;
 	}
-	const auto controller = not_null<Window::Controller*>(primary);
+	auto controller = std::make_unique<Window::Controller>();
 	const auto account = not_null<Main::Account*>(
 		domain.accounts().front().account.get());
 
@@ -75,7 +75,7 @@ int RunSignupControlsRegression() {
 	}) {
 		auto intro = std::make_unique<Intro::Widget>(
 			window->body(),
-			controller,
+			not_null<Window::Controller*>(controller.get()),
 			account,
 			Intro::EnterPoint::Start,
 			nullptr);
