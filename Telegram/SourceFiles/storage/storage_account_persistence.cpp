@@ -116,9 +116,14 @@ Account::~Account() {
 void Account::writeMtpData() {
 	Expects(_localKey != nullptr);
 
+#ifdef TDESKTOP_UNIT_TESTS
+	Expects(_serializeMtpAuthorization != nullptr);
+	const auto serialized = _serializeMtpAuthorization();
+#else
 	const auto serialized = _serializeMtpAuthorization
 		? _serializeMtpAuthorization()
 		: _owner->serializeMtpAuthorization();
+#endif
 	const auto size = sizeof(quint32) + Serialize::bytearraySize(serialized);
 
 	FileWriteDescriptor mtp(ToFilePart(_dataNameKey), BaseGlobalPath());
