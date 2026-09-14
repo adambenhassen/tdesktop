@@ -20,7 +20,7 @@ jobs:
     # This fork cannot schedule a depot label, and a build that queues forever
     # is not a build. macos-latest is Apple Silicon, which is what we ship.
     runs-on: macos-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     strategy:
       matrix:
