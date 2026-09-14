@@ -79,7 +79,7 @@ public:
 		Fn<void(Fn<void()> callback)> callback);
 
 	void prepareShowAnimated(Step *after);
-	void showAnimated(Animate animate);
+	virtual void showAnimated(Animate animate);
 	void showFast();
 	[[nodiscard]] bool animating() const;
 	void setShowAnimationClipping(QRect clipping);

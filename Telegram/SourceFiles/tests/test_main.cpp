@@ -198,7 +198,7 @@ int main(int argc, char *argv[]) {
 	UiIntegration ui;
 	Ui::Integration::Set(&ui);
 
-	InvokeQueued(&app, [=] {
+	InvokeQueued(&app, [&app, chosen] {
 		new Ui::Animations::Manager();
 		style::StartManager(chosen);
 

@@ -62,13 +62,17 @@ void RunSignupControlsRegression(not_null<Ui::RpWidget*> root) {
 		password->resize(size);
 		password->showAnimated(Intro::details::Animate::Forward);
 		CheckSignupControl(password->firstTabWidget(), password);
-		const auto fields = password->findChildren<Ui::PasswordInput*>(
+		const auto fields = password->findChildren<QWidget*>(
 			QString(),
 			Qt::FindDirectChildrenOnly);
-		Expects(fields.size() == 2);
+		auto found = 0;
 		for (const auto field : fields) {
-			CheckSignupControl(field, password);
+			if (dynamic_cast<Ui::PasswordInput*>(field)) {
+				++found;
+				CheckSignupControl(field, password);
+			}
 		}
+		Expects(found == 2);
 
 		name->hide();
 		password->hide();
