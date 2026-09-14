@@ -60,6 +60,7 @@ PRIVATE
     data/data_peer_id.cpp
     intro/intro_server_discovery.cpp
     intro/intro_username_validation.cpp
+    main/main_account_persistence.cpp
     storage/details/storage_file_utilities.cpp
     storage/storage_account_persistence.cpp
     tests/unit/intro_username_validation_tests.cpp

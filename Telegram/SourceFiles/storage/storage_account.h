@@ -70,7 +70,8 @@ public:
 		std::shared_ptr<const MTP::Config> config,
 		bool hasStoredCustomServer,
 		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
-		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr);
+		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
+		Fn<bool()> writeMtpAuthorizationOverride = nullptr);
 #endif
 	~Account();
 
@@ -101,12 +102,15 @@ public:
 	[[nodiscard]] bool customServerPinUnknown() const {
 		return _customServerPinUnknown;
 	}
+	[[nodiscard]] bool mtpAuthorizationWriteFailed() const {
+		return _mtpAuthorizationWriteFailed;
+	}
 	// Persist the reason an account had to be blocked, so the block
 	// survives a restart on its own: the blocked config is never
 	// written back, and the prefs that failed to read are deleted.
 	void writeCustomServerBlocked(bool pinUnknown);
 	// Forget which server this account uses, on the user's explicit
-	// choice. Clears the two markers and nothing else — the block is
+	// choice. Clears the markers and nothing else — the block is
 	// otherwise terminal, since only a config write clears them and a
 	// blocked account never performs one.
 	void clearCustomServerBlocked();
@@ -116,10 +120,15 @@ public:
 	// Both the pin marker/config and the current authorization snapshot are
 	// written synchronously before either lifecycle path exposes or closes it.
 	bool writeMtpAuthorization();
+	// Persist a fail-closed marker when the final authorization snapshot could
+	// not be written. This marker is independent of the config blob and must
+	// survive a restart before any network or account request is admitted.
+	bool writeMtpAuthorizationFailure();
 	bool writeMtpData(bool sync = false);
 	bool writeMtpConfig(bool sync = false);
 #ifdef TDESKTOP_UNIT_TESTS
 	void readMtpDataForTest();
+	void readMtpAuthorizationFailureMarkerForTest();
 #endif
 
 	void registerDraftSource(
@@ -295,6 +304,8 @@ private:
 
 	std::unique_ptr<MTP::Config> readMtpConfig();
 	void readMtpData();
+	void readMtpAuthorizationFailureMarker();
+	bool clearMtpAuthorizationFailureMarker();
 	// Read the persisted pin marker before readMtpConfig(), so that a
 	// corrupted or truncated config blob on a pinned account still
 	// fails closed.
@@ -359,6 +370,7 @@ private:
 	bool _prefsReadFailed = false;
 	bool _hasStoredCustomServer = false;
 	bool _customServerPinUnknown = false;
+	bool _mtpAuthorizationWriteFailed = false;
 
 	base::flat_map<PeerId, FileKey> _draftsMap;
 	base::flat_map<PeerId, FileKey> _draftCursorsMap;
@@ -378,6 +390,9 @@ private:
 	Fn<const MTP::Config&()> _mtpConfig;
 	Fn<QByteArray()> _serializeMtpAuthorization;
 	Fn<void(const QByteArray &)> _restoreMtpAuthorization;
+#ifdef TDESKTOP_UNIT_TESTS
+	Fn<bool()> _writeMtpAuthorizationOverride;
+#endif
 	Fn<QByteArray()> _serializeSelf;
 	Fn<void()> _queueMapWrite;
 

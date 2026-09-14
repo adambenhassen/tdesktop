@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QApplication>
 #include <QAbstractNativeEventFilter>
 #include <QScreen>
+#include <QTimer>
 #include <QThread>
 #include <QDir>
 #include <QtCore/qmath.h>
@@ -212,6 +213,9 @@ int main(int argc, char *argv[]) {
 
 		RunSignupControlsRegression(window->body());
 		test(window, window->body());
+		if (qEnvironmentVariableIsSet("TDESKTOP_TEST_EXIT")) {
+			QTimer::singleShot(0, &app, &QCoreApplication::quit);
+		}
 	});
 
 	return app.exec();

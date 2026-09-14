@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings.h"
 
 #include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
 namespace Storage {
 namespace {
@@ -61,6 +63,10 @@ enum { // Local Storage Keys
 
 constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
 constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
+constexpr auto kMtpAuthorizationWriteFailedPref
+	= "mtp_authorization_write_failed"_cs;
+const auto kMtpAuthorizationWriteFailedFile
+	= u"mtp_authorization_write_failed"_q;
 
 [[nodiscard]] QString BaseGlobalPath() {
 #ifdef TDESKTOP_UNIT_TESTS
@@ -80,7 +86,8 @@ Account::Account(
 		std::shared_ptr<const MTP::Config> config,
 		bool hasStoredCustomServer,
 		Fn<QByteArray()> serializeMtpAuthorization,
-		Fn<void(const QByteArray &)> restoreMtpAuthorization)
+		Fn<void(const QByteArray &)> restoreMtpAuthorization,
+		Fn<bool()> writeMtpAuthorizationOverride)
 : _owner(nullptr)
 , _basePath(basePath.endsWith(QDir::separator())
 	? basePath
@@ -92,6 +99,7 @@ Account::Account(
 })
 , _serializeMtpAuthorization(std::move(serializeMtpAuthorization))
 , _restoreMtpAuthorization(std::move(restoreMtpAuthorization))
+, _writeMtpAuthorizationOverride(std::move(writeMtpAuthorizationOverride))
 , _serializeSelf(nullptr)
 , _queueMapWrite(nullptr)
 , _writeMapTimer([this] { writeMap(); })
@@ -114,7 +122,42 @@ Account::~Account() {
 }
 
 bool Account::writeMtpAuthorization() {
-	return writeMtpConfig(true) && writeMtpData(true);
+#ifdef TDESKTOP_UNIT_TESTS
+	if (_writeMtpAuthorizationOverride) {
+		return _writeMtpAuthorizationOverride();
+	}
+#endif
+	if (!writeMtpConfig(true) || !writeMtpData(true)) {
+		return false;
+	}
+	if (_mtpAuthorizationWriteFailed) {
+		clearPref(kMtpAuthorizationWriteFailedPref);
+		if (!writePrefs(true)) {
+			return false;
+		}
+		if (!clearMtpAuthorizationFailureMarker()) {
+			return false;
+		}
+		_mtpAuthorizationWriteFailed = false;
+	}
+	return true;
+}
+
+bool Account::writeMtpAuthorizationFailure() {
+	Expects(_localKey != nullptr);
+
+	writePref<bool>(kMtpAuthorizationWriteFailedPref, true);
+	const auto prefsWritten = writePrefs(true);
+	EncryptedDescriptor marker(sizeof(quint32));
+	marker.stream << quint32(1);
+	FileWriteDescriptor file(
+		kMtpAuthorizationWriteFailedFile,
+		_basePath,
+		true);
+	file.writeEncrypted(marker, _localKey);
+	const auto markerWritten = file.finish();
+	_mtpAuthorizationWriteFailed = true;
+	return prefsWritten && markerWritten;
 }
 
 bool Account::writeMtpData(bool sync) {
@@ -168,7 +211,52 @@ void Account::readMtpDataForTest() {
 	}
 }
 
+void Account::readMtpAuthorizationFailureMarkerForTest() {
+	readMtpAuthorizationFailureMarker();
+}
+
 #endif // TDESKTOP_UNIT_TESTS
+
+void Account::readMtpAuthorizationFailureMarker() {
+	const auto base = _basePath + kMtpAuthorizationWriteFailedFile;
+	const auto exists = QFileInfo::exists(base + 's')
+		|| QFileInfo::exists(base + '0')
+		|| QFileInfo::exists(base + '1');
+	if (!exists) {
+		return;
+	}
+
+	FileReadDescriptor marker;
+	if (!ReadEncryptedFile(
+			marker,
+			kMtpAuthorizationWriteFailedFile,
+			_basePath,
+			_localKey)) {
+		_mtpAuthorizationWriteFailed = true;
+		return;
+	}
+	quint32 value = 0;
+	marker.stream >> value;
+	if (!CheckStreamStatus(marker.stream) || value != 1) {
+		// A marker file is evidence that a final authorization write was
+		// attempted. Treat a damaged marker as failed closed too.
+		_mtpAuthorizationWriteFailed = true;
+		return;
+	}
+	_mtpAuthorizationWriteFailed = true;
+}
+
+bool Account::clearMtpAuthorizationFailureMarker() {
+	const auto base = _basePath + kMtpAuthorizationWriteFailedFile;
+	auto result = true;
+	for (const auto suffix : { 's', '0', '1' }) {
+		const auto path = base + suffix;
+		if (QFileInfo::exists(path) && !QFile::remove(path)) {
+			result = false;
+		}
+	}
+	return result;
+}
 
 void Account::writeMapDelayed() {
 	_mapChanged = true;

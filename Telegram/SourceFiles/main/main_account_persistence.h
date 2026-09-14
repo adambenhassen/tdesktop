@@ -9,21 +9,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/basic_types.h"
 
+namespace Storage {
+class Account;
+} // namespace Storage
+
 namespace Main::details {
 
-// Keep the durable authorization boundary identical for post-auth startup
-// and account teardown. The caller owns the state transition on either side
-// of the write, so a failed commit cannot publish or discard that state.
-[[nodiscard]] inline bool CommitMtpAuthorization(
-	Fn<bool()> write,
+// Keep the durable authorization boundary identical for the two real
+// Main::Account lifecycle callers. The storage object is the mandatory seam,
+// so tests cannot bypass the production write path with a synthetic writer.
+[[nodiscard]] bool CommitPostAuthMtpAuthorization(
+	not_null<Storage::Account*> local,
 	Fn<void()> committed,
-	Fn<void()> failed) {
-	if (!write()) {
-		failed();
-		return false;
-	}
-	committed();
-	return true;
-}
+	Fn<void()> failed);
+
+[[nodiscard]] bool CommitTeardownMtpAuthorization(
+	not_null<Storage::Account*> local,
+	Fn<void()> committed,
+	Fn<void()> failed);
 
 } // namespace Main::details

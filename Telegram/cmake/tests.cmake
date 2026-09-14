@@ -11,6 +11,10 @@ target_include_directories(test_text PRIVATE ${src_loc})
 
 nice_target_sources(test_text ${src_loc}
 PRIVATE
+    intro/intro_signup_name.cpp
+    intro/intro_signup_password.cpp
+    intro/intro_step.cpp
+    intro/intro_username_validation.cpp
     tests/test_main.cpp
     tests/test_main.h
     tests/test_signup_controls.cpp
@@ -31,10 +35,15 @@ PRIVATE
 
 target_link_libraries(test_text
 PRIVATE
-    desktop-app::lib_base
-    desktop-app::lib_crl
-    desktop-app::lib_ui
-    desktop-app::external_qt
+	tdesktop::td_mtproto
+	tdesktop::td_scheme
+	tdesktop::td_lang
+	desktop-app::lib_base
+	desktop-app::lib_crl
+	desktop-app::lib_storage
+	desktop-app::lib_ui
+	desktop-app::lib_webview
+	desktop-app::external_qt
     desktop-app::external_qt_static_plugins
 )
 

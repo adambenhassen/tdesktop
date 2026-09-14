@@ -1413,6 +1413,8 @@ PRIVATE
     layout/layout_item_base.h
     main/main_account.cpp
     main/main_account.h
+    main/main_account_persistence.cpp
+    main/main_account_persistence.h
     main/main_app_config.cpp
     main/main_app_config.h
     main/main_app_config_values.cpp

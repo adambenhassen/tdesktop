@@ -73,14 +73,16 @@ MakeEnrollmentServerKey() {
 		const QString &basePath,
 		const MTP::AuthKeyPtr &key,
 		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
-		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr) {
+		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
+		Fn<bool()> writeMtpAuthorizationOverride = nullptr) {
 	return std::make_unique<Storage::Account>(
 		basePath,
 		key,
 		MakeEnrollmentConfig(),
 		false,
 		std::move(serializeMtpAuthorization),
-		std::move(restoreMtpAuthorization));
+		std::move(restoreMtpAuthorization),
+		std::move(writeMtpAuthorizationOverride));
 }
 
 [[nodiscard]] bool HasReadableEnrollmentMap(
@@ -349,8 +351,8 @@ TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {
 		// This is the mandatory synchronous seam used by Main::Account's
 		// post-auth and clean-teardown paths.
 		auto published = false;
-		CHECK(Main::details::CommitMtpAuthorization(
-			[&] { return account->writeMtpAuthorization(); },
+		CHECK(Main::details::CommitPostAuthMtpAuthorization(
+			account.get(),
 			[&] { published = true; },
 			[] {}));
 		CHECK(published);
@@ -376,43 +378,99 @@ TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {
 }
 
 TEST_CASE(PostAuthAuthorizationCommitFailureKeepsSessionClosed) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
 	auto writes = 0;
-	auto committed = 0;
-	auto failed = 0;
-	const auto result = Main::details::CommitMtpAuthorization(
+	auto account = MakeEnrollmentStorageAccount(
+		basePath,
+		MakeEnrollmentStorageKey(),
+		nullptr,
+		nullptr,
 		[&] {
 			++writes;
 			return false;
-		},
-		[&] { ++committed; },
-		[&] { ++failed; });
+		});
+	auto published = false;
+	auto failed = false;
+	const auto result = Main::details::CommitPostAuthMtpAuthorization(
+		account.get(),
+		[&] { published = true; },
+		[&] {
+			failed = account->writeMtpAuthorizationFailure();
+		});
 
 	CHECK(!result);
 	CHECK_EQ(writes, 1);
-	CHECK_EQ(committed, 0);
-	CHECK_EQ(failed, 1);
+	CHECK(!published);
+	CHECK(failed);
+	CHECK(account->mtpAuthorizationWriteFailed());
+	account.reset();
+
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		MakeEnrollmentStorageKey());
+	restarted->readMtpAuthorizationFailureMarkerForTest();
+	CHECK(restarted->mtpAuthorizationWriteFailed());
 }
 
 TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
-	const auto durable = true;
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	const auto serialized = QByteArray("last-durable-auth-key");
+	auto account = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[serialized] { return serialized; },
+		nullptr,
+		[] { return false; });
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+
 	auto published = false;
 	auto blocked = false;
-	const auto result = Main::details::CommitMtpAuthorization(
-		[] { return false; },
+	const auto result = Main::details::CommitTeardownMtpAuthorization(
+		account.get(),
+		[&] { published = true; },
 		[&] {
-			published = true;
-		},
-		[&] {
-			// A failed teardown leaves the last durable snapshot untouched
-			// and blocks the account instead of publishing a new state.
-			blocked = true;
+			blocked = account->writeMtpAuthorizationFailure();
 			published = false;
 		});
 
 	CHECK(!result);
-	CHECK(durable);
 	CHECK(!published);
 	CHECK(blocked);
+	CHECK(account->mtpAuthorizationWriteFailed());
+	account.reset();
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; });
+	restarted->readMtpAuthorizationFailureMarkerForTest();
+	CHECK(restarted->mtpAuthorizationWriteFailed());
+	const auto config = ReadEnrollmentConfig(basePath, key);
+	CHECK(config != nullptr);
+	CHECK(config && config->hasCustomServer());
+	CHECK_EQ(restored, serialized);
 }
 
 TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {

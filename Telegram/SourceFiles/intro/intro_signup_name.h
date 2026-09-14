@@ -30,6 +30,7 @@ public:
 
 	void setInnerFocus() override;
 	void activate() override;
+	void showAnimated(Animate animate) override;
 	void submit() override;
 
 	[[nodiscard]] int nextButtonTop() const override;

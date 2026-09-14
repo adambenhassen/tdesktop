@@ -7,9 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/test_main.h"
 
-#include "intro/intro_signup_controls.h"
+#include "intro/intro_signup_name.h"
+#include "intro/intro_signup_password.h"
+#include "intro/intro_widget.h"
+#include "ui/widgets/fields/password_input.h"
 
-#include <QLineEdit>
+#include <QApplication>
 #include <QSize>
 
 namespace Test {
@@ -17,40 +20,60 @@ namespace {
 
 void CheckSignupControl(
 		QWidget *control,
-		not_null<Ui::RpWidget*> step) {
+		not_null<Intro::details::Step*> step) {
 	Expects(control != nullptr);
 	Expects(control->isVisibleTo(step));
 	Expects(control->isEnabled());
 	Expects(control->focusPolicy() != Qt::NoFocus);
 	Expects(step->rect().contains(control->geometry()));
+
+	control->setFocus(Qt::OtherFocusReason);
+	QApplication::processEvents();
+	const auto focused = QApplication::focusWidget();
+	Expects(focused == control || control->isAncestorOf(focused));
 }
 
 } // namespace
 
 void RunSignupControlsRegression(not_null<Ui::RpWidget*> root) {
-	// These are the two desktop viewport sizes used by the enrollment QA
-	// flow. The transition path is hideChildren() followed by the same
-	// activation seam used by SignUpNameWidget and SignUpPasswordWidget.
-	for (const auto size : { QSize(1024, 768), QSize(1366, 768) }) {
-		auto step = new Ui::RpWidget(root);
-		step->resize(size);
-		step->show();
+	const auto account = not_null<Main::Account*>(
+		reinterpret_cast<Main::Account*>(quintptr(1)));
+	const auto controller = not_null<Window::Controller*>(
+		reinterpret_cast<Window::Controller*>(quintptr(1)));
+	auto data = Intro::details::Data{ controller };
+	data.phone = u"+15550000000"_q;
 
-		auto name = new QLineEdit(step);
-		auto password = new QLineEdit(step);
-		auto repeat = new QLineEdit(step);
-		name->setGeometry(40, 180, 360, 44);
-		password->setGeometry(40, 180, 360, 44);
-		repeat->setGeometry(40, 240, 360, 44);
+	// Drive the actual signup steps through Step::showAnimated(). The
+	// production transition hides every child before the arriving step is
+	// usable, so this catches a regression in either real activator.
+	for (const auto size : { QSize(500, 522), QSize(818, 642), QSize(1100, 780) }) {
+		auto name = new Intro::details::SignUpNameWidget(
+			root,
+			account,
+			&data);
+		name->resize(size);
+		name->showAnimated(Intro::details::Animate::Forward);
+		CheckSignupControl(name->firstTabWidget(), name);
 
-		step->hideChildren();
-		Intro::details::ShowSignupControls(step);
-		CheckSignupControl(name, step);
-		CheckSignupControl(password, step);
-		CheckSignupControl(repeat, step);
+		auto password = new Intro::details::SignUpPasswordWidget(
+			root,
+			account,
+			&data);
+		password->resize(size);
+		password->showAnimated(Intro::details::Animate::Forward);
+		CheckSignupControl(password->firstTabWidget(), password);
+		const auto fields = password->findChildren<Ui::PasswordInput*>(
+			QString(),
+			Qt::FindDirectChildrenOnly);
+		Expects(fields.size() == 2);
+		for (const auto field : fields) {
+			CheckSignupControl(field, password);
+		}
 
-		step->hide();
-		delete step;
+		name->hide();
+		password->hide();
+		delete name;
+		delete password;
 	}
 }
 

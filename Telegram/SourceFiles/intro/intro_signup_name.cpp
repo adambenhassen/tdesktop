@@ -92,6 +92,13 @@ void SignUpNameWidget::activate() {
 	}
 }
 
+void SignUpNameWidget::showAnimated(Animate animate) {
+	Step::showAnimated(animate);
+	// historyMove() starts the arriving step here, without calling
+	// activate(). Restore the real controls on that production transition.
+	ShowSignupControls(this);
+}
+
 void SignUpNameWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
 	_name->moveToLeft(

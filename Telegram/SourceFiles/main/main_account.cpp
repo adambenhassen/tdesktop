@@ -39,10 +39,11 @@ namespace {
 constexpr auto kWideIdsTag = ~uint64(0);
 
 // Why an account that must be pinned to a custom server could not
-// start on it. All three end in the same blocked state — no endpoint,
+// start on it. All end in the same blocked state — no endpoint,
 // no key, no connection — and differ only in what the user is told.
 enum class PinFailure {
 	None,
+	AuthorizationWriteFailed, // A prior auth snapshot did not reach disk.
 	ConfigUnreadable, // Marker set, config blob missing or corrupt.
 	PinMissing,       // Marker set, config parses but carries no pin.
 	MarkerUnreadable, // Prefs unreadable, so pinned-unknown.
@@ -50,6 +51,8 @@ enum class PinFailure {
 
 [[nodiscard]] const char *PinFailureLog(PinFailure failure) {
 	switch (failure) {
+	case PinFailure::AuthorizationWriteFailed:
+		return "previous authorization snapshot was not durable";
 	case PinFailure::ConfigUnreadable: return "config could not be read";
 	case PinFailure::PinMissing: return "config carries no pin";
 	case PinFailure::MarkerUnreadable: return "prefs could not be read";
@@ -63,7 +66,10 @@ enum class PinFailure {
 	// the unreadable-prefs case gets its own cause. Not knowing which
 	// server this account uses is the state that case is reporting, so
 	// the rest of the text must not imply the app knows either.
-	const auto cause = (failure == PinFailure::MarkerUnreadable)
+	const auto cause = (failure == PinFailure::AuthorizationWriteFailed)
+		? u"The last authorization save did not complete, so this account "
+			u"stays blocked rather than risk using a stale key."_q
+		: (failure == PinFailure::MarkerUnreadable)
 		? u"This account's local data could not be read, so there is "
 			u"no way to tell which server it belongs to."_q
 		: u"The saved server settings for this account could not be "
@@ -75,7 +81,7 @@ enum class PinFailure {
 		u"restarts the app. Nothing else is removed — your messages and "
 		u"local data stay. If this account used a private server, its "
 		u"address and key have to be entered again; until they are, "
-		u"this app connects to Telegram's servers.\n\n"
+		u"this app connects to no server.\n\n"
 		u"See 'log.txt' for details."_q;
 }
 
@@ -134,15 +140,20 @@ Account::~Account() {
 	// final durable authorization snapshot while the MTP instance still owns
 	// the current key and pin.
 	if (_mtp) {
-		static_cast<void>(details::CommitMtpAuthorization(
-			[=] { return _local->writeMtpAuthorization(); },
+		static_cast<void>(details::CommitTeardownMtpAuthorization(
+			_local.get(),
 			[] {},
 			[=] {
 				// Keep the last recoverable on-disk binding and key snapshot;
 				// never leave a live instance looking usable after its final
 				// authorization commit failed.
-				LOG(("MTP Error: final authorization snapshot failed; "
-					"keeping the account blocked for restart."));
+				if (!_local->writeMtpAuthorizationFailure()) {
+					LOG(("MTP Error: could not persist the authorization failure "
+						"marker; keeping the account blocked for this shutdown."));
+				} else {
+					LOG(("MTP Error: final authorization snapshot failed; "
+						"keeping the account blocked for restart."));
+				}
 				_mtp->dcOptions().constructBlocked();
 			}));
 	}
@@ -179,7 +190,9 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 	// settles it whatever the marker says; otherwise the marker
 	// decides, and an unreadable marker counts as pinned.
 	const auto failure = [&] {
-		if (config && config->hasCustomServer()) {
+		if (_local->mtpAuthorizationWriteFailed()) {
+			return PinFailure::AuthorizationWriteFailed;
+		} else if (config && config->hasCustomServer()) {
 			return PinFailure::None;
 		} else if (_local->customServerPinUnknown()) {
 			return PinFailure::MarkerUnreadable;
@@ -199,12 +212,13 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 			).arg(QString::fromUtf8(PinFailureLog(failure))));
 		config = std::make_unique<MTP::Config>(MTP::Environment::Production);
 		config->dcOptions().constructBlocked();
-		// Nothing else records this. The blocked config is never
-		// written back, and unreadable prefs are deleted by the read
-		// that failed, so the next start would find no marker and go
-		// to production.
-		_local->writeCustomServerBlocked(
-			failure == PinFailure::MarkerUnreadable);
+		// The authorization-write marker is already durable and has its own
+		// reason. Other startup failures need the custom-server marker because
+		// the blocked config is never written back.
+		if (failure != PinFailure::AuthorizationWriteFailed) {
+			_local->writeCustomServerBlocked(
+				failure == PinFailure::MarkerUnreadable);
+		}
 		// Only a config write clears the markers, and a blocked account
 		// never performs one, so without a way out the block is
 		// terminal — including for an account that never had a custom
@@ -358,8 +372,8 @@ bool Account::createSession(
 			_mtp->dcOptions().constructBlocked();
 		}
 	};
-	const auto committed = details::CommitMtpAuthorization(
-		[=] { return local().writeMtpAuthorization(); },
+	const auto committed = details::CommitPostAuthMtpAuthorization(
+		_local.get(),
 		[=] {
 			if (!_mtpKeysToDestroy.empty()) {
 				destroyMtpKeys(base::take(_mtpKeysToDestroy));
@@ -368,6 +382,10 @@ bool Account::createSession(
 			_sessionUserId = 0;
 		},
 		[=] {
+			if (!local().writeMtpAuthorizationFailure()) {
+				LOG(("MTP Error: could not persist the authorization failure "
+					"marker; keeping the account closed."));
+			}
 			LOG(("MTP Error: could not synchronously persist the authorization "
 				"state; keeping the account closed."));
 			if (markedAuthorized) {

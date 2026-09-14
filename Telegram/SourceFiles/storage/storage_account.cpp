@@ -116,6 +116,8 @@ auto EmptyMessageDraftSources()
 
 constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
 constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
+constexpr auto kMtpAuthorizationWriteFailedPref
+	= "mtp_authorization_write_failed"_cs;
 
 [[nodiscard]] FileKey ComputeDataNameKey(const QString &dataName) {
 	// We dropped old test authorizations when migrated to multi auth.
@@ -304,6 +306,9 @@ base::flat_set<QString> Account::collectGoodNames() const {
 		"map1",
 		"maps",
 		"configs",
+		"mtp_authorization_write_faileds",
+		"mtp_authorization_write_failed0",
+		"mtp_authorization_write_failed1",
 	};
 	const auto push = [&](FileKey key) {
 		if (!key) {
@@ -600,10 +605,12 @@ Account::ReadMapResult Account::readMapWith(
 	readMtpData();
 
 	DEBUG_LOG(("selfSerialized set: %1").arg(selfSerialized.size()));
-	_owner->setSessionFromStorage(
-		std::move(stored),
-		std::move(selfSerialized),
-		_oldMapVersion);
+	if (_owner) {
+		_owner->setSessionFromStorage(
+			std::move(stored),
+			std::move(selfSerialized),
+			_oldMapVersion);
+	}
 
 	LOG(("Map read time: %1").arg(crl::now() - ms));
 
@@ -975,10 +982,10 @@ std::unique_ptr<Main::SessionSettings> Account::applyReadContext(
 	if (!context.mtpAuthorization.isEmpty()) {
 		if (_restoreMtpAuthorization) {
 			_restoreMtpAuthorization(context.mtpAuthorization);
-		} else {
+		} else if (_owner) {
 			_owner->setMtpAuthorization(context.mtpAuthorization);
 		}
-	} else {
+	} else if (_owner) {
 		for (auto &key : context.mtpLegacyKeys) {
 			_owner->setLegacyMtpKey(std::move(key));
 		}
@@ -1035,6 +1042,9 @@ void Account::readStoredCustomServerPin() {
 	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
 	_customServerPinUnknown = _prefsReadFailed
 		|| readPref<bool>(kCustomServerPinUnknownPref);
+	_mtpAuthorizationWriteFailed = readPref<bool>(
+		kMtpAuthorizationWriteFailedPref);
+	readMtpAuthorizationFailureMarker();
 }
 
 void Account::writeCustomServerBlocked(bool pinUnknown) {
@@ -1064,14 +1074,18 @@ void Account::clearCustomServerBlocked() {
 	Expects(_localKey != nullptr);
 
 	// The user chose to forget which server this account uses. Only the
-	// two markers go: the account, its keys and its local history stay
+	// the markers go: the account, its keys and its local history stay
 	// exactly as they are, because what failed here is a settings read,
 	// not anything the data itself did wrong.
 	_hasStoredCustomServer = false;
 	_customServerPinUnknown = false;
 	clearPref(kCustomServerPinnedPref);
 	clearPref(kCustomServerPinUnknownPref);
-	writePrefs();
+	clearPref(kMtpAuthorizationWriteFailedPref);
+	_mtpAuthorizationWriteFailed = false;
+	if (!writePrefs(true) || !clearMtpAuthorizationFailureMarker()) {
+		LOG(("MTP Error: could not clear the authorization failure marker."));
+	}
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {

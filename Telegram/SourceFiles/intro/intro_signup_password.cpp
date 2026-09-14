@@ -98,6 +98,13 @@ void SignUpPasswordWidget::activate() {
 	_password->setFocusFast();
 }
 
+void SignUpPasswordWidget::showAnimated(Animate animate) {
+	Step::showAnimated(animate);
+	// historyMove() starts the arriving step here, without calling
+	// activate(). Restore both real password controls on that transition.
+	ShowSignupControls(this);
+}
+
 void SignUpPasswordWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
 	_password->moveToLeft(
