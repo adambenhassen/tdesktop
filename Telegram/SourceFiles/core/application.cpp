@@ -95,6 +95,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "core/cached_webview_availability.h"
 #include "test/test_agent.h"
+#include "tests/signup_controls_regression.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
@@ -302,6 +303,12 @@ void Application::run() {
 	Ui::InitTextOptions();
 	Ui::StartCachedCorners();
 	Ui::Emoji::Init();
+
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
+		QCoreApplication::exit(RunSignupControlsRegression());
+		return;
+	}
+
 	Ui::PreloadTextSpoilerMask();
 	startShortcuts();
 	startEmojiImageLoader();

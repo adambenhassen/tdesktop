@@ -8,25 +8,10 @@ add_executable(test_text WIN32)
 init_target(test_text "(tests)")
 
 target_include_directories(test_text PRIVATE ${src_loc})
-target_compile_definitions(test_text PRIVATE
-    TDESKTOP_API_ID=${TDESKTOP_API_ID}
-    TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
-)
-
-target_precompile_headers(test_text PRIVATE
-    ${src_loc}/stdafx.h
-    ${src_loc}/mtproto/mtproto_pch.h
-)
-
 nice_target_sources(test_text ${src_loc}
 PRIVATE
-    intro/intro_signup_name.cpp
-    intro/intro_signup_password.cpp
-    intro/intro_step.cpp
-    intro/intro_username_validation.cpp
     tests/test_main.cpp
     tests/test_main.h
-    tests/test_signup_controls.cpp
     tests/test_text.cpp
 )
 

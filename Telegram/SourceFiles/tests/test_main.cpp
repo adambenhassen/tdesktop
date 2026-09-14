@@ -18,7 +18,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QApplication>
 #include <QAbstractNativeEventFilter>
 #include <QScreen>
-#include <QTimer>
 #include <QThread>
 #include <QDir>
 #include <QtCore/qmath.h>
@@ -198,7 +197,7 @@ int main(int argc, char *argv[]) {
 	UiIntegration ui;
 	Ui::Integration::Set(&ui);
 
-	InvokeQueued(&app, [&app, chosen] {
+	InvokeQueued(&app, [=] {
 		new Ui::Animations::Manager();
 		style::StartManager(chosen);
 
@@ -211,11 +210,7 @@ int main(int argc, char *argv[]) {
 
 		window->setMinimumSize({ scale(240), scale(320) });
 
-		RunSignupControlsRegression(window->body());
 		test(window, window->body());
-		if (qEnvironmentVariableIsSet("TDESKTOP_TEST_EXIT")) {
-			QTimer::singleShot(0, &app, &QCoreApplication::quit);
-		}
 	});
 
 	return app.exec();

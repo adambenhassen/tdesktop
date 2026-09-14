@@ -1429,6 +1429,8 @@ PRIVATE
     main/session/send_as_peers.h
     main/session/session_show.cpp
     main/session/session_show.h
+    tests/signup_controls_regression.cpp
+    tests/signup_controls_regression.h
     media/audio/media_audio.cpp
     media/audio/media_audio.h
     media/audio/media_audio_edit.cpp

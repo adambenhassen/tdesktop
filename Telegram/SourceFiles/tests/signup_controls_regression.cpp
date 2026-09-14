@@ -5,37 +5,50 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
-#include "tests/test_main.h"
+#include "tests/signup_controls_regression.h"
 
 #include "intro/intro_signup_name.h"
 #include "intro/intro_signup_password.h"
 #include "intro/intro_widget.h"
 #include "ui/widgets/fields/password_input.h"
+#include "ui/widgets/rp_window.h"
 
 #include <QApplication>
 #include <QSize>
 
-namespace Test {
 namespace {
 
-void CheckSignupControl(
+bool CheckSignupControl(
 		QWidget *control,
 		not_null<Intro::details::Step*> step) {
-	Expects(control != nullptr);
-	Expects(control->isVisibleTo(step));
-	Expects(control->isEnabled());
-	Expects(control->focusPolicy() != Qt::NoFocus);
-	Expects(step->rect().contains(control->geometry()));
+	if (!control
+		|| !control->isVisibleTo(step)
+		|| !control->isEnabled()
+		|| control->focusPolicy() == Qt::NoFocus
+		|| !step->rect().contains(control->geometry())) {
+		return false;
+	}
 
 	control->setFocus(Qt::OtherFocusReason);
 	QApplication::processEvents();
 	const auto focused = QApplication::focusWidget();
-	Expects(focused == control || control->isAncestorOf(focused));
+	if (focused != control && !control->isAncestorOf(focused)) {
+		return false;
+	}
+
+	const auto center = control->mapToGlobal(control->rect().center());
+	const auto hit = QApplication::widgetAt(center);
+	return hit && (hit == control || control->isAncestorOf(hit));
 }
 
 } // namespace
 
-void RunSignupControlsRegression(not_null<Ui::RpWidget*> root) {
+int RunSignupControlsRegression() {
+	auto window = std::make_unique<Ui::RpWindow>();
+	window->setGeometry({ 100, 100, 1100, 780 });
+	window->show();
+	QApplication::processEvents();
+
 	const auto account = not_null<Main::Account*>(
 		reinterpret_cast<Main::Account*>(quintptr(1)));
 	const auto controller = not_null<Window::Controller*>(
@@ -43,42 +56,59 @@ void RunSignupControlsRegression(not_null<Ui::RpWidget*> root) {
 	auto data = Intro::details::Data{ controller };
 	data.phone = u"+15550000000"_q;
 
-	// Drive the actual signup steps through Step::showAnimated(). The
-	// production transition hides every child before the arriving step is
-	// usable, so this catches a regression in either real activator.
-	for (const auto size : { QSize(500, 522), QSize(818, 642), QSize(1100, 780) }) {
+	for (const auto size : {
+		QSize(500, 522),
+		QSize(818, 642),
+		QSize(1100, 780),
+	}) {
 		auto name = new Intro::details::SignUpNameWidget(
-			root,
+			window->body(),
 			account,
 			&data);
 		name->resize(size);
 		name->showAnimated(Intro::details::Animate::Forward);
-		CheckSignupControl(name->firstTabWidget(), name);
+		if (!CheckSignupControl(name->firstTabWidget(), name)) {
+			delete name;
+			return 1;
+		}
 
 		auto password = new Intro::details::SignUpPasswordWidget(
-			root,
+			window->body(),
 			account,
 			&data);
 		password->resize(size);
 		password->showAnimated(Intro::details::Animate::Forward);
-		CheckSignupControl(password->firstTabWidget(), password);
+		if (!CheckSignupControl(password->firstTabWidget(), password)) {
+			delete name;
+			delete password;
+			return 1;
+		}
+
+		auto found = 0;
 		const auto fields = password->findChildren<QWidget*>(
 			QString(),
 			Qt::FindDirectChildrenOnly);
-		auto found = 0;
 		for (const auto field : fields) {
+			if (dynamic_cast<Ui::PasswordInput*>(field)
+				&& !CheckSignupControl(field, password)) {
+				delete name;
+				delete password;
+				return 1;
+			}
 			if (dynamic_cast<Ui::PasswordInput*>(field)) {
 				++found;
-				CheckSignupControl(field, password);
 			}
 		}
-		Expects(found == 2);
+		if (found != 2) {
+			delete name;
+			delete password;
+			return 1;
+		}
 
-		name->hide();
-		password->hide();
 		delete name;
 		delete password;
 	}
-}
 
-} // namespace Test
+	window->close();
+	return 0;
+}
