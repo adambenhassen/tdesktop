@@ -260,6 +260,7 @@ jobs:
             fi
             DISPLAY=:99 \
             QT_QPA_PLATFORM=xcb \
+            QT_XCB_GL_INTEGRATION=none \
             LIBGL_ALWAYS_SOFTWARE=1 \
             TDESKTOP_SIGNUP_UI_REGRESSION=1 \
             TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
