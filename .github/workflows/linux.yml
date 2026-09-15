@@ -2,6 +2,11 @@ name: Linux.
 
 on:
   push:
+    # Pull requests provide feature-branch validation. A direct push without an
+    # open pull request gets no automatic Linux feedback; use workflow_dispatch
+    # for that opt-in validation.
+    branches:
+      - dev
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -48,9 +53,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # One live build per branch (and one per pull request): a second push
-  # supersedes the run from the first. The default branch is exempt so a
-  # cache-refreshing build always finishes.
+  # One live build per branch and pull request. A new pull-request update
+  # supersedes its prior run. The default branch is exempt so a cache-refreshing
+  # build always finishes.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
 
