@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_changes.h"
+#include "data/data_download_manager.h"
 #include "window/window_controller.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
@@ -378,6 +379,10 @@ bool Account::createSession(
 			if (!_mtpKeysToDestroy.empty()) {
 				destroyMtpKeys(base::take(_mtpKeysToDestroy));
 			}
+			// Session construction can fail the durable authorization commit.
+			// Register it only after that commit succeeds, while it is still
+			// unpublished and before observers see the session.
+			Core::App().downloadManager().trackSession(_session.get());
 			_sessionValue = _session.get();
 			_sessionUserId = 0;
 		},

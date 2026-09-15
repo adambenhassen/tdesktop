@@ -47,7 +47,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_changes.h"
 #include "data/data_user.h"
-#include "data/data_download_manager.h"
 #include "data/stickers/data_stickers.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
@@ -257,8 +256,6 @@ Session::Session(
 	_api->requestNotifySettings(MTP_inputNotifyUsers());
 	_api->requestNotifySettings(MTP_inputNotifyChats());
 	_api->requestNotifySettings(MTP_inputNotifyBroadcasts());
-
-	Core::App().downloadManager().trackSession(this);
 
 	appConfig().value(
 	) | rpl::on_next([=] {
