@@ -336,7 +336,11 @@ void Launcher::init() {
 	prepareSettings();
 	initQtMessageLogging();
 
+#ifdef TDESKTOP_TELEGRAMD
+	QApplication::setApplicationName(u"Telegramd"_q);
+#else // TDESKTOP_TELEGRAMD
 	QApplication::setApplicationName(u"TelegramDesktop"_q);
+#endif // TDESKTOP_TELEGRAMD
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	// fallback session management is useless for tdesktop since it doesn't have
@@ -462,7 +466,11 @@ void Launcher::writeInstallBetaVersionsSetting() {
 }
 
 bool Launcher::checkPortableVersionFolder() {
+#ifdef TDESKTOP_TELEGRAMD
+	return true;
+#else // TDESKTOP_TELEGRAMD
 	return CheckPortableVersionFolder();
+#endif // TDESKTOP_TELEGRAMD
 }
 
 QStringList Launcher::readArguments(int argc, char *argv[]) const {
@@ -607,6 +615,9 @@ void Launcher::processArguments() {
 	gStartInTray = parseResult.contains("-startintray");
 	gQuit = parseResult.contains("-quit");
 	_customWorkingDir = parseResult.value("-workdir", {}).join(QString());
+#ifdef TDESKTOP_TELEGRAMD
+	_customWorkingDir.clear();
+#endif // TDESKTOP_TELEGRAMD
 	if (!_customWorkingDir.isEmpty()) {
 		_customWorkingDir = QDir(_customWorkingDir).absolutePath() + '/';
 	}

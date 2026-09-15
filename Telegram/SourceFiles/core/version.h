@@ -20,8 +20,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // used in Updater.cpp and Setup.iss for Windows
 constexpr auto AppId = "{53F49750-6209-4FBF-9CA8-7A333C87D1ED}"_cs;
 constexpr auto AppNameOld = "Telegram Win (Unofficial)"_cs;
+#ifdef TDESKTOP_TELEGRAMD
+constexpr auto AppName = "Telegramd"_cs;
+constexpr auto AppFile = "Telegramd"_cs;
+#else // TDESKTOP_TELEGRAMD
 constexpr auto AppName = "Telegram Desktop"_cs;
 constexpr auto AppFile = "Telegram"_cs;
+#endif // TDESKTOP_TELEGRAMD
+#ifdef TDESKTOP_TELEGRAMD
+constexpr auto MacSupportDirectoryName = "Telegramd"_cs;
+#else // TDESKTOP_TELEGRAMD
+constexpr auto MacSupportDirectoryName = AppName;
+#endif // TDESKTOP_TELEGRAMD
 constexpr auto AppVersion = 7000009;
 constexpr auto AppVersionStr = "7.0.9";
 constexpr auto AppBetaVersion = false;

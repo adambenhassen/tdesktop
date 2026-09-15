@@ -9,6 +9,9 @@ jobs:
 
   macos:
     name: MacOS
+    # This legacy cache workflow may build locally, but it deliberately does
+    # not publish an app artifact. Artifact publication belongs to mac.yml,
+    # which runs the static identity and runtime isolation gates first.
     # This fork cannot schedule a depot label, and a build that queues forever
     # is not a build.
     runs-on: macos-latest
@@ -25,7 +28,6 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: ""
       CMAKE_PREFIX_PATH: "/opt/homebrew/opt/ffmpeg@6:/opt/homebrew/opt/openal-soft"
       TDE2E: "51743dfd01dff6179e2d8f7095729caa4e2222e9"
-      UPLOAD_ARTIFACT: "true"
       ONLY_CACHE: "false"
       MANUAL_CACHING: "1"
       AUTO_CACHING: "1"
@@ -122,7 +124,7 @@ jobs:
           cmake --build build
           cmake --install build
 
-      - name: Telegram Desktop build.
+      - name: Telegramd build.
         if: env.ONLY_CACHE == 'false'
         run: |
           cd $REPO_NAME
@@ -132,25 +134,13 @@ jobs:
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
             echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Telegram ${{ matrix.defines }}" >> $GITHUB_ENV
-          else
-            echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
           fi
 
-          cmake -Bbuild . -DTDESKTOP_API_TEST=ON $DEFINE
+          cmake -Bbuild . \
+            -DTDESKTOP_API_TEST=ON \
+            -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            $DEFINE
           cmake --build build
-          macdeployqt build/Telegram.app
-          codesign --remove-signature build/Telegram.app
-
-      - name: Move artifact.
-        if: env.UPLOAD_ARTIFACT == 'true'
-        run: |
-          cd $REPO_NAME/build
-          mkdir artifact
-          mv Telegram.app artifact/
-      - uses: actions/upload-artifact@v7
-        if: env.UPLOAD_ARTIFACT == 'true'
-        name: Upload artifact.
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ env.REPO_NAME }}/build/artifact/
+          macdeployqt build/Telegramd.app
+          codesign --remove-signature build/Telegramd.app
