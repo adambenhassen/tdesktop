@@ -12,6 +12,7 @@ test -x "$ISOLATION_FILE"
 test -x "$PARSER_FILE"
 
 bash -n "$ISOLATION_FILE"
+"$ISOLATION_FILE" --self-test-cleanup
 python3 - "$PLIST_FILE" <<'PY'
 import sys
 import xml.etree.ElementTree as ElementTree

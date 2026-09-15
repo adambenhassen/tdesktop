@@ -2,13 +2,21 @@
 
 set -Eeuo pipefail
 
-if [ "$#" -ne 2 ]; then
+SELF_TEST_MODE=0
+TEST_ROOT=""
+if [ "$#" -eq 1 ] && [ "$1" = "--self-test-cleanup" ]; then
+	SELF_TEST_MODE=1
+	TEST_ROOT="$(mktemp -d /tmp/main778-self-test.XXXXXX)"
+	APP_PATH=""
+	EVIDENCE_DIR="$TEST_ROOT/evidence"
+elif [ "$#" -ne 2 ]; then
 	echo "usage: mac_isolation_test.sh TELEGRAMD_APP EVIDENCE_DIR" >&2
 	exit 2
+else
+	APP_PATH="$1"
+	EVIDENCE_DIR="$2"
 fi
 
-APP_PATH="$1"
-EVIDENCE_DIR="$2"
 PARSER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check_mac_fs_usage.py"
 OFFICIAL_DMG_URL="https://td.telegram.org/mac/td-setup-mac-7.2.8.dmg"
 OFFICIAL_DMG_SHA256="5883217d4f6f25d147ee8bf9997c984a38b3fecef3d5ab6630a1fc22d212a6bb"
@@ -1765,26 +1773,56 @@ stop_trace() {
 	return "$stop_failed"
 }
 
+is_suspended_launcher_command() {
+	local command="$1"
+	case "$command" in
+		*'kill -STOP $$'*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
 terminate_recorded_process() {
 	local pid="$1"
 	local expected="$2"
 	local command
+	local launcher=0
 	if ! process_alive "$pid"; then
 		return 0
 	fi
 	command="$(process_command "$pid")"
 	case "$command" in
 		"$expected"*)
-			if ! kill -TERM "$pid" 2>/dev/null && process_alive "$pid"; then
-				record "cleanup failed to terminate pid=$pid command=$command"
-				return 1
-			fi
 			;;
 		*)
-			record "cleanup refused pid=$pid command=$command expected=$expected"
-			return 1
+			if ! is_suspended_launcher_command "$command"; then
+				record "cleanup refused pid=$pid command=$command expected=$expected"
+				return 1
+			fi
+			launcher=1
+			if ! kill -CONT "$pid" 2>/dev/null; then
+				if process_alive "$pid"; then
+					record "cleanup failed to resume suspended launcher pid=$pid command=$command"
+					if kill -KILL "$pid" 2>/dev/null && ! process_alive "$pid"; then
+						record "cleanup used forced kill suspended launcher pid=$pid command=$command"
+					else
+						record "cleanup failed to kill suspended launcher pid=$pid command=$command"
+					fi
+					return 1
+				fi
+				return 0
+			fi
+			record "cleanup resumed suspended launcher pid=$pid command=$command"
 			;;
 	esac
+	if ! process_alive "$pid"; then
+		return 0
+	fi
+	if ! kill -TERM "$pid" 2>/dev/null && process_alive "$pid"; then
+		record "cleanup failed to terminate pid=$pid command=$command"
+		return 1
+	fi
 	local i
 	for i in $(seq 1 10); do
 		if ! process_alive "$pid"; then
@@ -1795,22 +1833,34 @@ terminate_recorded_process() {
 	command="$(process_command "$pid")"
 	case "$command" in
 		"$expected"*)
-			if ! kill -KILL "$pid" 2>/dev/null && process_alive "$pid"; then
-				record "cleanup failed to kill pid=$pid command=$command"
+			;;
+		*)
+			if [ "$launcher" -eq 0 ] || ! is_suspended_launcher_command "$command"; then
+				record "cleanup refused escalation pid=$pid command=$command expected=$expected"
 				return 1
 			fi
 			;;
-		*)
-			record "cleanup refused escalation pid=$pid command=$command expected=$expected"
-			return 1
-			;;
 	esac
+	if ! kill -KILL "$pid" 2>/dev/null && process_alive "$pid"; then
+		record "cleanup failed to kill pid=$pid command=$command"
+		return 1
+	fi
 	if process_alive "$pid"; then
 		record "cleanup process remained alive after escalation pid=$pid command=$command"
 		return 1
 	fi
 	record "cleanup used forced kill pid=$pid command=$command"
 	return 0
+}
+
+reap_recorded_process() {
+	local pid="$1"
+	if process_present "$pid"; then
+		record "cleanup could not reap live pid=$pid command=$(process_command "$pid")"
+		return 1
+	fi
+	wait "$pid" 2>/dev/null || true
+	record "cleanup reaped pid=$pid"
 }
 
 is_descendant_of() {
@@ -1915,39 +1965,52 @@ resume_observed_fork_children() {
 
 terminate_unclaimed_launcher() {
 	local pid="$1"
-	local command
-	local i
-	if ! process_alive "$pid"; then
-		return 0
-	fi
-	command="$(process_command "$pid")"
-	case "$command" in
-		*'kill -STOP $$'*)
-			kill -CONT "$pid" 2>/dev/null || true
-			kill -TERM "$pid" 2>/dev/null || true
-			;;
-		*)
-			record "cleanup refused unclaimed launcher pid=$pid command=$command"
-			return 1
-			;;
-	esac
-	for i in $(seq 1 10); do
-		if ! process_alive "$pid"; then
-			return 0
+	terminate_recorded_process "$pid" "$FORK_EXE"
+}
+
+run_cleanup_self_test() {
+	local self_test_pid=""
+	local self_test_failed=0
+	local expected="/bin/sleep"
+	mkdir -p "$EVIDENCE_DIR"
+	/bin/sh -c 'kill -STOP $$; exec "$@"' telegramd-launcher "$expected" 60 \
+		> "$EVIDENCE_DIR/self-test.log" 2>&1 &
+	self_test_pid=$!
+	if ! wait_for_stopped "$self_test_pid" 5; then
+		self_test_failed=1
+	else
+		if ! terminate_recorded_process "$self_test_pid" "$expected"; then
+			self_test_failed=1
 		fi
-		sleep 1
-	done
-	command="$(process_command "$pid")"
-	case "$command" in
-		*'kill -STOP $$'*)
-			kill -KILL "$pid" 2>/dev/null || true
-			return 0
-			;;
-		*)
-			record "cleanup refused unclaimed launcher escalation pid=$pid command=$command"
-			return 1
-			;;
-	esac
+		if ! reap_recorded_process "$self_test_pid"; then
+			self_test_failed=1
+		fi
+	fi
+	if process_present "$self_test_pid"; then
+		kill -CONT "$self_test_pid" 2>/dev/null || true
+		kill -KILL "$self_test_pid" 2>/dev/null || true
+	fi
+	if ! process_present "$self_test_pid"; then
+		wait "$self_test_pid" 2>/dev/null || true
+	else
+		self_test_failed=1
+	fi
+	if [ "$self_test_failed" -eq 0 ] && \
+		! grep -F "cleanup resumed suspended launcher pid=$self_test_pid" \
+			"$EVIDENCE_DIR/events.txt" >/dev/null 2>&1; then
+		self_test_failed=1
+	fi
+	if [ "$self_test_failed" -eq 0 ] && \
+		! grep -F "cleanup reaped pid=$self_test_pid" \
+			"$EVIDENCE_DIR/events.txt" >/dev/null 2>&1; then
+		self_test_failed=1
+	fi
+	rm -rf -- "$TEST_ROOT"
+	if [ "$self_test_failed" -ne 0 ]; then
+		printf '%s\n' 'FAIL: suspended launcher cleanup self-test' >&2
+		return 1
+	fi
+	printf '%s\n' 'suspended-launcher-cleanup=PASS'
 }
 
 cleanup() {
@@ -1967,22 +2030,25 @@ cleanup() {
 	stop_trace || cleanup_failed=1
 	if [ -n "$SECOND_PID" ]; then
 		terminate_recorded_process "$SECOND_PID" "$FORK_EXE" || cleanup_failed=1
-		wait "$SECOND_PID" 2>/dev/null || true
+		reap_recorded_process "$SECOND_PID" || cleanup_failed=1
 	fi
 	if [ -n "$QUIT_PID" ]; then
 		terminate_recorded_process "$QUIT_PID" "$FORK_EXE" || cleanup_failed=1
-		wait "$QUIT_PID" 2>/dev/null || true
+		reap_recorded_process "$QUIT_PID" || cleanup_failed=1
 	fi
 	if [ -n "$RELAUNCH_PID" ]; then
 		kill -CONT "$RELAUNCH_PID" 2>/dev/null || true
 		terminate_process_tree "$RELAUNCH_PID" "$FORK_EXE" || cleanup_failed=1
+		reap_recorded_process "$RELAUNCH_PID" || cleanup_failed=1
 	fi
 	if [ -n "$FORK_PID" ]; then
 		kill -CONT "$FORK_PID" 2>/dev/null || true
 		terminate_process_tree "$FORK_PID" "$FORK_EXE" || cleanup_failed=1
+		reap_recorded_process "$FORK_PID" || cleanup_failed=1
 	fi
 	if [ -n "$LAUNCHED_PID" ]; then
 		terminate_unclaimed_launcher "$LAUNCHED_PID" || cleanup_failed=1
+		reap_recorded_process "$LAUNCHED_PID" || cleanup_failed=1
 	fi
 	if [ -n "$OFFICIAL_PID" ]; then
 		terminate_process_tree "$OFFICIAL_PID" "$OFFICIAL_APP" || cleanup_failed=1
@@ -2039,6 +2105,12 @@ cleanup() {
 	} >> "$EVIDENCE_DIR/cleanup.txt"
 	exit "$exit_code"
 }
+
+if [ "$SELF_TEST_MODE" -eq 1 ]; then
+	run_cleanup_self_test
+	exit $?
+fi
+
 capture_error() {
 	LAST_ERROR_COMMAND="$BASH_COMMAND"
 	LAST_ERROR_LINE="$LINENO"
