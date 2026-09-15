@@ -1,0 +1,116 @@
+name: Unit feedback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch name or commit SHA to test.
+        required: true
+        default: dev
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+
+  unit:
+    name: Unit-only feedback
+    runs-on: ubuntu-latest
+
+    env:
+      CONFIG: Debug
+      IMAGE_TAG: tdesktop:centos_env
+
+    steps:
+      - name: Clone.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: First set up.
+        run: |
+          sudo apt update
+          curl -sSL https://install.python-poetry.org | python3 -
+          cd Telegram/build/docker/centos_env
+          poetry install
+          DEBUG= LTO= poetry run gen_dockerfile > Dockerfile
+          rm -rf __pycache__
+
+      - name: Free up some disk space.
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
+      - name: Set up Docker Buildx.
+        uses: docker/setup-buildx-action@v4
+
+      # No Actions cache or exported BuildKit cache is used here. Any compiler
+      # or dependency cache is local to this ephemeral runner and disappears
+      # with the opt-in run, so a feature ref cannot write shared state.
+      - name: Libraries.
+        uses: docker/build-push-action@v7
+        with:
+          context: Telegram/build/docker/centos_env
+          load: true
+          tags: ${{ env.IMAGE_TAG }}
+
+      - name: Record tested revision.
+        run: echo "TESTED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Unit tests.
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/test_unit.log"
+
+          set +e
+          docker run --rm \
+            -u "$(id -u)" \
+            -v "$PWD:/usr/src/tdesktop" \
+            -e CONFIG="$CONFIG" \
+            "$IMAGE_TAG" \
+            /usr/src/tdesktop/Telegram/build/docker/centos_env/build_tests.sh \
+            -D CMAKE_CONFIGURATION_TYPES=Debug \
+            -D TDESKTOP_API_TEST=ON 2>&1 | tee "$log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          summary="$(sed -nE \
+            's/^([0-9]+) case\(s\), ([0-9]+) failed, ([0-9]+) failed check\(s\)\.$/\1 \2 \3/p' \
+            "$log" | tail -n 1)"
+          if [ -z "$summary" ]; then
+            echo "::error::test_unit did not report a case summary."
+            {
+              echo "## Unit feedback"
+              echo
+              echo "- Revision: \`$TESTED_SHA\`"
+              echo "- Result: no case summary (failure)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          read -r cases failed failed_checks <<< "$summary"
+          {
+            echo "## Unit feedback"
+            echo
+            echo "- Revision: \`$TESTED_SHA\`"
+            echo "- Cases: $cases"
+            echo "- Failed cases: $failed"
+            echo "- Failed checks: $failed_checks"
+            if [ "$failed" -gt 0 ]; then
+              echo
+              echo "Failed case names:"
+              sed -n 's/^FAIL /- /p' "$log"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$test_status" -eq 0 ] \
+            && [ "$cases" -gt 0 ] \
+            && [ "$failed" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$test_status" -eq 0 ]; then
+            exit 1
+          fi
+          exit "$test_status"
