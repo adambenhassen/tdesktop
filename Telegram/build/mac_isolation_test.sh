@@ -9,6 +9,11 @@ if [ "$#" -eq 1 ] && [ "$1" = "--self-test-cleanup" ]; then
 	TEST_ROOT="$(mktemp -d /tmp/main778-self-test.XXXXXX)"
 	APP_PATH=""
 	EVIDENCE_DIR="$TEST_ROOT/evidence"
+elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-observer-coverage" ]; then
+	SELF_TEST_MODE=2
+	TEST_ROOT="$(mktemp -d /tmp/main793-observer-coverage.XXXXXX)"
+	APP_PATH=""
+	EVIDENCE_DIR="$TEST_ROOT/evidence"
 elif [ "$#" -ne 2 ]; then
 	echo "usage: mac_isolation_test.sh TELEGRAMD_APP EVIDENCE_DIR" >&2
 	exit 2
@@ -1378,7 +1383,7 @@ check_process_observer_coverage() {
 		if [ -f "$FORK_CHILDREN_FILE" ] && grep -Fx "$target_pid" "$FORK_CHILDREN_FILE" >/dev/null 2>&1; then
 			fork_child_observer=1
 		fi
-		if ! -s "$TARGET_TRACE_DIR/$target_pid.txt"; then
+		if [ ! -s "$TARGET_TRACE_DIR/$target_pid.txt" ]; then
 			if [ "$fork_child_observer" -eq 0 ]; then
 				unavailable "PID-filtered fs_usage captured no filesystem events for pid=$target_pid"
 			fi
@@ -1388,7 +1393,7 @@ check_process_observer_coverage() {
 			fi
 			record "PID-filtered fork child observer captured no filesystem events after pre-execution attachment pid=$target_pid"
 		fi
-		if ! -s "$exec_trace" && [ "$fork_child_observer" -eq 0 ]; then
+		if [ ! -s "$exec_trace" ] && [ "$fork_child_observer" -eq 0 ]; then
 			unavailable "PID-filtered process observer captured no exec events for pid=$target_pid"
 		fi
 		if [ ! -e "$fork_trace" ]; then
@@ -1968,6 +1973,90 @@ terminate_unclaimed_launcher() {
 	terminate_recorded_process "$pid" "$FORK_EXE"
 }
 
+run_observer_coverage_case() {
+	local case_name="$1"
+	local filesystem_state="$2"
+	local exec_state="$3"
+	local expected_status="$4"
+	local expected_detail="$5"
+	local target_pid=50178
+	local case_root="$TEST_ROOT/$case_name"
+	local check_output=""
+	local check_status=0
+	EVIDENCE_DIR="$case_root/evidence"
+	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
+	FORK_CHILDREN_FILE="$EVIDENCE_DIR/fork-child-observers.txt"
+	FORK_ONLY_PID_FILE="$EVIDENCE_DIR/fork-only-pids.txt"
+	TARGET_TRACE_DIR="$EVIDENCE_DIR/fs_usage-pid"
+	TARGET_EXEC_DIR="$EVIDENCE_DIR/fs_usage-exec"
+	TARGET_FORK_DIR="$EVIDENCE_DIR/fs_usage-fork"
+	TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
+	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
+	mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR" "$TARGET_FORK_DIR"
+	: > "$EVIDENCE_DIR/events.txt"
+	: > "$EVIDENCE_DIR/status.txt"
+	: > "$OBSERVER_MANAGER_FAILURE_FILE"
+	: > "$FORK_CHILDREN_FILE"
+	: > "$FORK_ONLY_PID_FILE"
+	printf '%s\n' "$target_pid" > "$PID_FILE"
+	printf '%s %s %s %s\n' "$target_pid" 601 601 701 > "$TARGET_OBSERVER_FILE"
+	: > "$TARGET_FORK_DIR/$target_pid.txt"
+	if [ "$filesystem_state" = nonempty ]; then
+		printf '%s\n' "12:00:00.000 open /tmp/Telegramd/tdata/allowed 0.001 Telegramd.708206" > \
+			"$TARGET_TRACE_DIR/$target_pid.txt"
+	else
+		: > "$TARGET_TRACE_DIR/$target_pid.txt"
+	fi
+	if [ "$exec_state" = nonempty ]; then
+		printf '%s\n' "12:00:01.000 exec /tmp/Telegramd/bin/helper 0.001 Telegramd.708206" > \
+			"$TARGET_EXEC_DIR/$target_pid.txt"
+	else
+		: > "$TARGET_EXEC_DIR/$target_pid.txt"
+	fi
+	if check_output="$(check_process_observer_coverage 2>&1)"; then
+		check_status=0
+	else
+		check_status=$?
+	fi
+	if [ "$check_status" -ne "$expected_status" ]; then
+		printf 'FAIL: observer coverage case=%s expected_status=%s actual_status=%s output=%s\n' \
+			"$case_name" "$expected_status" "$check_status" "$check_output" >&2
+		return 1
+	fi
+	if [ -n "$expected_detail" ] && ! grep -F -- "$expected_detail" "$EVIDENCE_DIR/status.txt" >/dev/null 2>&1; then
+		printf 'FAIL: observer coverage case=%s missing expected detail=%s output=%s\n' \
+			"$case_name" "$expected_detail" "$check_output" >&2
+		return 1
+	fi
+	if [ "$expected_status" -eq 0 ] && [ -s "$EVIDENCE_DIR/status.txt" ]; then
+		printf 'FAIL: observer coverage case=%s unexpectedly wrote=%s\n' \
+			"$case_name" "$(cat "$EVIDENCE_DIR/status.txt")" >&2
+		return 1
+	fi
+	printf 'observer-coverage-%s=PASS\n' "$case_name"
+}
+
+run_observer_coverage_self_test() {
+	local self_test_failed=0
+	if ! run_observer_coverage_case nonempty nonempty nonempty 0 ""; then
+		self_test_failed=1
+	fi
+	if ! run_observer_coverage_case empty-filesystem empty nonempty 2 \
+		"PID-filtered fs_usage captured no filesystem events for pid=50178"; then
+		self_test_failed=1
+	fi
+	if ! run_observer_coverage_case empty-exec nonempty empty 2 \
+		"PID-filtered process observer captured no exec events for pid=50178"; then
+		self_test_failed=1
+	fi
+	rm -rf -- "$TEST_ROOT"
+	if [ "$self_test_failed" -ne 0 ]; then
+		printf '%s\n' 'FAIL: observer coverage self-test' >&2
+		return 1
+	fi
+	printf '%s\n' 'observer-coverage-fixtures=PASS'
+}
+
 run_cleanup_self_test() {
 	local self_test_pid=""
 	local self_test_failed=0
@@ -2108,6 +2197,10 @@ cleanup() {
 
 if [ "$SELF_TEST_MODE" -eq 1 ]; then
 	run_cleanup_self_test
+	exit $?
+fi
+if [ "$SELF_TEST_MODE" -eq 2 ]; then
+	run_observer_coverage_self_test
 	exit $?
 fi
 
