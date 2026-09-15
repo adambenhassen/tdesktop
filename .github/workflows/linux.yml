@@ -264,10 +264,10 @@ jobs:
               if test "$TEST_STATUS" -eq 139; then
                 echo "GUI regression crashed; collecting a backtrace."
                 env "$@" gdb -q -batch \
-                  -ex 'set pagination off' \
-                  -ex 'set confirm off' \
+                  -ex "set pagination off" \
+                  -ex "set confirm off" \
                   -ex run \
-                  -ex 'thread apply all bt full' \
+                  -ex "thread apply all bt full" \
                   --args /usr/src/tdesktop/out/Debug/Telegram || true
               fi
               return "$TEST_STATUS"
