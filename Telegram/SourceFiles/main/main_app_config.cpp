@@ -36,6 +36,10 @@ AppConfig::AppConfig(not_null<Account*> account) : _account(account) {
 AppConfig::~AppConfig() = default;
 
 void AppConfig::start() {
+	if (_started) {
+		return;
+	}
+	_started = true;
 	_account->mtpMainSessionValue(
 	) | rpl::on_next([=](not_null<MTP::Instance*> instance) {
 		_api.emplace(instance);

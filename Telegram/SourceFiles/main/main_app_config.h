@@ -185,6 +185,7 @@ private:
 
 	const not_null<Account*> _account;
 	std::optional<MTP::Sender> _api;
+	bool _started = false;
 	mtpRequestId _requestId = 0;
 	int32 _hash = 0;
 	bool _pendingRefresh = false;

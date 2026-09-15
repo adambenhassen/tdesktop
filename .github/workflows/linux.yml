@@ -240,7 +240,36 @@ jobs:
           -u $(id -u) \
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
-          /usr/src/tdesktop/out/Debug/test_unit
+          bash -lc '
+            /usr/src/tdesktop/out/Debug/test_unit
+            TEST_STATUS=$?
+            if test "$TEST_STATUS" -ne 0; then
+              exit "$TEST_STATUS"
+            fi
+            Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+            XVFB_PID=$!
+            for i in {1..50}; do
+              if test -S /tmp/.X11-unix/X99; then
+                break
+              fi
+              sleep 0.1
+            done
+            if ! test -S /tmp/.X11-unix/X99; then
+              kill "$XVFB_PID"
+              exit 1
+            fi
+            env \
+              DISPLAY=:99 \
+              QT_QPA_PLATFORM=xcb \
+              QT_XCB_GL_INTEGRATION=xcb_egl \
+              LIBGL_ALWAYS_SOFTWARE=1 \
+              TDESKTOP_SIGNUP_UI_REGRESSION=1 \
+              TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
+              /usr/src/tdesktop/out/Debug/Telegram
+            TEST_STATUS=$?
+            kill "$XVFB_PID"
+            exit "$TEST_STATUS"
+          '
 
       - name: Move artifact.
         if: env.UPLOAD_ARTIFACT == 'true'

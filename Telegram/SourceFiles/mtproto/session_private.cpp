@@ -342,6 +342,9 @@ void SessionPrivate::destroyAllConnections() {
 }
 
 void SessionPrivate::cdnConfigChanged() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	connectToServer(true);
 }
 
@@ -350,9 +353,22 @@ int32 SessionPrivate::getShiftedDcId() const {
 }
 
 void SessionPrivate::dcOptionsChanged() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	_gaveUpOnPinnedFailure = false;
 	_retryTimeout = 1;
 	connectToServer(true);
+}
+
+void SessionPrivate::resumeAfterServerEnrollment() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
+	_gaveUpOnPinnedFailure = false;
+	_retryTimeout = 1;
+	restartNow();
 }
 
 void SessionPrivate::stopUntilPinChange() {
@@ -578,6 +594,9 @@ MTPVector<MTPJSONObjectValue> SessionPrivate::prepareInitParams() {
 
 void SessionPrivate::tryToSend() {
 	DEBUG_LOG(("MTP Info: tryToSend for dc %1.").arg(_shiftedDcId));
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	if (!_connection) {
 		DEBUG_LOG(("MTP Info: not yet connected in dc %1.").arg(_shiftedDcId));
 		return;
@@ -1001,6 +1020,9 @@ void SessionPrivate::tryToSend() {
 }
 
 void SessionPrivate::retryByTimer() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	if (_retryTimeout < 3) {
 		++_retryTimeout;
 	} else if (_retryTimeout == 3) {
@@ -1018,10 +1040,13 @@ void SessionPrivate::restartNow() {
 }
 
 void SessionPrivate::connectToServer(bool afterConfig) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	// A pin failure is answered once and then waited out: retrying
 	// cannot change the key the endpoint answers with, nor the DC id
-	// it reports. A corrected pin arrives through dcOptionsChanged(),
-	// which passes afterConfig.
+	// it reports. A corrected pin arrives through dcOptionsChanged() or the
+	// explicit enrollment resume, both of which clear the give-up state first.
 	if (_gaveUpOnPinnedFailure && !afterConfig) {
 		return;
 	}
@@ -1133,6 +1158,10 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 
 void SessionPrivate::restart() {
 	DEBUG_LOG(("MTP Info: restarting Connection"));
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 
 	_waitForReceivedTimer.cancel();
 	_waitForConnectedTimer.cancel();
@@ -1202,6 +1231,9 @@ void SessionPrivate::markConnectionOld() {
 }
 
 void SessionPrivate::sendPingByTimer() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	if (_pingId) {
 		// _pingSendAt: when to send next ping (lastPingAt + kPingSendAfter)
 		// could be equal to zero.
@@ -1292,6 +1324,10 @@ void SessionPrivate::requestCDNConfig() {
 }
 
 void SessionPrivate::handleReceived() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	Expects(_encryptionKey != nullptr);
 
 	onReceivedSome();
@@ -2334,6 +2370,10 @@ void SessionPrivate::resendAll() {
 
 void SessionPrivate::onConnected(
 		not_null<AbstractConnection*> connection) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	disconnect(connection, &AbstractConnection::connected, nullptr, nullptr);
 	if (!connection->isConnected()) {
 		LOG(("Connection Error: not connected in onConnected(), "
@@ -2369,6 +2409,10 @@ void SessionPrivate::onConnected(
 
 void SessionPrivate::onDisconnected(
 		not_null<AbstractConnection*> connection) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	removeTestConnection(connection);
 
 	if (_testConnections.empty()) {
@@ -2414,6 +2458,10 @@ void SessionPrivate::removeTestConnection(
 }
 
 void SessionPrivate::checkAuthKey() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	if (usesPermanentAuthKey()) {
 		auto persistent = _sessionData->getPersistentKey();
 		if (_keyId
@@ -2434,7 +2482,10 @@ void SessionPrivate::checkAuthKey() {
 }
 
 void SessionPrivate::updateAuthKey() {
-	if (_instance->isKeysDestroyer() || _keyCreator || !_connection) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()
+		|| _instance->isKeysDestroyer()
+		|| _keyCreator
+		|| !_connection) {
 		return;
 	}
 
@@ -2445,7 +2496,10 @@ void SessionPrivate::updateAuthKey() {
 }
 
 void SessionPrivate::updatePermanentAuthKey() {
-	if (_instance->isKeysDestroyer() || _keyCreator || !_connection) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()
+		|| _instance->isKeysDestroyer()
+		|| _keyCreator
+		|| !_connection) {
 		return;
 	}
 	applyAuthKey(_sessionData->getPersistentKey());
@@ -2467,6 +2521,10 @@ void SessionPrivate::setCurrentKeyId(uint64 newKeyId) {
 }
 
 void SessionPrivate::applyAuthKey(AuthKeyPtr &&encryptionKey) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	_encryptionKey = std::move(encryptionKey);
 	const auto newKeyId = _encryptionKey ? _encryptionKey->keyId() : 0;
 	if (_keyId) {
@@ -2571,6 +2629,9 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 	using Error = DcKeyError;
 	auto delegate = BoundKeyCreator::Delegate();
 	delegate.unboundReady = [=](base::expected<Result, Error> result) {
+		if (!_instance->isServerEnrollmentNetworkAllowed()) {
+			return;
+		}
 		if (!result) {
 			releaseKeyCreationOnFail();
 			using Action = AuthKeyFailureAction;
@@ -2685,6 +2746,10 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 }
 
 void SessionPrivate::authKeyChecked() {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	connect(_connection, &AbstractConnection::receivedData, [=] {
 		handleReceived();
 	});
@@ -2700,6 +2765,10 @@ void SessionPrivate::authKeyChecked() {
 void SessionPrivate::onError(
 		not_null<AbstractConnection*> connection,
 		qint32 errorCode) {
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		doDisconnect();
+		return;
+	}
 	if (errorCode == -429) {
 		LOG(("Protocol Error: -429 flood code returned!"));
 	} else if (errorCode == -444) {

@@ -8,18 +8,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "intro/intro_step.h"
-#include "mtproto/mtproto_custom_server_input.h"
+#include "mtproto/mtproto_server_discovery.h"
+
+#include <QtCore/QByteArray>
+#include <QtCore/QList>
+
+class QNetworkAccessManager;
+class QNetworkReply;
+class QHostInfo;
+class QTimer;
 
 namespace Ui {
+class FlatLabel;
 class InputField;
-class RpWidget;
 class LinkButton;
+class RoundButton;
+class ScrollArea;
+class VerticalLayout;
 } // namespace Ui
 
 namespace Intro {
 namespace details {
 
-class ServerKeyWidget;
+class ServerWidgetDiscovery;
 
 class ServerWidget final : public Step {
 public:
@@ -33,56 +44,72 @@ public:
 	}
 
 	[[nodiscard]] int nextButtonTop() const override;
-	[[nodiscard]] int errorTop() const override;
 
 	void setInnerFocus() override;
 	void activate() override;
+	void cancelled() override;
 	void submit() override;
+
+	[[nodiscard]] rpl::producer<QString> nextButtonText() const override;
+	[[nodiscard]] QWidget *firstTabWidget() const override;
+	[[nodiscard]] QWidget *lastTabWidget() const override;
+	[[nodiscard]] QWidget *nextButtonFocusWidget() const override;
 
 protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
-	object_ptr<Ui::InputField> _address;
-	object_ptr<Ui::InputField> _key;
+	void layoutContent();
+	void setupSelection();
+	void setupBound();
+	void switchToBound();
+	void selectionChanged();
+	void submitSelection();
+	void beginPublicDiscovery();
+	void beginLocalDiscovery();
+	void startLocalDiscovery(const QList<QHostAddress> &addresses);
+	void discoveryTimeout();
+	void discoveryFinished(MTP::ServerDiscoveryResult result);
+	void resolvePublicEndpoint(MTP::ServerDiscoveryResult result);
+	void publicEndpointResolved(
+		MTP::ServerDiscoveryResult result,
+		const QHostInfo &info);
+	void discoveryFailed(bool connectionFailure);
+	void cancelDiscovery();
+	void showStatus(const QString &text, bool error);
+	void clearStatus();
+	void announceStatus();
+	void commitBinding(const MTP::ServerDiscoveryResult &result);
+	[[nodiscard]] QString selectionError(
+		MTP::ServerSelectionStatus status) const;
+	[[nodiscard]] bool readOnly() const;
 
-};
+	object_ptr<Ui::ScrollArea> _scroll;
+	Ui::VerticalLayout *_content = nullptr;
+	Ui::FlatLabel *_addressLabel = nullptr;
+	Ui::InputField *_address = nullptr;
+	Ui::FlatLabel *_status = nullptr;
+	Ui::RoundButton *_continue = nullptr;
+	Ui::FlatLabel *_savedAddressLabel = nullptr;
+	Ui::FlatLabel *_savedAddress = nullptr;
+	Ui::FlatLabel *_savedStatus = nullptr;
+	Ui::RoundButton *_savedContinue = nullptr;
+	Ui::LinkButton *_addAccount = nullptr;
 
-class ServerKeyWidget final : public Step {
-public:
-	ServerKeyWidget(
-		QWidget *parent,
-		not_null<Main::Account*> account,
-		not_null<Data*> data);
+	QNetworkAccessManager *_network = nullptr;
+	QNetworkReply *_reply = nullptr;
+	QByteArray _publicResponse;
+	int _hostLookupId = -1;
+	ServerWidgetDiscovery *_localDiscovery = nullptr;
+	QTimer *_deadline = nullptr;
+	QByteArray _localNonce;
+	std::optional<MTP::ServerDiscoveryAttempt> _discoveryAttempt;
 
-	bool hasBack() const override {
-		return true;
-	}
-
-	[[nodiscard]] int nextButtonTop() const override;
-
-	void activate() override;
-	void submit() override;
-
-protected:
-	void resizeEvent(QResizeEvent *e) override;
-	void paintEvent(QPaintEvent *e) override;
-
-private:
-	void commitAndAdvance();
-	void updateVerdict();
-	void paintPanel(QPainter &p);
-
-	MTP::ServerEndpointCheck _endpoint;
-	MTP::ServerKeyCheck _keyCheck;
-
-	object_ptr<Ui::RpWidget> _panel;
-	object_ptr<Ui::InputField> _compare;
-	object_ptr<Ui::LinkButton> _copy;
-
-	MTP::KeyIdCompare _compareStatus = MTP::KeyIdCompare::None;
-	QString _panelA11yBase;
-
+	MTP::ServerSelectionCheck _selection;
+	bool _readOnly = false;
+	bool _connecting = false;
+	bool _suppressChanges = false;
+	uint64 _attempt = 0;
 };
 
 } // namespace details

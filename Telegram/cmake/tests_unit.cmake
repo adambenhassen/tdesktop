@@ -17,6 +17,11 @@ add_executable(test_unit)
 init_target(test_unit "(tests)")
 
 target_include_directories(test_unit PRIVATE ${src_loc})
+target_compile_definitions(test_unit PRIVATE
+    TDESKTOP_UNIT_TESTS
+    TDESKTOP_API_ID=${TDESKTOP_API_ID}
+    TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
+)
 
 # Xcode links every object from an object-library dependency into each
 # consumer. Keep the test executable's link selective: some mtproto objects
@@ -37,23 +42,34 @@ PRIVATE
     desktop-app::external_zlib
 )
 
-# The mtproto headers are written expecting this prelude — scheme.h, rpl,
-# crl — because every target that compiles them has it precompiled. A test
-# including mtproto_dc_options.h without it fails on MTPDdcOption. Reuse
-# td_mtproto's own header rather than adding includes to app files.
-target_precompile_headers(test_unit PRIVATE ${src_loc}/mtproto/mtproto_pch.h)
+# The production storage sources are written expecting the application's
+# prelude, while the mtproto headers additionally need their own network
+# prelude. Reuse both instead of changing production includes for this test.
+target_precompile_headers(test_unit PRIVATE
+    ${src_loc}/stdafx.h
+    ${src_loc}/mtproto/mtproto_pch.h
+)
 
 nice_target_sources(test_unit ${src_loc}
 PRIVATE
     # Compiled in the application target only, so the test links it
     # directly: the code under test is the shipped code.
     passport/passport_encryption.cpp
+    core/hash_sha.cpp
+    core/hash_md5.cpp
+    data/data_peer_id.cpp
+    intro/intro_server_discovery.cpp
     intro/intro_username_validation.cpp
+    main/main_account_persistence.cpp
+    storage/details/storage_file_utilities.cpp
+    storage/storage_account_persistence.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
     tests/unit/mtp_instance_tests.cpp
     tests/unit/passport_credentials_secret_tests.cpp
+    tests/unit/server_discovery_tests.cpp
+    tests/unit/server_enrollment_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
 )
@@ -63,10 +79,15 @@ PRIVATE
     test_unit_mtproto
     tdesktop::td_scheme
     desktop-app::lib_base
+    desktop-app::lib_crl
+    desktop-app::lib_storage
+    desktop-app::lib_ui
+    desktop-app::lib_webview
     desktop-app::lib_tl
     desktop-app::external_qt
     desktop-app::external_openssl
     desktop-app::external_zlib
+    desktop-app::external_xxhash
 )
 
 # Put it beside Telegram in out/<config>/ instead of the target's own

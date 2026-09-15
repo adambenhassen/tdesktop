@@ -34,6 +34,7 @@ public:
 
 	void setInnerFocus() override;
 	void activate() override;
+	void showAnimated(Animate animate) override;
 	void cancelled() override;
 	void submit() override;
 

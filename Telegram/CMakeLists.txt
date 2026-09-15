@@ -570,6 +570,8 @@ PRIVATE
     core/external_control.h
     core/file_utilities.cpp
     core/file_utilities.h
+    core/hash_sha.cpp
+    core/hash_md5.cpp
     core/launcher.cpp
     core/launcher.h
     core/local_url_handlers.cpp
@@ -1365,6 +1367,8 @@ PRIVATE
     intro/intro_signup_password.h
     intro/intro_server.cpp
     intro/intro_server.h
+    intro/intro_server_discovery.cpp
+    intro/intro_server_discovery.h
     intro/intro_start.cpp
     intro/intro_start.h
     intro/intro_username.cpp
@@ -1409,6 +1413,8 @@ PRIVATE
     layout/layout_item_base.h
     main/main_account.cpp
     main/main_account.h
+    main/main_account_persistence.cpp
+    main/main_account_persistence.h
     main/main_app_config.cpp
     main/main_app_config.h
     main/main_app_config_values.cpp
@@ -1423,6 +1429,10 @@ PRIVATE
     main/session/send_as_peers.h
     main/session/session_show.cpp
     main/session/session_show.h
+    tests/signup_controls_regression.cpp
+    tests/signup_controls_regression.h
+    tests/account_lifecycle_regression.cpp
+    tests/account_lifecycle_regression.h
     media/audio/media_audio.cpp
     media/audio/media_audio.h
     media/audio/media_audio_edit.cpp
@@ -1869,6 +1879,7 @@ PRIVATE
     storage/serialize_peer.h
     storage/storage_account.cpp
     storage/storage_account.h
+    storage/storage_account_persistence.cpp
     storage/storage_cloud_blob.cpp
     storage/storage_cloud_blob.h
     storage/storage_domain.cpp
@@ -2335,6 +2346,7 @@ target_compile_definitions(Telegram
 PRIVATE
     TDESKTOP_API_ID=${TDESKTOP_API_ID}
     TDESKTOP_API_HASH=${TDESKTOP_API_HASH}
+    TDESKTOP_LIFECYCLE_REGRESSION
     G_LOG_DOMAIN="Telegram"
 )
 

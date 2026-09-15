@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "intro/intro_signup_name.h"
 
+#include "intro/intro_signup_controls.h"
 #include "intro/intro_signup_password.h"
 #include "intro/intro_username_validation.h"
 #include "intro/intro_widget.h"
@@ -68,6 +69,10 @@ void SignUpNameWidget::setInnerFocus() {
 
 void SignUpNameWidget::activate() {
 	Step::activate();
+	// showAnimated() hides every child while it paints the transition. This
+	// is the production transition-completion hook, so restore both the
+	// editable control and its note before handing focus to the field.
+	ShowSignupControls(this);
 	_name->setFocusFast();
 
 	if (!getData()->usernameError.isEmpty()) {
@@ -85,6 +90,13 @@ void SignUpNameWidget::activate() {
 		getData()->signupNameError.clear();
 		showNameError(text);
 	}
+}
+
+void SignUpNameWidget::showAnimated(Animate animate) {
+	Step::showAnimated(animate);
+	// historyMove() starts the arriving step here, without calling
+	// activate(). Restore the real controls on that production transition.
+	ShowSignupControls(this);
 }
 
 void SignUpNameWidget::resizeEvent(QResizeEvent *e) {

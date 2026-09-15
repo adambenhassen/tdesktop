@@ -95,6 +95,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "core/cached_webview_availability.h"
 #include "test/test_agent.h"
+#include "tests/signup_controls_regression.h"
+#include "tests/account_lifecycle_regression.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
@@ -264,6 +266,20 @@ Application::~Application() {
 }
 
 void Application::run() {
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	const auto headlessRegression
+		= qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")
+		|| qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION");
+	if (headlessRegression) {
+		// The regression exercises QWidget paths only. Keep unrelated GPU
+		// probing out of the headless process before its first RpWindow.
+		Ui::GL::ForceDisable(true);
+	}
+#endif // TDESKTOP_LIFECYCLE_REGRESSION
+#if !defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	constexpr auto headlessRegression = false;
+#endif // !TDESKTOP_LIFECYCLE_REGRESSION
+
 	// Depends on OpenSSL on macOS, so on ThirdParty::start().
 	// Depends on notifications settings.
 	_notifications = std::make_unique<Window::Notifications::System>();
@@ -302,13 +318,18 @@ void Application::run() {
 	Ui::InitTextOptions();
 	Ui::StartCachedCorners();
 	Ui::Emoji::Init();
+
+	auto regressionResult = 0;
+
 	Ui::PreloadTextSpoilerMask();
 	startShortcuts();
 	startEmojiImageLoader();
 	startSystemDarkModeViewer();
-	Media::Player::start(_audio.get());
+	if (!headlessRegression) {
+		Media::Player::start(_audio.get());
+	}
 
-	if (MediaControlsManager::Supported()) {
+	if (!headlessRegression && MediaControlsManager::Supported()) {
 		_mediaControlsManager = std::make_unique<MediaControlsManager>();
 	}
 
@@ -387,6 +408,20 @@ void Application::run() {
 	DEBUG_LOG(("Application Info: window created..."));
 
 	startDomain();
+
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
+		regressionResult |= RunSignupControlsRegression();
+	}
+
+	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
+		regressionResult |= Tests::RunAccountLifecycleRegression();
+		QCoreApplication::exit(regressionResult);
+		return;
+	}
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
+		QCoreApplication::exit(regressionResult);
+		return;
+	}
 	startTray();
 
 	_lastActivePrimaryWindow->firstShow();

@@ -11,7 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QString>
 
+#include <functional>
 #include <string>
+
+class QKeyEvent;
 
 namespace MTP {
 
@@ -62,6 +65,13 @@ struct ServerEnrollmentCheck {
 [[nodiscard]] const char *ServerEnrollmentStatusName(
 	ServerEnrollmentStatus status);
 
+// A bound account must reopen the server step after a clean restart, even
+// before it has an authenticated session. Existing authenticated accounts
+// retain the QR entry point for adding another account.
+[[nodiscard]] bool ShouldOpenServerEnrollment(
+		bool hasBoundServer,
+		bool hasAuthenticatedAccount);
+
 // Map an existing key validator verdict to the corresponding enrollment
 // reason. This boundary is separately testable because InternalError can
 // only be produced by a failure while re-encoding an otherwise valid key.
@@ -71,5 +81,21 @@ struct ServerEnrollmentCheck {
 // Parse the one-paste enrollment format documented in docs/server_enrollment.md.
 [[nodiscard]] ServerEnrollmentCheck CheckServerEnrollment(
 	const QString &artifact);
+
+// Run the enrollment side effects in their security order. A failed pin
+// persistence step must not start network/auth activity, and the first
+// connection is allowed only after the pin is persisted. The optional
+// rollback restores staged in-memory state when persistence fails.
+[[nodiscard]] bool CommitServerEnrollment(
+	const std::function<bool()> &setPin,
+	const std::function<bool()> &persistPin,
+	const std::function<void()> &resume,
+	const std::function<void()> &rollbackPin = {});
+
+// The shell handles activation keys globally. The enrollment step consumes
+// these keys when they bubble from non-action controls so they cannot submit
+// the confirmation accidentally.
+[[nodiscard]] bool IsServerEnrollmentActivationKey(int key);
+[[nodiscard]] bool ConsumeServerEnrollmentActivationKey(QKeyEvent &event);
 
 } // namespace MTP

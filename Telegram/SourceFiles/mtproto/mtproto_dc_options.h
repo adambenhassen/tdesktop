@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/bytes.h"
+#include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QReadWriteLock>
 #include <string>
@@ -30,6 +31,12 @@ struct CustomServer {
 	int port = 0;
 	bool ipv6 = false;
 	std::shared_ptr<details::RSAPublicKey> key;
+	// The normalized user selection and the route/origin that authenticated
+	// it. Legacy pins leave these empty and remain read-only compatibility
+	// state; new bindings persist all three values before auth starts.
+	std::string serverSelection;
+	ServerDiscoveryPolicy discoveryPolicy = ServerDiscoveryPolicy::Legacy;
+	std::string discoveryOrigin;
 
 	[[nodiscard]] bool empty() const {
 		return !key;

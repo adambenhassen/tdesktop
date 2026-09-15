@@ -418,6 +418,7 @@ KeyIdCompare CompareKeyId(
 bool KeyIdCompareAllowsAdvance(KeyIdCompare compare) {
 	switch (compare) {
 	case KeyIdCompare::None:
+		return false;
 	case KeyIdCompare::Match:
 		return true;
 	case KeyIdCompare::Mismatch:

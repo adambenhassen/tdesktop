@@ -7,13 +7,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/invoke_queued.h"
 #include "base/timer.h"
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 #include "mtproto/mtproto_proxy_data.h"
 #include "mtproto/details/mtproto_serialized_request.h"
 
+#include <QtCore/QMutex>
 #include <QtCore/QTimer>
+
+#include <functional>
+#include <utility>
+
+class QObject;
 
 namespace MTP {
 
@@ -21,6 +28,25 @@ class Instance;
 class AuthKey;
 using AuthKeyPtr = std::shared_ptr<AuthKey>;
 enum class DcType;
+
+// Queue the session-thread stop and validate its enrollment generation only
+// when the queued callback runs. This is the production boundary between an
+// account-thread replacement and a session-thread stop request.
+inline void QueueServerEnrollmentStop(
+	not_null<QObject*> context,
+	uint64 token,
+	std::function<bool(uint64)> isCurrent,
+	std::function<void()> stop) {
+	InvokeQueued(context, [
+		token,
+		isCurrent = std::move(isCurrent),
+		stop = std::move(stop)
+	]() mutable {
+		if (isCurrent(token)) {
+			stop();
+		}
+	});
+}
 
 namespace details {
 
@@ -152,6 +178,7 @@ public:
 	void setConnectionNotInited();
 
 	void restart();
+	void resumeAfterServerEnrollment();
 	void refreshOptions();
 	void stop();
 	void kill();

@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_phone.h"
 #include "intro/intro_server.h"
 #include "intro/intro_code.h"
+#include "intro/intro_signup_name.h"
 #include "intro/intro_password_check.h"
 #include "lang/lang_keys.h"
 #include "lang/lang_instance.h"
@@ -63,6 +64,13 @@ using namespace ::Intro::details;
 		}
 	}
 	return Platform::SystemCountry();
+}
+
+[[nodiscard]] bool AccountMayUseNetwork(not_null<Main::Account*> account) {
+	const auto customServer = account->mtp().dcOptions().customServer();
+	return account->sessionExists()
+		|| (customServer.key
+			&& account->mtp().dcOptions().isAuthorized(customServer.dcId));
 }
 
 } // namespace
@@ -156,11 +164,7 @@ Widget::Widget(
 		const auto text = (
 			report->failure == MTP::PinnedServerFailure::KeyMismatch
 		)	? tr::lng_intro_server_key_mismatch(tr::now)
-		: tr::lng_intro_server_dc_mismatch(
-			tr::now,
-			lt_dc,
-			QString::number(
-				_account->mtp().dcOptions().customServer().dcId));
+		: tr::lng_intro_server_dc_mismatch(tr::now);
 		getStep()->showError(rpl::single(text));
 	}, lifetime());
 
@@ -182,7 +186,9 @@ Widget::Widget(
 	getStep()->showFast();
 	setInnerFocus();
 
-	if (!Core::UpdaterDisabled()) {
+	// Do not let the update checker become an unrelated first network
+	// operation while this account is waiting for enrollment confirmation.
+	if (!Core::UpdaterDisabled() && AccountMayUseNetwork(_account)) {
 		Core::UpdateChecker checker;
 		checker.start();
 		rpl::merge(
@@ -199,6 +205,15 @@ Widget::Widget(
 rpl::producer<> Widget::showSettingsRequested() const {
 	return _settings->entity()->clicks() | rpl::to_empty;
 }
+
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+void Widget::startSignupControlsRegressionStep() {
+	moveToStep(
+		new details::SignUpNameWidget(this, _account, getData()),
+		details::StackAction::Forward,
+		details::Animate::Forward);
+}
+#endif
 
 not_null<Media::Player::FloatDelegate*> Widget::floatPlayerDelegate() {
 	return static_cast<Media::Player::FloatDelegate*>(this);
@@ -290,7 +305,6 @@ void Widget::createLanguageLink() {
 		|| Core::App().domain().maybeLastOrSomeAuthedAccount()) {
 		return;
 	}
-
 	const auto createLink = [=](
 			const QString &text,
 			const QString &languageId) {
@@ -302,7 +316,7 @@ void Widget::createLanguageLink() {
 			Lang::CurrentCloudManager().switchToLanguage(languageId);
 		});
 		_changeLanguage->toggle(
-			!_terms && _nextShown,
+			!_terms && (_nextShown || getStep()->nextButtonFocusWidget()),
 			anim::type::normal);
 		updateControlsGeometry();
 	};
@@ -314,7 +328,10 @@ void Widget::createLanguageLink() {
 		createLink(
 			Lang::GetOriginalValue(tr::lng_switch_to_this.base),
 			defaultId);
-	} else if (!suggested.isEmpty() && suggested != currentId && _api) {
+	} else if (!suggested.isEmpty()
+		&& suggested != currentId
+		&& _api
+		&& AccountMayUseNetwork(_account)) {
 		_api->request(MTPlangpack_GetStrings(
 			MTP_string(Lang::CloudLangPackName()),
 			MTP_string(suggested),
@@ -470,11 +487,20 @@ void Widget::fixOrder() {
 	floatPlayerRaiseAll();
 	_connecting->raise();
 
-	// Steps that name a first field get the field → Next → Back →
-	// Settings tab chain; the rest keep the default order.
+	// Steps that name a first field get the field → action → Back →
+	// Settings tab chain. Scrollable enrollment steps own the fields and
+	// action between the first and last widgets; ordinary steps keep the
+	// shell Next button in that position.
 	if (auto first = getStep()->firstTabWidget()) {
-		QWidget::setTabOrder(first, _next->entity());
-		QWidget::setTabOrder(_next->entity(), _back->entity());
+		if (const auto localAction = getStep()->nextButtonFocusWidget()) {
+			const auto tail = getStep()->lastTabWidget()
+				? getStep()->lastTabWidget()
+				: localAction;
+			QWidget::setTabOrder(tail, _back->entity());
+		} else {
+			QWidget::setTabOrder(first, _next->entity());
+			QWidget::setTabOrder(_next->entity(), _back->entity());
+		}
 		QWidget::setTabOrder(_back->entity(), _settings->entity());
 	}
 }
@@ -537,7 +563,7 @@ void Widget::showTerms() {
 	}
 	if (_changeLanguage) {
 		_changeLanguage->toggle(
-			!_terms && _nextShown,
+			!_terms && (_nextShown || getStep()->nextButtonFocusWidget()),
 			anim::type::normal);
 	}
 }
@@ -611,7 +637,7 @@ void Widget::showControls() {
 	}
 	if (_changeLanguage) {
 		_changeLanguage->toggle(
-			!_terms && _nextShown,
+			!_terms && (_nextShown || getStep()->nextButtonFocusWidget()),
 			anim::type::instant);
 	}
 	if (_terms) {
@@ -637,7 +663,7 @@ void Widget::setupNextButton() {
 		_nextShown = visible;
 		if (_changeLanguage) {
 			_changeLanguage->toggle(
-				!_terms && _nextShown,
+				!_terms && (_nextShown || getStep()->nextButtonFocusWidget()),
 				anim::type::normal);
 		}
 		_nextShownAnimation.start(

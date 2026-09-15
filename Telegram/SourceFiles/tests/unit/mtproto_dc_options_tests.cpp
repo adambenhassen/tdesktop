@@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "mtproto/mtproto_server_enrollment.h"
+
+#include <QtCore/QByteArray>
 
 namespace {
 
@@ -57,10 +60,10 @@ constexpr auto kProductionKeyFingerprint = qint64(-3414540481677951611LL);
 
 } // namespace
 
-// The user checks the key they entered against the fingerprint telegramd
-// logs at startup, so client and server have to agree on this number
-// exactly. Getting it wrong is invisible at compile time and shows up
-// only as an auth-key exchange that never completes.
+// The discovered key must match the fingerprint telegramd logs at startup,
+// so client and server have to agree on this number exactly. Getting it wrong
+// is invisible at compile time and shows up only as an auth-key exchange that
+// never completes.
 TEST_CASE(RsaPublicKeyFingerprintMatchesTheProtocol) {
 	const auto key = MakeKey();
 	CHECK(key->valid());
@@ -104,6 +107,27 @@ TEST_CASE(PinnedCustomServerSurvivesSerialization) {
 		CHECK(got.key->valid());
 		CHECK_EQ(qint64(got.key->fingerprint()), kProductionKeyFingerprint);
 	}
+}
+
+// Address-only discovery stores the normalized selection and the origin that
+// authenticated it alongside the operational binding. Losing either field
+// on restart would turn a verified enrollment into an unclassified legacy
+// pin, so the complete metadata must survive the same encrypted config blob.
+TEST_CASE(DiscoveredCustomServerMetadataSurvivesSerialization) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.serverSelection = "10.4.1.7:8443";
+	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+	server.discoveryOrigin = "local:10.4.1.7:8443";
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+
+	const auto got = restored.customServer();
+	CHECK_EQ(got.serverSelection, server.serverSelection);
+	CHECK(got.discoveryPolicy == server.discoveryPolicy);
+	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
 }
 
 // An unpinned config must round-trip as unpinned rather than picking up
@@ -342,6 +366,40 @@ TEST_CASE(ReapplyingTheIdenticalPinSucceeds) {
 	auto restored = DcOptions(Environment::Production);
 	CHECK(restored.constructFromSerialized(serialized));
 	CHECK(restored.isCustomServerPinned(MakeCustomServer().dcId));
+}
+
+// The first connection is the first operation that can identify the user
+// to the newly pinned server. The exact endpoint and key therefore have to
+// be serialized before that connection is allowed to start.
+TEST_CASE(EnrollmentPinIsPersistedBeforeTheFirstConnection) {
+	auto options = DcOptions(Environment::Production);
+	const auto server = MakeCustomServer();
+	auto serialized = QByteArray();
+	auto connected = false;
+
+	CHECK(CommitServerEnrollment(
+		[&] { return options.setCustomServer(server); },
+		[&] {
+			serialized = options.serialize();
+			return true;
+		},
+		[&] {
+			connected = true;
+			CHECK(!serialized.isEmpty());
+		}));
+
+	CHECK(connected);
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(serialized));
+	const auto got = restored.customServer();
+	CHECK_EQ(got.dcId, server.dcId);
+	CHECK_EQ(got.ip, server.ip);
+	CHECK_EQ(got.port, server.port);
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(qint64(got.key->fingerprint()),
+			qint64(server.key->fingerprint()));
+	}
 }
 
 // The check and the apply must be one atomic step under the write lock.

@@ -84,11 +84,9 @@ enum class KeyIdCompare {
 	const QString &typed,
 	const QString &computed);
 
-// Whether the flow may advance for this comparison outcome. None
-// advances (the user did not start checking yet) and Match advances;
-// Mismatch blocks, and so does Unreadable: an unreadable entry means
-// the user compared nothing at all, which is the state the step exists
-// to prevent.
+// Whether the flow may advance for this comparison outcome. Only Match
+// advances; None, Mismatch and Unreadable all block until the user has
+// deliberately checked every group.
 [[nodiscard]] bool KeyIdCompareAllowsAdvance(KeyIdCompare compare);
 
 // Why an endpoint the user typed was refused.
