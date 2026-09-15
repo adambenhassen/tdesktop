@@ -360,52 +360,50 @@ void Application::run() {
 	[[maybe_unused]] const auto &webviewAvailability
 		= Core::CachedWebviewAvailability();
 
-	if (!headlessRegression) {
-		_windows.emplace(nullptr, std::make_unique<Window::Controller>());
-		setLastActiveWindow(_windows.front().second.get());
-		_windowInSettings = _lastActivePrimaryWindow = _lastActiveWindow;
+	_windows.emplace(nullptr, std::make_unique<Window::Controller>());
+	setLastActiveWindow(_windows.front().second.get());
+	_windowInSettings = _lastActivePrimaryWindow = _lastActiveWindow;
 
-		_domain->activeChanges(
-		) | rpl::on_next([=](not_null<Main::Account*> account) {
-			showAccount(account);
-		}, _lifetime);
+	_domain->activeChanges(
+	) | rpl::on_next([=](not_null<Main::Account*> account) {
+		showAccount(account);
+	}, _lifetime);
 
-		(
-			_domain->activeValue(
-			) | rpl::to_empty | rpl::filter([=] {
-				return _domain->started();
-			}) | rpl::take(1)
-		) | rpl::then(
-			_domain->accountsChanges()
-		) | rpl::map([=] {
-			return (_domain->accounts().size() > Main::Domain::kMaxAccounts)
-				? _domain->activeChanges()
-				: rpl::never<not_null<Main::Account*>>();
-		}) | rpl::flatten_latest(
-		) | rpl::on_next([=](not_null<Main::Account*> account) {
-			const auto ordered = _domain->orderedAccounts();
-			const auto it = ranges::find(ordered, account);
-			if (_lastActivePrimaryWindow && it != end(ordered)) {
-				const auto index = std::distance(begin(ordered), it);
-				if ((index + 1) > _domain->maxAccounts()) {
-					_lastActivePrimaryWindow->show(Box(
-						AccountsLimitBox,
-						&account->session()));
-				}
+	(
+		_domain->activeValue(
+		) | rpl::to_empty | rpl::filter([=] {
+			return _domain->started();
+		}) | rpl::take(1)
+	) | rpl::then(
+		_domain->accountsChanges()
+	) | rpl::map([=] {
+		return (_domain->accounts().size() > Main::Domain::kMaxAccounts)
+			? _domain->activeChanges()
+			: rpl::never<not_null<Main::Account*>>();
+	}) | rpl::flatten_latest(
+	) | rpl::on_next([=](not_null<Main::Account*> account) {
+		const auto ordered = _domain->orderedAccounts();
+		const auto it = ranges::find(ordered, account);
+		if (_lastActivePrimaryWindow && it != end(ordered)) {
+			const auto index = std::distance(begin(ordered), it);
+			if ((index + 1) > _domain->maxAccounts()) {
+				_lastActivePrimaryWindow->show(Box(
+					AccountsLimitBox,
+					&account->session()));
 			}
-		}, _lifetime);
+		}
+	}, _lifetime);
 
-		QCoreApplication::instance()->installEventFilter(this);
+	QCoreApplication::instance()->installEventFilter(this);
 
-		appDeactivatedValue(
-		) | rpl::on_next([=](bool deactivated) {
-			if (deactivated) {
-				handleAppDeactivated();
-			} else {
-				handleAppActivated();
-			}
-		}, _lifetime);
-	}
+	appDeactivatedValue(
+	) | rpl::on_next([=](bool deactivated) {
+		if (deactivated) {
+			handleAppDeactivated();
+		} else {
+			handleAppActivated();
+		}
+	}, _lifetime);
 
 	DEBUG_LOG(("Application Info: window created..."));
 
