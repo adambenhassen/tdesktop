@@ -164,8 +164,21 @@ jobs:
             echo "nm is unavailable; refusing to publish the QA artifact"
             exit 1
           }
+          tapi_analyze=""
+          tapi_lookup_status=0
+          tapi_analyze="$(xcrun --find tapi-analyze 2>/dev/null)" || tapi_lookup_status=$?
+          if [ "$tapi_lookup_status" -ne 0 ] || [ ! -x "$tapi_analyze" ]; then
+            echo "tapi-analyze is unavailable; refusing to publish the QA artifact"
+            exit 1
+          fi
+          command -v jq >/dev/null 2>&1 || {
+            echo "jq is unavailable; refusing to publish the QA artifact"
+            exit 1
+          }
           abi_loads="$package_root/abi-loads.txt"
           abi_symbols="$package_root/abi-symbols.txt"
+          abi_availability="$package_root/abi-availability.json"
+          abi_availability_log="$package_root/abi-availability.log"
           otool -l "$executable" > "$abi_loads"
           nm -u "$executable" > "$abi_symbols"
 
@@ -194,6 +207,31 @@ jobs:
           fi
           if grep -F 'Translation' "$abi_symbols" >/dev/null; then
             echo "macOS 26-only Translation symbol reference detected"
+            exit 1
+          fi
+
+          # TAPI resolves every load and undefined symbol through the SDK
+          # availability database for the executable's arm64/minimum-OS target.
+          # An unavailable analyzer, lookup error, missing result, or any
+          # reported launch failure must block publication.
+          tapi_status=0
+          "$tapi_analyze" \
+            --target "arm64-apple-macos${min_os}" \
+            -v \
+            -o "$abi_availability" \
+            "$executable" > "$abi_availability_log" 2>&1 || tapi_status=$?
+          if [ "$tapi_status" -ne 0 ]; then
+            cat "$abi_availability_log"
+            echo "TAPI availability inspection failed with status $tapi_status"
+            exit "$tapi_status"
+          fi
+          if ! jq -e '
+            (.launchAnalysis | length > 0)
+            and ([.launchAnalysis[] | .crashOnLaunch] | all(. == false))
+          ' "$abi_availability" >/dev/null; then
+            cat "$abi_availability_log"
+            cat "$abi_availability"
+            echo "TAPI availability inspection reported a launch requirement unavailable on macOS $min_os"
             exit 1
           fi
 
@@ -237,8 +275,17 @@ jobs:
             exit 1
           fi
           test ! -e "$PWD/build/Updater"
-          if find "$extracted_root" -iname 'Updater' -print -quit | grep -q .; then
+          updater_paths="$package_root/updater-paths.txt"
+          find_status=0
+          find "$extracted_root" -iname 'Updater' -print -quit > "$updater_paths" || find_status=$?
+          if [ "$find_status" -ne 0 ]; then
+            cat "$updater_paths"
+            echo "updater inspection failed with status $find_status"
+            exit "$find_status"
+          fi
+          if [ -s "$updater_paths" ]; then
             echo "updater found in extracted QA bundle"
+            cat "$updater_paths"
             exit 1
           fi
 
@@ -305,6 +352,7 @@ jobs:
             echo "- ABI minimum OS: \`$min_os\`"
             echo "- ABI strong-load inspection: passed"
             echo "- ABI symbol inspection: passed"
+            echo "- ABI availability metadata inspection: passed"
             echo "- Bundle identifier: \`com.adambenhassen.telegramd\`"
             echo "- Executable: \`Telegramd\` (arm64)"
             echo "- Code signature: ad hoc, verified after extraction"
