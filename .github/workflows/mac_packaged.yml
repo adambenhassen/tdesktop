@@ -144,3 +144,12 @@ jobs:
           cmake --build build
           macdeployqt build/Telegramd.app
           codesign --remove-signature build/Telegramd.app
+
+      - name: Upload Telegramd manual QA artifact.
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegramd-macOS-arm64-QA
+          path: ${{ env.REPO_NAME }}/build/Telegramd.app
+          if-no-files-found: error
+          retention-days: 14
