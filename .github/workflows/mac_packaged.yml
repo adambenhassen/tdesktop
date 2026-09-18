@@ -128,6 +128,7 @@ jobs:
       - name: Telegramd build.
         if: env.ONLY_CACHE == 'false'
         run: |
+          set -Eeuo pipefail
           cd $REPO_NAME
           export CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH$(find $LibrariesPath/local -mindepth 1 -maxdepth 1 -type d -exec printf ':%s' {} +)"
 
@@ -144,13 +145,132 @@ jobs:
             $DEFINE
           cmake --build build
           macdeployqt build/Telegramd.app
-          codesign --remove-signature build/Telegramd.app
+
+          app="$PWD/build/Telegramd.app"
+          archive="$PWD/build/Telegramd-macOS-arm64-QA.tar.gz"
+          package_root="$PWD/build/qa-package"
+          extracted_root="$PWD/build/qa-extracted"
+          rm -rf "$package_root" "$extracted_root" "$archive"
+          mkdir -p "$package_root" "$extracted_root"
+
+          # The QA package is intentionally ad-hoc signed. Sign before creating
+          # the archive, then verify the signature again after extraction so a
+          # manual download exercises the same bundle that was published.
+          codesign --force --deep --sign - "$app"
+          COPYFILE_DISABLE=1 tar -czf "$archive" -C "$PWD/build" Telegramd.app
+          COPYFILE_DISABLE=1 tar -xzf "$archive" -C "$extracted_root"
+
+          extracted_app="$extracted_root/Telegramd.app"
+          extracted_plist="$extracted_app/Contents/Info.plist"
+          extracted_executable="$extracted_app/Contents/MacOS/Telegramd"
+          test -f "$archive"
+          test -d "$extracted_app"
+          test -f "$extracted_plist"
+          test -x "$extracted_executable"
+
+          archive_roots="$(tar -tzf "$archive" | awk -F/ 'NF { print $1 }' | LC_ALL=C sort -u)"
+          test "$archive_roots" = "Telegramd.app"
+
+          symlink_manifest() {
+            local root="$1"
+            find "$root" -type l -print | while IFS= read -r link; do
+              printf '%s -> %s\n' "${link#"$root"/}" "$(readlink "$link")"
+            done | LC_ALL=C sort
+          }
+          symlink_manifest "$app" > "$package_root/source-symlinks.txt"
+          symlink_manifest "$extracted_app" > "$package_root/extracted-symlinks.txt"
+          if ! cmp -s "$package_root/source-symlinks.txt" "$package_root/extracted-symlinks.txt"; then
+            diff -u "$package_root/source-symlinks.txt" "$package_root/extracted-symlinks.txt"
+            exit 1
+          fi
+          grep -F '/Versions/Current ->' "$package_root/source-symlinks.txt" >/dev/null
+
+          test "$(plutil -extract CFBundleExecutable raw -o - "$extracted_plist")" = Telegramd
+          test "$(plutil -extract CFBundleName raw -o - "$extracted_plist")" = Telegramd
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$extracted_plist")" = com.adambenhassen.telegramd
+          if plutil -extract CFBundleURLTypes xml1 -o - "$extracted_plist" >/dev/null 2>&1; then
+            echo "CFBundleURLTypes must be absent from $extracted_plist"
+            exit 1
+          fi
+          test ! -e "$PWD/build/Updater"
+          if find "$extracted_root" -iname 'Updater' -print -quit | grep -q .; then
+            echo "updater found in extracted QA bundle"
+            exit 1
+          fi
+
+          file "$extracted_executable"
+          test "$(lipo -archs "$extracted_executable")" = arm64
+          codesign --verify --deep --strict --verbose=2 "$extracted_app"
+          signature="$(codesign --display --verbose=4 "$extracted_app" 2>&1)"
+          printf '%s\n' "$signature" | tee "$package_root/signature.txt"
+          printf '%s\n' "$signature" | grep -F 'Signature=adhoc' >/dev/null
+
+          launch_root="$PWD/build/qa-launch"
+          launch_home="$launch_root/home"
+          launch_workdir="$launch_root/work"
+          mkdir -p "$launch_home" "$launch_workdir"
+          launch_pid=""
+          cleanup_launch() {
+            if [ -n "$launch_pid" ] && kill -0 "$launch_pid" 2>/dev/null; then
+              kill -TERM "$launch_pid" 2>/dev/null || true
+              for _ in 1 2 3 4 5; do
+                kill -0 "$launch_pid" 2>/dev/null || return 0
+                sleep 1
+              done
+              kill -KILL "$launch_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_launch EXIT
+          HOME="$launch_home" arch -arm64 "$extracted_executable" \
+            -noupdate -debug -workdir "$launch_workdir" \
+            > "$launch_root/stdout.log" 2> "$launch_root/stderr.log" &
+          launch_pid=$!
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            launch_state="$(ps -p "$launch_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+            case "$launch_state" in
+              ""|Z*)
+              wait "$launch_pid" || true
+              cat "$launch_root/stdout.log" "$launch_root/stderr.log"
+              echo "extracted Telegramd did not remain launchable"
+              exit 1
+              ;;
+            esac
+            sleep 1
+          done
+          kill -TERM "$launch_pid" 2>/dev/null || true
+          launch_status=0
+          wait "$launch_pid" || launch_status=$?
+          launch_pid=""
+          if [ "$launch_status" -ne 0 ] && [ "$launch_status" -ne 143 ]; then
+            cat "$launch_root/stdout.log" "$launch_root/stderr.log"
+            echo "extracted Telegramd exited with status $launch_status after launch"
+            exit 1
+          fi
+
+          digest="$(shasum -a 256 "$archive" | awk '{ print $1 }')"
+          {
+            echo "## Telegramd macOS QA package"
+            echo "- Built SHA: \`$GITHUB_SHA\`"
+            echo "- Artifact: \`Telegramd-macOS-arm64-QA\`"
+            echo "- Archive: \`Telegramd-macOS-arm64-QA.tar.gz\`"
+            echo "- Artifact URL: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts"
+            echo "- SHA-256: \`$digest\`"
+            echo "- Retention: 14 days"
+            echo "- Archive root: \`Telegramd.app\`"
+            echo "- Symlink topology: preserved, including \`Versions/Current\`"
+            echo "- Bundle identifier: \`com.adambenhassen.telegramd\`"
+            echo "- Executable: \`Telegramd\` (arm64)"
+            echo "- Code signature: ad hoc, verified after extraction"
+            echo "- URL types: absent"
+            echo "- Updater: absent"
+            echo "- Launch smoke test: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Telegramd manual QA artifact.
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: Telegramd-macOS-arm64-QA
-          path: ${{ env.REPO_NAME }}/build/Telegramd.app
+          path: ${{ env.REPO_NAME }}/build/Telegramd-macOS-arm64-QA.tar.gz
           if-no-files-found: error
           retention-days: 14
