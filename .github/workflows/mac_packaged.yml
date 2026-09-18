@@ -9,9 +9,10 @@ jobs:
 
   macos:
     name: MacOS
-    # This legacy cache workflow may build locally, but it deliberately does
-    # not publish an app artifact. Artifact publication belongs to mac.yml,
-    # which runs the static identity and runtime isolation gates first.
+    # This manually dispatched workflow may build locally and publishes only
+    # the unsigned Telegramd-macOS-arm64-QA artifact for manual QA.
+    # The isolation-gated Telegramd-macOS-arm64 artifact remains owned by
+    # mac.yml, which runs the static identity and runtime isolation gates first.
     # This fork cannot schedule a depot label, and a build that queues forever
     # is not a build.
     runs-on: macos-latest
@@ -144,3 +145,12 @@ jobs:
           cmake --build build
           macdeployqt build/Telegramd.app
           codesign --remove-signature build/Telegramd.app
+
+      - name: Upload Telegramd manual QA artifact.
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegramd-macOS-arm64-QA
+          path: ${{ env.REPO_NAME }}/build/Telegramd.app
+          if-no-files-found: error
+          retention-days: 14
