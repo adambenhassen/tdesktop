@@ -258,14 +258,27 @@ jobs:
               kill "$XVFB_PID"
               exit 1
             fi
-            env \
+            run_gui_regression() {
+              env "$@" /usr/src/tdesktop/out/Debug/Telegram
+              TEST_STATUS=$?
+              if test "$TEST_STATUS" -eq 139; then
+                echo "GUI regression crashed; collecting a backtrace."
+                env "$@" gdb -q -batch \
+                  -ex "set pagination off" \
+                  -ex "set confirm off" \
+                  -ex run \
+                  -ex "thread apply all bt full" \
+                  --args /usr/src/tdesktop/out/Debug/Telegram || true
+              fi
+              return "$TEST_STATUS"
+            }
+            run_gui_regression \
               DISPLAY=:99 \
               QT_QPA_PLATFORM=xcb \
               QT_XCB_GL_INTEGRATION=xcb_egl \
               LIBGL_ALWAYS_SOFTWARE=1 \
               TDESKTOP_SIGNUP_UI_REGRESSION=1 \
-              TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
-              /usr/src/tdesktop/out/Debug/Telegram
+              TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1
             TEST_STATUS=$?
             kill "$XVFB_PID"
             exit "$TEST_STATUS"
