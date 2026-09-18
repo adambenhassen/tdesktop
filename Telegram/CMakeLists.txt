@@ -7,6 +7,10 @@
 add_executable(Telegram WIN32 MACOSX_BUNDLE)
 init_non_host_target(Telegram)
 
+if (APPLE AND NOT DESKTOP_APP_DISABLE_SWIFT6)
+    set(TRANSLATION_FRAMEWORK "-weak_framework Translation")
+endif()
+
 add_subdirectory(lib_rpl)
 add_subdirectory(lib_crl)
 add_subdirectory(lib_base)
@@ -17,6 +21,7 @@ add_subdirectory(lib_storage)
 add_subdirectory(lib_lottie)
 add_subdirectory(lib_qr)
 add_subdirectory(lib_translate)
+unset(TRANSLATION_FRAMEWORK)
 add_subdirectory(lib_webrtc)
 add_subdirectory(lib_webview)
 add_subdirectory(codegen)
