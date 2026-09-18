@@ -241,6 +241,8 @@ jobs:
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
           bash -lc '
+            cd /usr/src/tdesktop
+            ulimit -c unlimited
             /usr/src/tdesktop/out/Debug/test_unit
             TEST_STATUS=$?
             if test "$TEST_STATUS" -ne 0; then
@@ -263,6 +265,16 @@ jobs:
               TEST_STATUS=$?
               if test "$TEST_STATUS" -eq 139; then
                 echo "GUI regression crashed; collecting a backtrace."
+                for CORE in /usr/src/tdesktop/core /usr/src/tdesktop/core.*; do
+                  if test -f "$CORE"; then
+                    echo "Core dump: $CORE"
+                    gdb -q -batch \
+                      -ex "set pagination off" \
+                      -ex "set confirm off" \
+                      -ex "thread apply all bt full" \
+                      /usr/src/tdesktop/out/Debug/Telegram "$CORE" || true
+                  fi
+                done
                 env "$@" gdb -q -batch \
                   -ex "set pagination off" \
                   -ex "set confirm off" \
