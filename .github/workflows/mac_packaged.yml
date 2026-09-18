@@ -192,7 +192,7 @@ jobs:
             echo "strong Translation.framework load is incompatible with macOS $min_os"
             exit 1
           fi
-          if grep -E 'Translation.*notInstalled|_\$s11Translation0A5ErrorV12notInstalledACvgZ' "$abi_symbols" >/dev/null; then
+          if grep -F 'Translation' "$abi_symbols" >/dev/null; then
             echo "macOS 26-only Translation symbol reference detected"
             exit 1
           fi
@@ -302,6 +302,9 @@ jobs:
             echo "- Retention: 14 days"
             echo "- Archive root: \`Telegramd.app\`"
             echo "- Symlink topology: preserved, including \`Versions/Current\`"
+            echo "- ABI minimum OS: \`$min_os\`"
+            echo "- ABI strong-load inspection: passed"
+            echo "- ABI symbol inspection: passed"
             echo "- Bundle identifier: \`com.adambenhassen.telegramd\`"
             echo "- Executable: \`Telegramd\` (arm64)"
             echo "- Code signature: ad hoc, verified after extraction"
@@ -315,6 +318,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Telegramd-macOS-arm64-QA
-          path: ${{ env.REPO_NAME }}/build/Telegramd-macOS-arm64-QA.tar.gz
+          path: ${{ env.REPO_NAME }}/build/Telegramd-macOS-arm64-QA.zip
           if-no-files-found: error
           retention-days: 14
