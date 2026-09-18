@@ -141,24 +141,68 @@ jobs:
           cmake -Bbuild . \
             -DTDESKTOP_API_TEST=ON \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -DDESKTOP_APP_DISABLE_SWIFT6=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             $DEFINE
           cmake --build build
           macdeployqt build/Telegramd.app
 
           app="$PWD/build/Telegramd.app"
-          archive="$PWD/build/Telegramd-macOS-arm64-QA.tar.gz"
+          executable="$app/Contents/MacOS/Telegramd"
+          archive="$PWD/build/Telegramd-macOS-arm64-QA.zip"
           package_root="$PWD/build/qa-package"
           extracted_root="$PWD/build/qa-extracted"
           rm -rf "$package_root" "$extracted_root" "$archive"
           mkdir -p "$package_root" "$extracted_root"
 
+          test -x "$executable"
+          command -v otool >/dev/null 2>&1 || {
+            echo "otool is unavailable; refusing to publish the QA artifact"
+            exit 1
+          }
+          command -v nm >/dev/null 2>&1 || {
+            echo "nm is unavailable; refusing to publish the QA artifact"
+            exit 1
+          }
+          abi_loads="$package_root/abi-loads.txt"
+          abi_symbols="$package_root/abi-symbols.txt"
+          otool -l "$executable" > "$abi_loads"
+          nm -u "$executable" > "$abi_symbols"
+
+          min_os="$(awk '
+            /cmd LC_BUILD_VERSION$/ { in_build=1; next }
+            in_build && $1 == "minos" { print $2; exit }
+            in_build && /^ *cmd / { in_build=0 }
+          ' "$abi_loads")"
+          if [ "$min_os" != "13.0" ]; then
+            echo "unsupported or missing macOS minimum: ${min_os:-unknown}"
+            exit 1
+          fi
+
+          strong_loads="$(awk '
+            /cmd (LC_LOAD_DYLIB|LC_REEXPORT_DYLIB|LC_LOAD_UPWARD_DYLIB)$/ {
+              in_strong=1
+              next
+            }
+            in_strong && /^ *cmd / { in_strong=0 }
+            in_strong && $1 == "name" { print }
+          ' "$abi_loads")"
+          printf '%s\n' "$strong_loads" > "$package_root/abi-strong-loads.txt"
+          if printf '%s\n' "$strong_loads" | grep -F 'Translation.framework' >/dev/null; then
+            echo "strong Translation.framework load is incompatible with macOS $min_os"
+            exit 1
+          fi
+          if grep -E 'Translation.*notInstalled|_\$s11Translation0A5ErrorV12notInstalledACvgZ' "$abi_symbols" >/dev/null; then
+            echo "macOS 26-only Translation symbol reference detected"
+            exit 1
+          fi
+
           # The QA package is intentionally ad-hoc signed. Sign before creating
           # the archive, then verify the signature again after extraction so a
           # manual download exercises the same bundle that was published.
-          codesign --force --deep --sign - "$app"
-          COPYFILE_DISABLE=1 tar -czf "$archive" -C "$PWD/build" Telegramd.app
-          COPYFILE_DISABLE=1 tar -xzf "$archive" -C "$extracted_root"
+          codesign --force --deep -s - "$app"
+          COPYFILE_DISABLE=1 ditto -c -k --keepParent "$app" "$archive"
+          COPYFILE_DISABLE=1 ditto -x -k "$archive" "$extracted_root"
 
           extracted_app="$extracted_root/Telegramd.app"
           extracted_plist="$extracted_app/Contents/Info.plist"
@@ -168,7 +212,7 @@ jobs:
           test -f "$extracted_plist"
           test -x "$extracted_executable"
 
-          archive_roots="$(tar -tzf "$archive" | awk -F/ 'NF { print $1 }' | LC_ALL=C sort -u)"
+          archive_roots="$(unzip -Z1 "$archive" | awk -F/ 'NF { print $1 }' | LC_ALL=C sort -u)"
           test "$archive_roots" = "Telegramd.app"
 
           symlink_manifest() {
@@ -252,7 +296,7 @@ jobs:
             echo "## Telegramd macOS QA package"
             echo "- Built SHA: \`$GITHUB_SHA\`"
             echo "- Artifact: \`Telegramd-macOS-arm64-QA\`"
-            echo "- Archive: \`Telegramd-macOS-arm64-QA.tar.gz\`"
+            echo "- Archive: \`Telegramd-macOS-arm64-QA.zip\`"
             echo "- Artifact URL: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts"
             echo "- SHA-256: \`$digest\`"
             echo "- Retention: 14 days"
