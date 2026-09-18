@@ -432,3 +432,11 @@ TEST_CASE(RefusedOverwriteLeavesFallbackBlockInForce) {
 	CHECK(!options.setCustomServer(keyless));
 	CHECK(options.refusesProductionFallback());
 }
+
+// Deliberately failing canary for MAIN-786 unit feedback lane.
+// This test is expected to fail and should cause the unit feedback
+// workflow to exit with a non-zero code when dispatched on this branch.
+TEST_CASE(CanaryDeliberateFailure) {
+    CHECK(false);
+}
+
