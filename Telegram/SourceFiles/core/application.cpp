@@ -356,9 +356,13 @@ void Application::run() {
 	// Create mime database, so it won't be slow later.
 	QMimeDatabase().mimeTypeForName(u"text/plain"_q);
 
-	// Check now to avoid re-entrance later.
-	[[maybe_unused]] const auto &webviewAvailability
-		= Core::CachedWebviewAvailability();
+	// Check now to avoid re-entrance later. The lifecycle regressions do not
+	// create a WebView, and starting its helper process makes the isolated
+	// Xvfb run depend on an unrelated GLib/GTK subprocess teardown.
+	if (!headlessRegression) {
+		[[maybe_unused]] const auto &webviewAvailability
+			= Core::CachedWebviewAvailability();
+	}
 
 	_windows.emplace(nullptr, std::make_unique<Window::Controller>());
 	setLastActiveWindow(_windows.front().second.get());
