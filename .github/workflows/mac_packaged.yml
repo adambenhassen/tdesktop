@@ -10,7 +10,7 @@ jobs:
   macos:
     name: MacOS
     # This manually dispatched workflow may build locally and publishes only
-    # the unsigned Telegramd-macOS-arm64-QA artifact for manual QA.
+    # the ad-hoc-signed Telegramd-macOS-arm64-QA artifact for manual QA.
     # The isolation-gated Telegramd-macOS-arm64 artifact remains owned by
     # mac.yml, which runs the static identity and runtime isolation gates first.
     # This fork cannot schedule a depot label, and a build that queues forever
