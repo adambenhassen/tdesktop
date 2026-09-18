@@ -74,12 +74,79 @@ jobs:
       UPLOAD_ARTIFACT: "true"
       ONLY_CACHE: "false"
       IMAGE_TAG: tdesktop:centos_env
+      # The dependency image and its BuildKit cache need headroom beyond the
+      # checked-out tree. Reclaim the runner only when less than this amount
+      # remains, and fail closed if the headroom cannot be confirmed.
+      MIN_FREE_SPACE_GIB: "30"
 
     steps:
       - name: Clone.
         uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      - name: Check free disk space before image preparation.
+        id: disk-space-before
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${MIN_FREE_SPACE_GIB}" =~ ^[0-9]+$ ]]; then
+            echo "::error::MIN_FREE_SPACE_GIB is not a non-negative integer: ${MIN_FREE_SPACE_GIB}"
+            exit 1
+          fi
+          minimum_kib=$((MIN_FREE_SPACE_GIB * 1024 * 1024))
+
+          if ! free_kib=$(df -Pk / | awk 'NR == 2 { print $4; exit }'); then
+            echo "::error::Unable to measure free disk space on the runner."
+            exit 1
+          fi
+          if [[ ! "${free_kib}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Free disk space measurement was unavailable: '${free_kib}'"
+            exit 1
+          fi
+
+          free_gib=$((free_kib / 1024 / 1024))
+          echo "Free disk space before image preparation: ${free_gib} GiB (${free_kib} KiB). Minimum: ${MIN_FREE_SPACE_GIB} GiB (${minimum_kib} KiB)."
+          echo "free_kib=${free_kib}" >> "${GITHUB_OUTPUT}"
+          if (( free_kib < minimum_kib )); then
+            echo "cleanup_required=true" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Disk cleanup required: ${free_gib} GiB is below the ${MIN_FREE_SPACE_GIB} GiB minimum."
+          else
+            echo "cleanup_required=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Disk cleanup skipped: ${free_gib} GiB is at or above the ${MIN_FREE_SPACE_GIB} GiB minimum."
+          fi
+
+      - name: Free up some disk space when needed.
+        if: steps.disk-space-before.outputs.cleanup_required == 'true'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
+      - name: Verify free disk space after cleanup.
+        if: steps.disk-space-before.outputs.cleanup_required == 'true'
+        id: disk-space-after
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          minimum_kib=$((MIN_FREE_SPACE_GIB * 1024 * 1024))
+          if ! free_kib=$(df -Pk / | awk 'NR == 2 { print $4; exit }'); then
+            echo "::error::Unable to measure free disk space after cleanup."
+            exit 1
+          fi
+          if [[ ! "${free_kib}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Free disk space measurement after cleanup was unavailable: '${free_kib}'"
+            exit 1
+          fi
+
+          free_gib=$((free_kib / 1024 / 1024))
+          echo "Free disk space after cleanup: ${free_gib} GiB (${free_kib} KiB). Minimum: ${MIN_FREE_SPACE_GIB} GiB (${minimum_kib} KiB)."
+          echo "free_kib=${free_kib}" >> "${GITHUB_OUTPUT}"
+          if (( free_kib < minimum_kib )); then
+            echo "::error::Free disk space remains below the ${MIN_FREE_SPACE_GIB} GiB minimum after cleanup."
+            exit 1
+          fi
 
       - name: First set up.
         run: |
@@ -94,10 +161,27 @@ jobs:
           echo "$DOCKERFILE" > Dockerfile
           rm -rf __pycache__
 
-      - name: Free up some disk space.
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-        with:
-          tool-cache: true
+      - name: Verify free disk space before dependency image build.
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          minimum_kib=$((MIN_FREE_SPACE_GIB * 1024 * 1024))
+          if ! free_kib=$(df -Pk / | awk 'NR == 2 { print $4; exit }'); then
+            echo "::error::Unable to measure free disk space before the dependency image build."
+            exit 1
+          fi
+          if [[ ! "${free_kib}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Free disk space measurement before the dependency image build was unavailable: '${free_kib}'"
+            exit 1
+          fi
+
+          free_gib=$((free_kib / 1024 / 1024))
+          echo "Free disk space before dependency image build: ${free_gib} GiB (${free_kib} KiB). Minimum: ${MIN_FREE_SPACE_GIB} GiB (${minimum_kib} KiB)."
+          if (( free_kib < minimum_kib )); then
+            echo "::error::Free disk space fell below the ${MIN_FREE_SPACE_GIB} GiB minimum before the dependency image build."
+            exit 1
+          fi
 
       - name: Set up Docker Buildx.
         id: setup-buildx
