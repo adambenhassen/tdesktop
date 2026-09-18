@@ -77,7 +77,7 @@ jobs:
       # The dependency image and its BuildKit cache need headroom beyond the
       # checked-out tree. Reclaim the runner only when less than this amount
       # remains, and fail closed if the headroom cannot be confirmed.
-      MIN_FREE_SPACE_GIB: "30"
+      MIN_FREE_SPACE_GIB: "100"
 
     steps:
       - name: Clone.
