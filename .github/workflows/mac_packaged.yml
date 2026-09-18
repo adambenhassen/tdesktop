@@ -10,7 +10,7 @@ jobs:
   macos:
     name: MacOS
     # This manually dispatched workflow may build locally and publishes only
-    # the unsigned Telegramd-macOS-arm64-QA artifact for manual QA.
+    # the ad-hoc-signed Telegramd-macOS-arm64-QA artifact for manual QA.
     # The isolation-gated Telegramd-macOS-arm64 artifact remains owned by
     # mac.yml, which runs the static identity and runtime isolation gates first.
     # This fork cannot schedule a depot label, and a build that queues forever
@@ -128,6 +128,7 @@ jobs:
       - name: Telegramd build.
         if: env.ONLY_CACHE == 'false'
         run: |
+          set -Eeuo pipefail
           cd $REPO_NAME
           export CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH$(find $LibrariesPath/local -mindepth 1 -maxdepth 1 -type d -exec printf ':%s' {} +)"
 
@@ -140,17 +141,231 @@ jobs:
           cmake -Bbuild . \
             -DTDESKTOP_API_TEST=ON \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -DDESKTOP_APP_DISABLE_SWIFT6=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             $DEFINE
           cmake --build build
           macdeployqt build/Telegramd.app
-          codesign --remove-signature build/Telegramd.app
+
+          app="$PWD/build/Telegramd.app"
+          executable="$app/Contents/MacOS/Telegramd"
+          archive="$PWD/build/Telegramd-macOS-arm64-QA.zip"
+          package_root="$PWD/build/qa-package"
+          extracted_root="$PWD/build/qa-extracted"
+          rm -rf "$package_root" "$extracted_root" "$archive"
+          mkdir -p "$package_root" "$extracted_root"
+
+          test -x "$executable"
+          command -v otool >/dev/null 2>&1 || {
+            echo "otool is unavailable; refusing to publish the QA artifact"
+            exit 1
+          }
+          command -v nm >/dev/null 2>&1 || {
+            echo "nm is unavailable; refusing to publish the QA artifact"
+            exit 1
+          }
+          tapi_analyze=""
+          tapi_lookup_status=0
+          tapi_analyze="$(xcrun --find tapi-analyze 2>/dev/null)" || tapi_lookup_status=$?
+          if [ "$tapi_lookup_status" -ne 0 ] || [ ! -x "$tapi_analyze" ]; then
+            echo "tapi-analyze is unavailable; refusing to publish the QA artifact"
+            exit 1
+          fi
+          command -v jq >/dev/null 2>&1 || {
+            echo "jq is unavailable; refusing to publish the QA artifact"
+            exit 1
+          }
+          abi_loads="$package_root/abi-loads.txt"
+          abi_symbols="$package_root/abi-symbols.txt"
+          abi_availability="$package_root/abi-availability.json"
+          abi_availability_log="$package_root/abi-availability.log"
+          otool -l "$executable" > "$abi_loads"
+          nm -u "$executable" > "$abi_symbols"
+
+          min_os="$(awk '
+            /cmd LC_BUILD_VERSION$/ { in_build=1; next }
+            in_build && $1 == "minos" { print $2; exit }
+            in_build && /^ *cmd / { in_build=0 }
+          ' "$abi_loads")"
+          if [ "$min_os" != "13.0" ]; then
+            echo "unsupported or missing macOS minimum: ${min_os:-unknown}"
+            exit 1
+          fi
+
+          strong_loads="$(awk '
+            /cmd (LC_LOAD_DYLIB|LC_REEXPORT_DYLIB|LC_LOAD_UPWARD_DYLIB)$/ {
+              in_strong=1
+              next
+            }
+            in_strong && /^ *cmd / { in_strong=0 }
+            in_strong && $1 == "name" { print }
+          ' "$abi_loads")"
+          printf '%s\n' "$strong_loads" > "$package_root/abi-strong-loads.txt"
+          if printf '%s\n' "$strong_loads" | grep -F 'Translation.framework' >/dev/null; then
+            echo "strong Translation.framework load is incompatible with macOS $min_os"
+            exit 1
+          fi
+          if grep -F 'Translation' "$abi_symbols" >/dev/null; then
+            echo "macOS 26-only Translation symbol reference detected"
+            exit 1
+          fi
+
+          # TAPI resolves every load and undefined symbol through the SDK
+          # availability database for the executable's arm64/minimum-OS target.
+          # An unavailable analyzer, lookup error, missing result, or any
+          # reported launch failure must block publication.
+          tapi_status=0
+          "$tapi_analyze" \
+            --target "arm64-apple-macos${min_os}" \
+            -v \
+            -o "$abi_availability" \
+            "$executable" > "$abi_availability_log" 2>&1 || tapi_status=$?
+          if [ "$tapi_status" -ne 0 ]; then
+            cat "$abi_availability_log"
+            echo "TAPI availability inspection failed with status $tapi_status"
+            exit "$tapi_status"
+          fi
+          if ! jq -e '
+            (.launchAnalysis | length > 0)
+            and ([.launchAnalysis[] | .crashOnLaunch] | all(. == false))
+          ' "$abi_availability" >/dev/null; then
+            cat "$abi_availability_log"
+            cat "$abi_availability"
+            echo "TAPI availability inspection reported a launch requirement unavailable on macOS $min_os"
+            exit 1
+          fi
+
+          # The QA package is intentionally ad-hoc signed. Sign before creating
+          # the archive, then verify the signature again after extraction so a
+          # manual download exercises the same bundle that was published.
+          codesign --force --deep -s - "$app"
+          COPYFILE_DISABLE=1 ditto -c -k --keepParent "$app" "$archive"
+          COPYFILE_DISABLE=1 ditto -x -k "$archive" "$extracted_root"
+
+          extracted_app="$extracted_root/Telegramd.app"
+          extracted_plist="$extracted_app/Contents/Info.plist"
+          extracted_executable="$extracted_app/Contents/MacOS/Telegramd"
+          test -f "$archive"
+          test -d "$extracted_app"
+          test -f "$extracted_plist"
+          test -x "$extracted_executable"
+
+          archive_roots="$(unzip -Z1 "$archive" | awk -F/ 'NF { print $1 }' | LC_ALL=C sort -u)"
+          test "$archive_roots" = "Telegramd.app"
+
+          symlink_manifest() {
+            local root="$1"
+            find "$root" -type l -print | while IFS= read -r link; do
+              printf '%s -> %s\n' "${link#"$root"/}" "$(readlink "$link")"
+            done | LC_ALL=C sort
+          }
+          symlink_manifest "$app" > "$package_root/source-symlinks.txt"
+          symlink_manifest "$extracted_app" > "$package_root/extracted-symlinks.txt"
+          if ! cmp -s "$package_root/source-symlinks.txt" "$package_root/extracted-symlinks.txt"; then
+            diff -u "$package_root/source-symlinks.txt" "$package_root/extracted-symlinks.txt"
+            exit 1
+          fi
+          grep -F '/Versions/Current ->' "$package_root/source-symlinks.txt" >/dev/null
+
+          test "$(plutil -extract CFBundleExecutable raw -o - "$extracted_plist")" = Telegramd
+          test "$(plutil -extract CFBundleName raw -o - "$extracted_plist")" = Telegramd
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$extracted_plist")" = com.adambenhassen.telegramd
+          if plutil -extract CFBundleURLTypes xml1 -o - "$extracted_plist" >/dev/null 2>&1; then
+            echo "CFBundleURLTypes must be absent from $extracted_plist"
+            exit 1
+          fi
+          test ! -e "$PWD/build/Updater"
+          updater_paths="$package_root/updater-paths.txt"
+          find_status=0
+          find "$extracted_root" -iname 'Updater' -print -quit > "$updater_paths" || find_status=$?
+          if [ "$find_status" -ne 0 ]; then
+            cat "$updater_paths"
+            echo "updater inspection failed with status $find_status"
+            exit "$find_status"
+          fi
+          if [ -s "$updater_paths" ]; then
+            echo "updater found in extracted QA bundle"
+            cat "$updater_paths"
+            exit 1
+          fi
+
+          file "$extracted_executable"
+          test "$(lipo -archs "$extracted_executable")" = arm64
+          codesign --verify --deep --strict --verbose=2 "$extracted_app"
+          signature="$(codesign --display --verbose=4 "$extracted_app" 2>&1)"
+          printf '%s\n' "$signature" | tee "$package_root/signature.txt"
+          printf '%s\n' "$signature" | grep -F 'Signature=adhoc' >/dev/null
+
+          launch_root="$PWD/build/qa-launch"
+          launch_home="$launch_root/home"
+          launch_workdir="$launch_root/work"
+          mkdir -p "$launch_home" "$launch_workdir"
+          launch_pid=""
+          cleanup_launch() {
+            if [ -n "$launch_pid" ] && kill -0 "$launch_pid" 2>/dev/null; then
+              kill -TERM "$launch_pid" 2>/dev/null || true
+              for _ in 1 2 3 4 5; do
+                kill -0 "$launch_pid" 2>/dev/null || return 0
+                sleep 1
+              done
+              kill -KILL "$launch_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_launch EXIT
+          HOME="$launch_home" arch -arm64 "$extracted_executable" \
+            -noupdate -debug -workdir "$launch_workdir" \
+            > "$launch_root/stdout.log" 2> "$launch_root/stderr.log" &
+          launch_pid=$!
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            launch_state="$(ps -p "$launch_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+            case "$launch_state" in
+              ""|Z*)
+              wait "$launch_pid" || true
+              cat "$launch_root/stdout.log" "$launch_root/stderr.log"
+              echo "extracted Telegramd did not remain launchable"
+              exit 1
+              ;;
+            esac
+            sleep 1
+          done
+          kill -TERM "$launch_pid" 2>/dev/null || true
+          launch_status=0
+          wait "$launch_pid" || launch_status=$?
+          launch_pid=""
+          if [ "$launch_status" -ne 0 ] && [ "$launch_status" -ne 143 ]; then
+            cat "$launch_root/stdout.log" "$launch_root/stderr.log"
+            echo "extracted Telegramd exited with status $launch_status after launch"
+            exit 1
+          fi
+
+          digest="$(shasum -a 256 "$archive" | awk '{ print $1 }')"
+          {
+            echo "## Telegramd macOS QA package"
+            echo "- Built SHA: \`$GITHUB_SHA\`"
+            echo "- Artifact: \`Telegramd-macOS-arm64-QA\`"
+            echo "- Archive: \`Telegramd-macOS-arm64-QA.zip\`"
+            echo "- Artifact URL: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts"
+            echo "- SHA-256: \`$digest\`"
+            echo "- Retention: 14 days"
+            echo "- Archive root: \`Telegramd.app\`"
+            echo "- Symlink topology: preserved, including \`Versions/Current\`"
+            echo "- ABI minimum OS: \`$min_os\`"
+            echo "- ABI strong-load inspection: passed"
+            echo "- ABI symbol inspection: passed"
+            echo "- ABI availability metadata inspection: passed"
+            echo "- Bundle identifier: \`com.adambenhassen.telegramd\`"
+            echo "- Executable: \`Telegramd\` (arm64)"
+            echo "- Code signature: ad hoc, verified after extraction"
+            echo "- URL types: absent"
+            echo "- Updater: absent"
+            echo "- Launch smoke test: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Telegramd manual QA artifact.
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: Telegramd-macOS-arm64-QA
-          path: ${{ env.REPO_NAME }}/build/Telegramd.app
+          path: ${{ env.REPO_NAME }}/build/Telegramd-macOS-arm64-QA.zip
           if-no-files-found: error
           retention-days: 14
