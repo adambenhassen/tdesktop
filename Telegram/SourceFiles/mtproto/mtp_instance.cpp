@@ -53,19 +53,6 @@ int GetNextRequestId() {
 
 } // namespace details
 
-bool CanStartSpecialConfigRequest(
-		const QString &delegatedDomain,
-		bool networkAllowed,
-		bool httpTimeValid,
-		bool requestActive,
-		bool refusesProductionFallback) {
-	return !delegatedDomain.isEmpty()
-		&& networkAllowed
-		&& !httpTimeValid
-		&& !requestActive
-		&& !refusesProductionFallback;
-}
-
 class Instance::Private : private Sender {
 public:
 	Private(
