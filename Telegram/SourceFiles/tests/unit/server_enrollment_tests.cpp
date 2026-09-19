@@ -237,7 +237,7 @@ TEST_CASE(LateSelectedEndpointCallbackCannotReopenTheGate) {
 	auto callbackReopenedGate = false;
 	if (gate.stopTokenIsCurrent(failedAttempt)) {
 		callbackReopenedGate = true;
-		gate.resume();
+		static_cast<void>(gate.resume());
 	}
 
 	CHECK(!callbackReopenedGate);
