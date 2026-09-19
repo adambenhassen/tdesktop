@@ -114,6 +114,7 @@ TEST_CASE(PinnedCustomServerSurvivesSerialization) {
 TEST_CASE(AuthorizationStateCannotCrossServerPin) {
 	const auto original = MakeCustomServer();
 	CHECK(SameCustomServerPin(original, original));
+	CHECK(!SameCustomServerPin(CustomServer(), original));
 
 	auto changed = original;
 	changed.port += 1;

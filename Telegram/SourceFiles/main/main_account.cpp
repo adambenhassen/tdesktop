@@ -262,10 +262,10 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		discardStaleAuthorizationState();
 	} else if (!_mtpKeysToDestroy.empty()) {
 		if (!currentPinAuthorized
-			|| (_mtpKeysToDestroyPin
-				&& !MTP::SameCustomServerPin(
-					*_mtpKeysToDestroyPin,
-					customServer))) {
+			|| !_mtpKeysToDestroyPin
+			|| !MTP::SameCustomServerPin(
+				*_mtpKeysToDestroyPin,
+				customServer)) {
 			discardStaleAuthorizationState();
 		} else {
 			_mtpKeysToDestroyPin = customServer;
@@ -597,7 +597,10 @@ QByteArray Account::serializeMtpAuthorization() const {
 		return serialize(_mtp->mainDcId(), keys, keysToDestroy);
 	}
 	const auto &keys = _mtpFields.keys;
-	const auto &keysToDestroy = _mtpKeysToDestroy;
+	// A deferred key list has no trusted pin identity until the live MTP
+	// instance verifies it. Never carry it across a restart where that
+	// association is unavailable.
+	const auto keysToDestroy = MTP::AuthKeysList();
 	return serialize(_mtpFields.mainDcId, keys, keysToDestroy);
 }
 
@@ -875,20 +878,36 @@ void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
 	if (keys.empty()) {
 		return;
 	}
-	if (!authorizationStateMatchesCurrentPin(_mtpKeysToDestroyPin)) {
-		// Old authorization keys must never be sent through the newly bound
-		// endpoint. They are intentionally discarded instead of destroyed by
-		// an unrelated server.
+	const auto currentPin = _mtp->dcOptions().customServer();
+	const auto currentPinAuthorized = currentPin.key
+		&& _mtp->dcOptions().isAuthorized(currentPin.dcId);
+	if (!currentPinAuthorized) {
+		// There is no verified destination to which these old keys can be
+		// sent. Drop both the pending list and any independent destroyer.
+		discardStaleAuthorizationState();
+		return;
+	}
+	if (_mtpForKeysDestroy
+		&& !authorizationStateMatchesCurrentPin(_mtpForKeysDestroyPin)) {
+		// A pin change invalidates the copied config before a proxy callback
+		// or logout gets a chance to observe it.
+		_mtpForKeysDestroy = nullptr;
+		_mtpForKeysDestroyPin.reset();
+	}
+	if (!_mtpKeysToDestroyPin
+		|| !MTP::SameCustomServerPin(
+			*_mtpKeysToDestroyPin,
+			currentPin)) {
+		// Keys loaded without a persisted pin, or queued for another pin,
+		// must not be reused against the newly authorized server.
 		_mtpKeysToDestroyPin.reset();
 		return;
 	}
+	_mtpKeysToDestroyPin.reset();
 	if (_mtpForKeysDestroy) {
-		if (authorizationStateMatchesCurrentPin(_mtpForKeysDestroyPin)) {
-			_mtpForKeysDestroy->addKeysForDestroy(std::move(keys));
-			local().writeMtpData();
-			return;
-		}
-		discardStaleAuthorizationState();
+		_mtpForKeysDestroy->addKeysForDestroy(std::move(keys));
+		local().writeMtpData();
+		return;
 	}
 	auto destroyFields = MTP::Instance::Fields();
 
@@ -897,7 +916,7 @@ void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
 	destroyFields.keys = std::move(keys);
 	destroyFields.deviceModel = Platform::DeviceModelPretty();
 	destroyFields.systemVersion = Platform::SystemVersionPretty();
-	_mtpForKeysDestroyPin = _mtp->dcOptions().customServer();
+	_mtpForKeysDestroyPin = currentPin;
 	_mtpForKeysDestroy = std::make_unique<MTP::Instance>(
 		MTP::Instance::Mode::KeysDestroyer,
 		std::move(destroyFields));
