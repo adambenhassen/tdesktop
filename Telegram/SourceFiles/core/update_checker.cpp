@@ -16,7 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "core/application.h"
 #include "core/changelogs.h"
-#include "core/click_handler_types.h"
+#include "core/update_policy.h"
 #include "core/version.h"
 #include "mainwindow.h"
 #include "main/main_account.h"
@@ -73,11 +73,11 @@ constexpr auto kFlatpakPortalObjectPath = "/org/freedesktop/portal/Flatpak";
 constexpr auto kFlatpakUpdated = "/app/.updated"_cs;
 #endif // !Q_OS_WIN && !Q_OS_MAC
 
-#ifdef TDESKTOP_DISABLE_AUTOUPDATE
-bool UpdaterIsDisabled = true;
-#else // TDESKTOP_DISABLE_AUTOUPDATE
-bool UpdaterIsDisabled = false;
-#endif // TDESKTOP_DISABLE_AUTOUPDATE
+// This fork uses an operator-selected server and does not trust update URLs
+// from that server or from Telegram's production defaults. Keep every updater
+// entry point disabled, including packaged/manual paths.
+bool UpdaterIsDisabled = !UpdateNetworkAllowed(
+	UpdateEntryPoint::Automatic);
 
 std::weak_ptr<Updater> UpdaterInstance;
 
@@ -1466,7 +1466,11 @@ void Updater::stop() {
 }
 
 void Updater::start(bool forceWait) {
-	if (cExeName().isEmpty()) {
+	if (UpdaterDisabled()
+		|| !UpdateNetworkAllowed(forceWait
+			? UpdateEntryPoint::Periodic
+			: UpdateEntryPoint::Automatic)
+		|| cExeName().isEmpty()) {
 		return;
 	}
 
@@ -1566,6 +1570,9 @@ void Updater::checkerFail(not_null<Implementation*> which) {
 }
 
 void Updater::test() {
+	if (UpdaterDisabled()) {
+		return;
+	}
 	_testing = true;
 	cSetLastUpdateCheck(0);
 	start(false);
@@ -1753,6 +1760,10 @@ bool UpdateChecker::percent() const {
 //}
 
 bool checkReadyUpdate() {
+	if (UpdaterDisabled()
+		|| !UpdateNetworkAllowed(UpdateEntryPoint::CrashWindowRetry)) {
+		return false;
+	}
 	QString readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q, readyPath = cWorkingDir() + u"tupdates/temp"_q;
 	if (!QFile(readyFilePath).exists() || cExeName().isEmpty()) {
 		if (QDir(cWorkingDir() + u"tupdates/ready"_q).exists() || QDir(cWorkingDir() + u"tupdates/temp"_q).exists()) {
@@ -1878,22 +1889,11 @@ bool checkReadyUpdate() {
 }
 
 void UpdateApplication() {
-	if (UpdaterDisabled()) {
-		const auto url = [&] {
-#ifdef OS_WIN_STORE
-			return "https://www.microsoft.com/en-us/store/p/telegram-desktop/9nztwsqntd0s";
-#elif defined OS_MAC_STORE // OS_WIN_STORE
-			return "https://itunes.apple.com/ae/app/telegram-desktop/id946399090";
-#else // OS_WIN_STORE || OS_MAC_STORE
-			if (KSandbox::isFlatpak()) {
-				return "https://flathub.org/apps/details/org.telegram.desktop";
-			} else if (KSandbox::isSnap()) {
-				return "https://snapcraft.io/telegram-desktop";
-			}
-			return "https://desktop.telegram.org";
-#endif // OS_WIN_STORE || OS_MAC_STORE
-		}();
-		UrlClickHandler::Open(url);
+	if (UpdaterDisabled()
+		|| !UpdateNetworkAllowed(UpdateEntryPoint::Manual)) {
+		// Manual update actions are intentionally inert in this fork. In
+		// particular, do not open an official or arbitrary third-party URL.
+		return;
 	} else {
 		cSetAutoUpdate(true);
 		const auto window = Core::IsAppLaunched()

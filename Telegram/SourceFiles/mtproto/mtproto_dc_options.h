@@ -43,6 +43,12 @@ struct CustomServer {
 	}
 };
 
+// Authorization state is scoped to the complete verified pin, not merely to
+// an address or a DC id. Callers use this before reusing deferred key state.
+[[nodiscard]] bool SameCustomServerPin(
+	const CustomServer &left,
+	const CustomServer &right);
+
 enum class DcType {
 	Regular,
 	Temporary,
@@ -54,6 +60,16 @@ enum class Environment : uchar {
 	Production,
 	Test,
 };
+
+// Keep the http-time special-config boundary pure and observable. The
+// delegated domain is only usable when the account is allowed to use the
+// production fallback path; callers still own the actual request lifetime.
+[[nodiscard]] bool CanStartSpecialConfigRequest(
+	const QString &delegatedDomain,
+	bool networkAllowed,
+	bool httpTimeValid,
+	bool requestActive,
+	bool refusesProductionFallback);
 
 class DcOptions {
 public:
@@ -93,6 +109,10 @@ public:
 	// construct methods don't notify "changed" subscribers.
 	bool constructFromSerialized(const QByteArray &serialized);
 	void constructFromBuiltIn();
+	// Clear every endpoint and RSA key while keeping the account editable in
+	// the server-enrollment intro. This is different from blocked(), which
+	// represents an unreadable persisted pin and must stay read-only.
+	void constructUnenrolled();
 	void constructAddOne(
 		int id,
 		Flags flags,
@@ -162,6 +182,7 @@ public:
 	// reach any server rather than fall back to the built-in table.
 	void constructBlocked();
 	[[nodiscard]] bool blocked() const;
+	[[nodiscard]] bool unenrolled() const;
 
 	// True when this account must never go looking for Telegram's own
 	// servers: it is pinned to a user-entered endpoint, or blocked
@@ -236,6 +257,10 @@ private:
 	// True when a pinned custom server could not be restored, so this
 	// account must hold no endpoint and no key at all.
 	bool _blocked = false;
+
+	// True when this account has no user-selected server yet. It holds no
+	// endpoint or RSA key, but unlike _blocked it leaves enrollment editable.
+	bool _unenrolled = false;
 
 };
 

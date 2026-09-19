@@ -8,8 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/mtproto_auth_key.h"
+#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtp_instance.h"
 #include "base/weak_ptr.h"
+
+#include <optional>
 
 namespace Storage {
 class Account;
@@ -138,6 +141,9 @@ private:
 	bool checkForNewSession(const MTP::Response &message);
 
 	void destroyMtpKeys(MTP::AuthKeysList &&keys);
+	void discardStaleAuthorizationState();
+	[[nodiscard]] bool authorizationStateMatchesCurrentPin(
+		const std::optional<MTP::CustomServer> &pin) const;
 	void resetAuthorizationKeys();
 
 	void loggedOut();
@@ -165,6 +171,8 @@ private:
 	std::unique_ptr<SessionSettings> _storedSessionSettings;
 	MTP::Instance::Fields _mtpFields;
 	MTP::AuthKeysList _mtpKeysToDestroy;
+	std::optional<MTP::CustomServer> _mtpKeysToDestroyPin;
+	std::optional<MTP::CustomServer> _mtpForKeysDestroyPin;
 	bool _loggingOut = false;
 
 	rpl::lifetime _lifetime;

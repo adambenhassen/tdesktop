@@ -171,8 +171,9 @@ void ResolvingConnection::handleConnected() {
 		const auto host = _proxy.host;
 		const auto good = _proxy.resolvedIPs[_ipIndex];
 		const auto instance = _instance;
+		const auto generation = instance->serverEnrollmentStopToken();
 		InvokeQueued(_instance, [=] {
-			instance->setGoodProxyDomain(host, good);
+			instance->setGoodProxyDomain(host, good, generation);
 		});
 	}
 	connected();

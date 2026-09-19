@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "mtproto/mtp_instance.h"
+#include "mtproto/mtproto_dc_options.h"
 
 namespace {
 
@@ -106,4 +107,43 @@ TEST_CASE(RetireWithoutAReportIsANoop) {
 	channel.retireIfReportedBy(2);
 	CHECK_EQ(emissions.count(), 1); // only the initial empty value
 	CHECK(!channel.current().has_value());
+}
+
+// Pausing an instance invalidates callbacks immediately. Incrementing only
+// when resume() runs leaves a late resolver or timer callback looking current
+// during the entire enrollment pause.
+TEST_CASE(PausingEnrollmentInvalidatesTheCurrentGeneration) {
+	ServerEnrollmentGate gate;
+	CHECK(gate.start());
+	const auto beforePause = gate.stopToken();
+
+	CHECK(gate.pause());
+	CHECK(!gate.stopTokenIsCurrent(beforePause));
+	CHECK(!gate.networkAllowed());
+
+	const auto whilePaused = gate.stopToken();
+	CHECK(gate.resume().resumed);
+	CHECK(!gate.stopTokenIsCurrent(whilePaused));
+	CHECK(gate.networkAllowed());
+}
+
+// An untrusted delegated background value must not reach the special-config
+// loader when production fallback is refused. Count the observable request
+// boundary rather than relying on the loader implementation being a no-op.
+TEST_CASE(RefusedFallbackSkipsHttpTimeSpecialConfigIo) {
+	auto options = DcOptions(Environment::Production);
+	options.constructUnenrolled();
+	const auto unsafeDelegatedUrl = u"https://updates.attacker.test"_q;
+	auto specialConfigIoAttempts = 0;
+
+	if (CanStartSpecialConfigRequest(
+			unsafeDelegatedUrl,
+			true,
+			false,
+			false,
+			options.refusesProductionFallback())) {
+		++specialConfigIoAttempts;
+	}
+
+	CHECK_EQ(specialConfigIoAttempts, 0);
 }

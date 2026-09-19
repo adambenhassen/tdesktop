@@ -135,7 +135,12 @@ public:
 		if (!_started) {
 			return false;
 		}
-		_paused = true;
+		if (!_paused.exchange(true)) {
+			// Invalidate callbacks as soon as work is stopped. Waiting until
+			// resume() leaves the whole paused interval looking current to a
+			// late resolver or timer callback.
+			_stopGeneration.fetch_add(1, std::memory_order_release);
+		}
 		return true;
 	}
 
@@ -195,7 +200,10 @@ public:
 	~Instance();
 
 	void resolveProxyDomain(const QString &host);
-	void setGoodProxyDomain(const QString &host, const QString &ip);
+	void setGoodProxyDomain(
+		const QString &host,
+		const QString &ip,
+		uint64 generation);
 	void suggestMainDcId(DcId mainDcId);
 	void setMainDcId(DcId mainDcId);
 	[[nodiscard]] DcId mainDcId() const;

@@ -109,6 +109,29 @@ TEST_CASE(PinnedCustomServerSurvivesSerialization) {
 	}
 }
 
+// Authorization state is server-scoped. A copied key-destruction state may
+// only be reused when the endpoint and verified key are exactly unchanged.
+TEST_CASE(AuthorizationStateCannotCrossServerPin) {
+	const auto original = MakeCustomServer();
+	CHECK(SameCustomServerPin(original, original));
+	CHECK(!SameCustomServerPin(CustomServer(), original));
+
+	const auto key = MakeKey();
+	auto changedKey = original;
+	auto n = key->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	changedKey.key = std::make_shared<details::RSAPublicKey>(
+		n,
+		key->getE());
+	CHECK(changedKey.key->valid());
+	CHECK(!SameCustomServerPin(changedKey, original));
+
+	auto changed = original;
+	changed.port += 1;
+	CHECK(!SameCustomServerPin(original, changed));
+}
+
 // Address-only discovery stores the normalized selection and the origin that
 // authenticated it alongside the operational binding. Losing either field
 // on restart would turn a verified enrollment into an unclassified legacy
@@ -140,6 +163,36 @@ TEST_CASE(UnpinnedConfigSurvivesSerialization) {
 
 	CHECK(!restored.hasCustomServer());
 	CHECK(!restored.refusesProductionFallback());
+}
+
+// An account that has not selected a server must retain an editable intro
+// flow, but it must not retain Telegram's endpoint table or RSA keys while it
+// waits there. The state also has to survive a config write and reload.
+TEST_CASE(UnenrolledConfigHasNoProductionEndpointsOrKeys) {
+	auto options = DcOptions(Environment::Production);
+	options.constructUnenrolled();
+
+	CHECK(options.unenrolled());
+	CHECK(!options.blocked());
+	CHECK(!options.hasCustomServer());
+	CHECK(options.refusesProductionFallback());
+	CHECK(options.configEnumDcIds().empty());
+	CHECK(options.lookup(2, DcType::Regular, false).data[0][0].empty());
+	CHECK(!options.getDcRSAKey(
+		2,
+		QVector<MTPlong>(1, MTP_long(kProductionKeyFingerprint))).valid());
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.unenrolled());
+	CHECK(restored.configEnumDcIds().empty());
+	CHECK(!restored.getDcRSAKey(
+		2,
+		QVector<MTPlong>(1, MTP_long(kProductionKeyFingerprint))).valid());
+
+	CHECK(restored.setCustomServer(MakeCustomServer()));
+	CHECK(!restored.unenrolled());
+	CHECK(restored.hasCustomServer());
 }
 
 TEST_CASE(PermanentAuthKeyGateComesOnlyFromPersistedPin) {

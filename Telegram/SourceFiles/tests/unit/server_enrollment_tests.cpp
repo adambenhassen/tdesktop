@@ -225,6 +225,25 @@ TEST_CASE(CurrentStopRemainsEffectiveUntilTheNextReplacement) {
 	CHECK(stopApplied);
 }
 
+// A selected endpoint failure can leave a response or timer callback queued
+// after the enrollment attempt is cancelled. That callback must not reopen
+// the gate or introduce a fallback endpoint in the next attempt.
+TEST_CASE(LateSelectedEndpointCallbackCannotReopenTheGate) {
+	ServerEnrollmentGate gate;
+	CHECK(gate.start());
+	const auto failedAttempt = gate.stopToken();
+	CHECK(gate.pause());
+
+	auto callbackReopenedGate = false;
+	if (gate.stopTokenIsCurrent(failedAttempt)) {
+		callbackReopenedGate = true;
+		static_cast<void>(gate.resume());
+	}
+
+	CHECK(!callbackReopenedGate);
+	CHECK(!gate.networkAllowed());
+}
+
 TEST_CASE(RejectedEnrollmentDoesNotReachNetworkOrAuth) {
 	auto networkCalls = 0;
 	auto authCalls = 0;
