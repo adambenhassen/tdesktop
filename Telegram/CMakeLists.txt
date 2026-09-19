@@ -9,6 +9,7 @@ init_non_host_target(Telegram)
 
 if (APPLE AND NOT DESKTOP_APP_DISABLE_SWIFT6)
     set(TRANSLATION_FRAMEWORK "-weak_framework Translation" CACHE STRING "Weak-link Translation.framework" FORCE)
+    set(CMAKE_Swift_FLAGS "-target arm64-apple-macos13.0")
 endif()
 
 add_subdirectory(lib_rpl)
