@@ -34,60 +34,60 @@
     {
       "name": "canceled-selection",
       "phase": "preselection",
-      "description": "Canceled discovery cannot leave a live request.",
+      "description": "A live local discovery request is canceled before its response.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "canceled-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
-      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "failed-selection",
       "phase": "preselection",
-      "description": "Failed discovery cannot fall back to production.",
+      "description": "A live selected-endpoint refusal completes without fallback.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "failed-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
-      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19083"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19083"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "partial-selection",
       "phase": "preselection",
-      "description": "Partial discovery response is terminal.",
+      "description": "A live partial discovery response is rejected as terminal.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "partial-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
-      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "timed-out-selection",
       "phase": "preselection",
-      "description": "Timed-out discovery leaves the account paused.",
+      "description": "A live discovery request is stopped by the production timeout path.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "timed-out-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
-      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -163,8 +163,8 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": []},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -178,8 +178,8 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": []},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19082"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19082"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -193,8 +193,8 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": []},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19082"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19082"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -208,8 +208,8 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": []},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19082"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19082"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -223,8 +223,8 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": ["127.0.0.1:19080"]},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": ["127.0.0.1:19080"], "proxy_target": "192.0.2.10:443"},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19082"], "dns": [], "proxies": ["127.0.0.1:19080"]},
+      "required": {"destinations": ["127.0.0.1:19082"], "dns": [], "proxies": ["127.0.0.1:19080"], "proxy_target": "127.0.0.1:19082"},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -238,8 +238,8 @@
         "timeout_seconds": 20,
         "update_mode": "enabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": []},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19082"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19082"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -253,23 +253,23 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": []},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19083"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19083"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "late-callback",
       "phase": "preselection",
-      "description": "Late timers, resolver results, and callbacks stay inert.",
+      "description": "A live response arriving after cancellation has no callback effect.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "late-callback"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
-      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
+      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     }

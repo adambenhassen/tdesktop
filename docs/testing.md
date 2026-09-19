@@ -123,10 +123,12 @@ resolution, destination, DNS, proxy, and required evidence contract. Raw
 The checked-in Debug driver in `Telegram/SourceFiles/test/test_scenario.cpp`
 consumes `TDESKTOP_NETWORK_TRACE_CASE` and registers every manifest case with
 the test runner. Preselection cases exercise distinct validation, cancellation,
-timeout, parser, and generation-cancellation paths. Local preflight exercises
-the framed discovery request; pin, restart, account-isolation, selected-failure,
-and refresh cases use separate binding and socket paths. Public cases exercise
-the resolver callback, and the proxy case performs a SOCKS5 target exchange.
+timeout, parser, and generation-cancellation paths against bounded live local
+discovery sockets. Local preflight exercises the framed discovery request; pin,
+restart, account-isolation, selected-failure, and refresh cases use the actual
+account enrollment, persistence, activation, fallback-suppression, app-config,
+and update-check paths. Public cases issue the HTTPS discovery request and record
+the `QHostInfo` callback, and the proxy case performs a SOCKS5 target exchange.
 The selected scenario must write the manifest's completion log under
 `$TDESKTOP_TEST_EVIDENCE_DIR`, including both
 `TEST_COMPLETE` and `SCENARIO_RESULT: PASS`. A missing marker, failed result, or

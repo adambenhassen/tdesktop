@@ -375,8 +375,10 @@ def check_trace(
     dns = list(configured_dns)
     proxies = list(configured_proxies)
     if phase == "preselection":
-        destinations = []
-        dns = []
+        # A preselection case may deliberately exercise a bounded local
+        # discovery request. Its destination must come from the case
+        # allowlist just like the later endpoint phases; proxies remain
+        # disabled until a case explicitly opts into proxy transport.
         proxies = []
     elif phase == "public-discovery":
         proxies = []
