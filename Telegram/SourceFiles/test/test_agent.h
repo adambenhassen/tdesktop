@@ -22,10 +22,10 @@ void Fire(const QString &event);
 
 [[nodiscard]] bool HasFired(const QString &event);
 
-// Builds the scenario registered by test/test_scenario.cpp and starts it on
-// the event loop. Runs at the end of Application::run(). No-op unless
-// Active(), a scenario is registered, and the portable data folder carries
-// the "testing" marker of a disposable test account copy.
+// Builds the case selected by TDESKTOP_NETWORK_TRACE_CASE from
+// test/test_scenario.cpp and starts it on the event loop. Runs at the end of
+// Application::run(). No-op unless Active() and the portable data folder
+// carries the "testing" marker of a disposable test account copy.
 void Start();
 
 } // namespace Test
