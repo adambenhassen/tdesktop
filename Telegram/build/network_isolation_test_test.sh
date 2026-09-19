@@ -24,7 +24,7 @@ cat > "$TARGET" <<'EOF'
 printf 'trace-case=%s args=%s\n' "${TDESKTOP_NETWORK_TRACE_CASE:-unset}" "$*"
 if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = proxy-intermediary ] \
 	&& [ "${TDESKTOP_SKIP_PROXY_ASSERTION:-0}" != 1 ]; then
-	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"192.0.2.10:443","observed":true}' > "$TDESKTOP_PROXY_ASSERTION_FILE"
+	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"127.0.0.1:19082","observed":true}' > "$TDESKTOP_PROXY_ASSERTION_FILE"
 fi
 if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-selection ]; then
 	printf '%s\n' '{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"]}' \
@@ -87,7 +87,7 @@ TRACE
 background-refresh)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.10")}, 16) = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 TRACE
 	;;
 proxy-intermediary)
@@ -96,10 +96,28 @@ socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(19080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 TRACE
 	;;
-local-preflight|pinned-endpoint|restart-pinned|multiple-account-isolation|selected-endpoint-failure)
+failed-selection)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.10")}, 16) = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(19083), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
+TRACE
+	;;
+canceled-selection|partial-selection|timed-out-selection|late-callback|local-preflight)
+	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
+connect(3, {sa_family=AF_INET, sin_port=htons(19081), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+TRACE
+	;;
+pinned-endpoint|restart-pinned|multiple-account-isolation)
+	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
+connect(3, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+TRACE
+	;;
+selected-endpoint-failure)
+	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
+connect(3, {sa_family=AF_INET, sin_port=htons(19083), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
 TRACE
 	;;
 *)

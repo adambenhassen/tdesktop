@@ -77,6 +77,39 @@ class NetworkTraceTest(unittest.TestCase):
 
         self.assertFalse(result["passed"], result)
 
+    def test_preselection_can_bind_a_live_case_destination(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
+            'connect(3, {sa_family=AF_INET, sin_port=htons(19081), '
+            'sin_addr=inet_addr("127.0.0.1")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="canceled-selection",
+            phase="preselection",
+            allowed_destinations=["127.0.0.1:19081"],
+            allowed_dns=[],
+            required_destinations=["127.0.0.1:19081"],
+        )
+
+        self.assertTrue(result["passed"], result)
+
+        rejected = check_trace(
+            parse_trace_lines([
+                'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, '
+                'IPPROTO_TCP) = 4',
+                'connect(4, {sa_family=AF_INET, sin_port=htons(19082), '
+                'sin_addr=inet_addr("127.0.0.1")}, 16) = 0',
+            ]),
+            case="canceled-selection",
+            phase="preselection",
+            allowed_destinations=["127.0.0.1:19081"],
+            allowed_dns=[],
+            required_destinations=["127.0.0.1:19081"],
+        )
+        self.assertFalse(rejected["passed"], rejected)
+
     def test_public_discovery_allows_only_resolver_and_origin(self):
         events = parse_trace_lines([
             'socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3',
@@ -640,6 +673,33 @@ class NetworkTraceTest(unittest.TestCase):
         )
 
         self.assertTrue(result["passed"], result)
+
+    def test_debug_driver_uses_production_lifecycle_paths(self):
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "SourceFiles"
+            / "test"
+            / "test_scenario.cpp"
+        )
+        source = source_path.read_text(encoding="utf-8")
+        for required in (
+            '"core/application.h"',
+            '"core/update_checker.h"',
+            '"intro/intro_server_discovery.h"',
+            '"main/main_account.h"',
+            '"main/main_domain.h"',
+            '"main/main_app_config.h"',
+            '"mtproto/mtproto_server_enrollment.h"',
+            "Core::App().domain()",
+            "ServerWidgetDiscovery",
+            "QNetworkAccessManager",
+            "CommitServerEnrollment",
+            "appConfig().refresh",
+            "UpdateChecker",
+        ):
+            self.assertIn(required, source)
+        self.assertNotIn("WriteBinding", source)
+        self.assertNotIn("ReadBinding", source)
 
 
 if __name__ == "__main__":
