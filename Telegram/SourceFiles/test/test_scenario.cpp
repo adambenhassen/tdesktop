@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/update_checker.h"
 #include "intro/intro_server_discovery.h"
+#include "lang/lang_cloud_manager.h"
+#include "lang/lang_instance.h"
 #include "main/main_account.h"
 #include "main/main_app_config.h"
 #include "main/main_domain.h"
@@ -240,6 +242,10 @@ struct NetworkCaseState final {
 	}
 
 	void stop() {
+		if (_account && !_done) {
+			_account->mtp().stopForServerEnrollment();
+			_account = nullptr;
+		}
 		if (_lookupId >= 0) {
 			QHostInfo::abortHostLookup(_lookupId);
 			_lookupId = -1;
@@ -288,6 +294,10 @@ struct NetworkCaseState final {
 	void settle() {
 		if (_done) {
 			return;
+		}
+		if (_account) {
+			_account->mtp().stopForServerEnrollment();
+			_account = nullptr;
 		}
 		_done = true;
 		_socketFinished = nullptr;
@@ -849,6 +859,15 @@ struct NetworkCaseState final {
 				Check(committed, u"background case pins its account first"_q);
 				shared->_account->appConfig().start();
 				shared->_account->appConfig().refresh(true);
+				const auto language = Core::App().langpack().cloudLangCode(
+					Lang::Pack::Current);
+				if (!language.isEmpty()) {
+					if (const auto manager = Core::App().langCloudManager()) {
+						manager->requestLangPackDifference(language);
+					}
+				}
+				shared->_account->mtp().requestConfigIfOld();
+				shared->_account->mtp().requestCDNConfig();
 				shared->_updateChecker = std::make_unique<Core::UpdateChecker>();
 				shared->_updateChecker->test();
 				Note(u"background refresh invoked app-config and update-check paths"_q);
