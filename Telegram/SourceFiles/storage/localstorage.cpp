@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "ui/power_saving.h"
 #include "core/update_checker.h"
+#include "core/update_policy.h"
 #include "core/file_location.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -530,8 +531,6 @@ void rewriteSettingsIfNeeded() {
 }
 
 const QString &AutoupdatePrefix(const QString &replaceWith = {}) {
-	Expects(!Core::UpdaterDisabled());
-
 	static auto value = QString();
 	if (!replaceWith.isEmpty()) {
 		value = replaceWith;
@@ -540,13 +539,14 @@ const QString &AutoupdatePrefix(const QString &replaceWith = {}) {
 }
 
 QString autoupdatePrefixFile() {
-	Expects(!Core::UpdaterDisabled());
-
 	return cWorkingDir() + "tdata/prefix";
 }
 
 const QString &readAutoupdatePrefixRaw() {
-	Expects(!Core::UpdaterDisabled());
+	static const auto empty = QString();
+	if (Core::UpdaterDisabled()) {
+		return empty;
+	}
 
 	const auto &result = AutoupdatePrefix();
 	if (!result.isEmpty()) {
@@ -559,11 +559,12 @@ const QString &readAutoupdatePrefixRaw() {
 			return AutoupdatePrefix(value);
 		}
 	}
-	return AutoupdatePrefix("https://td.telegram.org");
+	return AutoupdatePrefix();
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
-	if (Core::UpdaterDisabled()) {
+	if (Core::UpdaterDisabled()
+		|| !Core::AcceptServerAutoupdatePrefix(prefix)) {
 		return;
 	}
 
@@ -583,7 +584,9 @@ void writeAutoupdatePrefix(const QString &prefix) {
 }
 
 QString readAutoupdatePrefix() {
-	Expects(!Core::UpdaterDisabled());
+	if (Core::UpdaterDisabled()) {
+		return {};
+	}
 
 	static const auto RegExp = QRegularExpression("/+$");
 	auto result = readAutoupdatePrefixRaw();
