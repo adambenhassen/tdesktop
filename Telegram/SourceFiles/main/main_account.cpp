@@ -237,6 +237,16 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		config = std::make_unique<MTP::Config>(
 			Core::App().fallbackProductionConfig());
 	}
+	if (failure == PinFailure::None
+		&& !_sessionUserId
+		&& !config->blocked()
+		&& !config->hasCustomServer()) {
+		// A fresh account must not carry Telegram's built-in endpoints or
+		// RSA keys while the enrollment form is waiting for a user-selected
+		// server. Keep this state editable; blocked() is reserved for an
+		// unreadable persisted pin and intentionally disables the form.
+		config->dcOptions().constructUnenrolled();
+	}
 	const auto customServer = config->customServer();
 	const auto startPaused = !_sessionUserId
 		&& (!customServer.key
@@ -781,8 +791,20 @@ void Account::loggedOut() {
 	Media::Player::mixer()->stopAndClear();
 	destroySession(DestroyReason::LoggedOut);
 	local().reset();
-	if (_mtp && _mtp->dcOptions().clearAuthorized()) {
-		local().writeMtpConfig();
+	if (_mtp) {
+		// Logging out returns the account to enrollment. Stop all queued
+		// work before clearing authorization so a callback cannot reopen a
+		// production endpoint between the two state changes.
+		_mtp->stopForServerEnrollment();
+		const auto clearedAuthorization = _mtp->dcOptions().clearAuthorized();
+		const auto unbound = !_mtp->dcOptions().blocked()
+			&& !_mtp->dcOptions().hasCustomServer();
+		if (unbound) {
+			_mtp->dcOptions().constructUnenrolled();
+		}
+		if (clearedAuthorization || unbound) {
+			local().writeMtpConfig();
+		}
 	}
 	cSetOtherOnline(0);
 }
@@ -863,6 +885,11 @@ void Account::resetAuthorizationKeys() {
 		const auto old = base::take(_mtp);
 		auto config = std::make_unique<MTP::Config>(old->config());
 		const auto customServer = config->customServer();
+		if (!_sessionUserId
+			&& !config->blocked()
+			&& !customServer.key) {
+			config->dcOptions().constructUnenrolled();
+		}
 		const auto startPaused = !_sessionUserId
 			&& (!customServer.key
 				|| !config->dcOptions().isAuthorized(customServer.dcId));

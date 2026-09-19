@@ -142,6 +142,36 @@ TEST_CASE(UnpinnedConfigSurvivesSerialization) {
 	CHECK(!restored.refusesProductionFallback());
 }
 
+// An account that has not selected a server must retain an editable intro
+// flow, but it must not retain Telegram's endpoint table or RSA keys while it
+// waits there. The state also has to survive a config write and reload.
+TEST_CASE(UnenrolledConfigHasNoProductionEndpointsOrKeys) {
+	auto options = DcOptions(Environment::Production);
+	options.constructUnenrolled();
+
+	CHECK(options.unenrolled());
+	CHECK(!options.blocked());
+	CHECK(!options.hasCustomServer());
+	CHECK(options.refusesProductionFallback());
+	CHECK(options.configEnumDcIds().empty());
+	CHECK(options.lookup(2, DcType::Regular, false).data[0][0].empty());
+	CHECK(!options.getDcRSAKey(
+		2,
+		QVector<MTPlong>(1, MTP_long(kProductionKeyFingerprint))).valid());
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.unenrolled());
+	CHECK(restored.configEnumDcIds().empty());
+	CHECK(!restored.getDcRSAKey(
+		2,
+		QVector<MTPlong>(1, MTP_long(kProductionKeyFingerprint))).valid());
+
+	CHECK(restored.setCustomServer(MakeCustomServer()));
+	CHECK(!restored.unenrolled());
+	CHECK(restored.hasCustomServer());
+}
+
 TEST_CASE(PermanentAuthKeyGateComesOnlyFromPersistedPin) {
 	auto options = DcOptions(Environment::Production);
 	CHECK(!options.usesPermanentAuthKey(2));

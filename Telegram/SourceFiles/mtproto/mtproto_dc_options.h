@@ -93,6 +93,10 @@ public:
 	// construct methods don't notify "changed" subscribers.
 	bool constructFromSerialized(const QByteArray &serialized);
 	void constructFromBuiltIn();
+	// Clear every endpoint and RSA key while keeping the account editable in
+	// the server-enrollment intro. This is different from blocked(), which
+	// represents an unreadable persisted pin and must stay read-only.
+	void constructUnenrolled();
 	void constructAddOne(
 		int id,
 		Flags flags,
@@ -162,6 +166,7 @@ public:
 	// reach any server rather than fall back to the built-in table.
 	void constructBlocked();
 	[[nodiscard]] bool blocked() const;
+	[[nodiscard]] bool unenrolled() const;
 
 	// True when this account must never go looking for Telegram's own
 	// servers: it is pinned to a user-entered endpoint, or blocked
@@ -236,6 +241,10 @@ private:
 	// True when a pinned custom server could not be restored, so this
 	// account must hold no endpoint and no key at all.
 	bool _blocked = false;
+
+	// True when this account has no user-selected server yet. It holds no
+	// endpoint or RSA key, but unlike _blocked it leaves enrollment editable.
+	bool _unenrolled = false;
 
 };
 

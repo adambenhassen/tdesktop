@@ -80,6 +80,14 @@ int RunAccountLifecycleRegression() {
 	// unpublished when the synchronous authorization write is refused.
 	const auto account = not_null<Main::Account*>(
 		domain.accounts().front().account.get());
+	if (!account->sessionExists()
+		&& !account->mtp().dcOptions().hasCustomServer()
+		&& (!account->mtp().dcOptions().unenrolled()
+			|| !account->mtp().dcOptions().configEnumDcIds().empty())) {
+		// A fresh account is allowed to show enrollment, but it must not
+		// carry the built-in production table while it waits there.
+		return 1;
+	}
 	if (!ConfigurePinnedServer(account)) {
 		return 1;
 	}

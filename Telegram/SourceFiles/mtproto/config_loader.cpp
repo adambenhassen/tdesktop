@@ -193,7 +193,7 @@ void ConfigLoader::addSpecialEndpoint(
 
 void ConfigLoader::sendSpecialRequest() {
 	terminateSpecialRequest();
-	if (_proxyEnabled) {
+	if (_proxyEnabled || _instance->dcOptions().refusesProductionFallback()) {
 		_specialLoader.reset();
 		return;
 	}
@@ -238,6 +238,9 @@ void ConfigLoader::sendSpecialRequest() {
 }
 
 void ConfigLoader::specialConfigLoaded(const MTPConfig &result) {
+	if (_instance->dcOptions().refusesProductionFallback()) {
+		return;
+	}
 	Expects(result.type() == mtpc_config);
 
 	const auto &data = result.c_config();

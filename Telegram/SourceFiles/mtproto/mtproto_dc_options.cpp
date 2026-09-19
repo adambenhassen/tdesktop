@@ -19,7 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace {
 
-constexpr auto kVersion = 5;
+constexpr auto kVersion = 6;
 
 using namespace details;
 
@@ -223,6 +223,7 @@ DcOptions::DcOptions(const DcOptions &other)
 	_authorizedDcIds = other._authorizedDcIds;
 	_immutable = other._immutable;
 	_blocked = other._blocked;
+	_unenrolled = other._unenrolled;
 }
 
 DcOptions::~DcOptions() = default;
@@ -249,6 +250,7 @@ bool DcOptions::isCustomServerPinnedUnlocked(DcId dcId) const {
 
 bool DcOptions::refusesEndpointUnlocked(DcId dcId) const {
 	return _blocked
+		|| _unenrolled
 		|| (hasCustomServerUnlocked() && (dcId != _customServer.dcId));
 }
 
@@ -352,7 +354,7 @@ void DcOptions::processFromList(
 		// at some other address it knows itself by — a LAN ip, a
 		// tunnel, a container address — would replace the endpoint it
 		// was actually reached on and strand the client.
-		if (_blocked || hasCustomServerUnlocked()) {
+		if (_blocked || _unenrolled || hasCustomServerUnlocked()) {
 			return std::vector<DcId>();
 		}
 		auto result = CountOptionsDifference(_data, data);
@@ -412,7 +414,9 @@ void DcOptions::addFromOther(DcOptions &&options) {
 				// A blocked config holds no key at all, and a CDN key
 				// for the pinned custom DC id would shadow the
 				// user-verified key in getDcRSAKey().
-				if (_blocked || isCustomServerPinnedUnlocked(item.first)) {
+				if (_blocked
+					|| _unenrolled
+					|| isCustomServerPinnedUnlocked(item.first)) {
 					continue;
 				}
 				for (auto &entry : item.second) {
@@ -611,6 +615,7 @@ QByteArray DcOptions::serialize() const {
 		size += sizeof(qint32) + sizeof(qint32) + customSelection.size();
 		size += sizeof(qint32) + customOrigin.size();
 	}
+	size += sizeof(qint32); // unenrolled
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -674,6 +679,8 @@ QByteArray DcOptions::serialize() const {
 				customOrigin.data(),
 				customOrigin.size());
 		}
+
+		stream << qint32(_unenrolled ? 1 : 0);
 	}
 	return result;
 }
@@ -710,6 +717,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 	readBuiltInPublicKeys();
 	_customServer = CustomServer();
 	_authorizedDcIds.clear();
+	_unenrolled = false;
 	for (auto i = 0; i != count; ++i) {
 		qint32 id = 0, flags = 0, port = 0, ipSize = 0;
 		stream >> id >> flags >> port >> ipSize;
@@ -918,6 +926,26 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 			return false;
 		}
 	}
+	if (version > 5) {
+		qint32 unenrolled = 0;
+		stream >> unenrolled;
+		if (unenrolled < 0 || unenrolled > 1
+			|| stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Bad unenrolled state in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		if (unenrolled) {
+			if (_customServer.key || !_authorizedDcIds.empty()) {
+				LOG(("MTP Error: Unenrolled config carries an authorization or pin."));
+				return false;
+			}
+			_data.clear();
+			_publicKeys.clear();
+			_cdnPublicKeys.clear();
+			_customServer = CustomServer();
+			_unenrolled = true;
+		}
+	}
 	return true;
 }
 
@@ -964,7 +992,7 @@ DcType DcOptions::dcType(ShiftedDcId shiftedDcId) const {
 
 void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 	WriteLocker lock(this);
-	if (_blocked) {
+	if (_blocked || _unenrolled) {
 		return;
 	}
 	_cdnPublicKeys.clear();
@@ -1004,6 +1032,7 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	// the block so the endpoint takes and the config is persisted
 	// again; the caller is supplying the key the block existed for.
 	_blocked = false;
+	_unenrolled = false;
 	_customServer = server;
 	// The pinned server replaces the built-in table and key for this
 	// account, it is not merged into them. Leaving the built-in
@@ -1123,6 +1152,7 @@ bool DcOptions::isCustomServerPinned(DcId dcId) const {
 void DcOptions::constructBlocked() {
 	WriteLocker lock(this);
 	_blocked = true;
+	_unenrolled = false;
 	_data.clear();
 	_publicKeys.clear();
 	_cdnPublicKeys.clear();
@@ -1134,9 +1164,25 @@ bool DcOptions::blocked() const {
 	return _blocked;
 }
 
+void DcOptions::constructUnenrolled() {
+	WriteLocker lock(this);
+	_blocked = false;
+	_unenrolled = true;
+	_data.clear();
+	_publicKeys.clear();
+	_cdnPublicKeys.clear();
+	_customServer = CustomServer();
+	_authorizedDcIds.clear();
+}
+
+bool DcOptions::unenrolled() const {
+	ReadLocker lock(this);
+	return _unenrolled;
+}
+
 bool DcOptions::refusesProductionFallback() const {
 	ReadLocker lock(this);
-	return _blocked || hasCustomServerUnlocked();
+	return _blocked || _unenrolled || hasCustomServerUnlocked();
 }
 
 bool DcOptions::hasCDNKeysForDc(DcId dcId) const {
@@ -1257,7 +1303,7 @@ void DcOptions::computeCdnDcIds() {
 }
 
 bool DcOptions::loadFromFile(const QString &path) {
-	if (hasCustomServer() || blocked()) {
+	if (hasCustomServer() || blocked() || unenrolled()) {
 		// Loading endpoints sets _immutable, and serialize() then emits
 		// a fresh pin-less blob, so the next write would drop the
 		// pinned key from tdata for good while this object still

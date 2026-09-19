@@ -911,6 +911,7 @@ void ServerWidget::commitBinding(
 	};
 	const auto previousOptions = account().mtp().dcOptions().serialize();
 	const auto previousWasBlocked = account().mtp().dcOptions().blocked();
+	const auto previousWasUnenrolled = account().mtp().dcOptions().unenrolled();
 	if (!MTP::CommitServerEnrollment(
 		[&] {
 			return account().mtp().dcOptions().setCustomServer(server);
@@ -924,6 +925,8 @@ void ServerWidget::commitBinding(
 		[&] {
 			if (previousWasBlocked) {
 				account().mtp().dcOptions().constructBlocked();
+			} else if (previousWasUnenrolled) {
+				account().mtp().dcOptions().constructUnenrolled();
 			} else if (!account().mtp().dcOptions().constructFromSerialized(
 				previousOptions)) {
 				account().mtp().dcOptions().constructBlocked();
