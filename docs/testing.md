@@ -78,36 +78,47 @@ Telegram/build/network_isolation_test.sh --list-cases
 
 Every case declares its phase, bounded timeout, `-testagent` arguments, the
 `TDESKTOP_NETWORK_TRACE_CASE` environment binding, all four destination
-allowlists, and the report filename. Run a fixed-head case from that contract
-with no ad-hoc allowlist:
+allowlists, required evidence, completion marker, update mode, and report
+filename. The runner reads this checked-in manifest directly. It does not accept
+a caller-supplied manifest, phase, origin, destination, DNS, proxy, or timeout
+policy.
+
+Run a fixed-head case from that contract:
 
 An empty-storage check records no DNS, socket, or connect activity:
 
 ```bash
 Telegram/build/network_isolation_test.sh \
-  --manifest Telegram/build/network_trace_cases.json \
   --case fresh-empty \
   --evidence-dir "$PWD/network-evidence/fresh-empty" \
   -- "$PWD/out/Debug/Telegram"
 ```
 
 The workflow can invoke each manifest entry the same way. Discovery and
-pinned-endpoint cases carry their resolved destination sets explicitly. The
-origin is evidence metadata, while the IP:port values are the only remote
-destinations accepted by the trace checker:
+pinned-endpoint cases carry their resolved destination sets explicitly. A public
+origin is bound to that resolved set, while the IP:port values are the only
+remote destinations accepted by the trace checker:
 
 ```bash
 Telegram/build/network_isolation_test.sh \
-  --manifest Telegram/build/network_trace_cases.json \
   --case public-selection \
   --evidence-dir "$PWD/network-evidence/public-selection" \
   -- "$PWD/out/Debug/Telegram"
 ```
 
 For a configured proxy, the manifest lists its transport address separately
-from the pinned endpoint. An unrelated destination still fails. Each report
-preserves the case, observed events, target exit status, origin, destination,
-DNS, and proxy allowlists beside the raw per-process trace.
+from the pinned endpoint and the scenario must write the exact pinned
+`host:port` value to `$TDESKTOP_PROXY_ASSERTION_FILE`. An unrelated destination
+or missing assertion fails. Each report preserves the case, observed socket
+metadata, target exit status, origin, destination, DNS, proxy, and required
+evidence contract. Raw `strace` files are not retained.
+
+The fixed-head scenario selected by `TDESKTOP_NETWORK_TRACE_CASE` must write the
+manifest's completion log under `$TDESKTOP_TEST_EVIDENCE_DIR`, including both
+`TEST_COMPLETE` and `SCENARIO_RESULT: PASS`. A missing marker, failed result, or
+bounded timeout fails the case even when the trace has no forbidden contact.
+`background-refresh` is the one case whose contract leaves update mode enabled;
+the runner only adds `-noupdate` for cases that explicitly disable updates.
 
 The target exit status is metadata, not a destination verdict. A target may
 finish with an ordinary nonzero status after producing a valid trace; the
@@ -125,8 +136,11 @@ Telegram/build/network_isolation_test.sh --self-test
 The process trace is intentionally separate from the unit binary. Unit tests
 prove framing, canonicalization, persistence, gate ordering, and cancellation;
 this runner proves what the operating system observed for DNS, sockets, and
-connect destinations. A missing `strace`, target executable, trace file, or
-case manifest is an error, never an advisory pass.
+connect destinations. The runner uses `strace -yy` so socket identity remains
+stable across worker trace files; if the parser is used without `-yy`, its
+fallback identity is scoped to process ID plus file descriptor. A missing
+`strace`, target executable, trace file, or case manifest is an error, never an
+advisory pass.
 
 ### The build image
 

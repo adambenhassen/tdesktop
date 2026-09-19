@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARSER="$ROOT/network_trace.py"
@@ -10,16 +11,24 @@ EVIDENCE_DIR=""
 CASE_NAME=""
 PHASE=""
 TIMEOUT_SECONDS=20
-TIMEOUT_SET=0
-MANIFEST_MODE=0
 CASE_CONTRACT=""
 REPORT_NAME="network-report.json"
+UPDATE_MODE="disabled"
+COMPLETION_LOG_NAME="test_log.txt"
+COMPLETION_MARKER="TEST_COMPLETE"
+COMPLETION_RESULT="SCENARIO_RESULT: PASS"
+TEST_EVIDENCE_DIR=""
+PROXY_ASSERTION_FILE=""
+PROXY_TARGET=""
 INVOCATION_ARGS=()
 INVOCATION_ENV=()
 ORIGINS=()
 ALLOW_DESTINATIONS=()
 ALLOW_DNS=()
 ALLOW_PROXIES=()
+REQUIRED_DESTINATIONS=()
+REQUIRED_DNS=()
+REQUIRED_PROXIES=()
 COMMAND=()
 RUN_ROOT=""
 RUNNER_PID=""
@@ -29,17 +38,11 @@ usage() {
 usage:
   network_isolation_test.sh --self-test
   network_isolation_test.sh --list-cases
-  network_isolation_test.sh --manifest MANIFEST --case CASE \
-    --evidence-dir DIR -- TELEGRAMD [ARGS...]
-  network_isolation_test.sh --case CASE --phase PHASE --evidence-dir DIR \
-    [--origin URL] [--allow-destination HOST:PORT] [--allow-dns HOST:53] \
-    [--allow-proxy HOST:PORT] \
-    [--timeout SECONDS] -- TELEGRAMD [ARGS...]
+  network_isolation_test.sh --case CASE --evidence-dir DIR \
+    -- TELEGRAMD [ARGS...]
 
-With --manifest, the case supplies the phase, bounded invocation, destination
-allowlist, and report name. Without it, PHASE and the allowlist flags are
-required explicitly. PHASE is one of preselection, public-discovery,
-local-direct, or pinned-endpoint.
+The trusted manifest supplies the phase, bounded invocation, destination
+allowlist, and report name. Caller-supplied policy flags are not accepted.
 The command is started with an empty HOME and work directory. Its network syscalls
 are captured with strace and checked fail-closed against the supplied destination set.
 EOF
@@ -60,6 +63,9 @@ cleanup() {
 	if [ -n "$RUNNER_PID" ] && kill -0 "$RUNNER_PID" 2>/dev/null; then
 		kill -TERM "$RUNNER_PID" 2>/dev/null || true
 		wait "$RUNNER_PID" 2>/dev/null || true
+	fi
+	if [ -n "$RUN_ROOT" ] && [ -d "$RUN_ROOT" ]; then
+		rm -rf -- "$RUN_ROOT"
 	fi
 	return "$status"
 }
@@ -113,6 +119,7 @@ EOF
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(1080), sin_addr=inet_addr("198.51.100.9")}, 16) = 0
 EOF
+	printf '%s\n' '192.0.2.10:443' > "$test_root/proxy-target.txt"
 
 	local parser=(python3 "$PARSER")
 	run_expected_failure vulnerable-preselection "${parser[@]}" \
@@ -126,7 +133,9 @@ EOF
 		--case public-selection --phase public-discovery \
 		--origin https://public.example/.well-known/telegramd/client \
 		--allow-destination 203.0.113.10:443 \
-		--allow-dns 127.0.0.53:53
+		--allow-dns 127.0.0.53:53 \
+		--require-destination 203.0.113.10:443 \
+		--require-dns 127.0.0.53:53
 	run_expected_failure public-direct-fallback "${parser[@]}" \
 		--trace "$test_root/public-fallback.trace" \
 		--case public-failure --phase public-discovery \
@@ -137,7 +146,11 @@ EOF
 		--trace "$test_root/proxy.trace" \
 		--case proxy-intermediary --phase pinned-endpoint \
 		--allow-destination 192.0.2.10:443 \
-		--allow-proxy 198.51.100.9:1080
+		--allow-proxy 198.51.100.9:1080 \
+		--require-destination 192.0.2.10:443 \
+		--require-proxy 198.51.100.9:1080 \
+		--proxy-target 192.0.2.10:443 \
+		--proxy-target-proof "$test_root/proxy-target.txt"
 	trap - RETURN
 	rm -rf -- "$test_root"
 	echo "network-isolation-self-test=PASS"
@@ -161,6 +174,8 @@ with open(sys.argv[1], encoding="utf-8") as manifest:
             case["report"],
             json.dumps(invocation, sort_keys=True),
             json.dumps(allowlist, sort_keys=True),
+            json.dumps(case["required"], sort_keys=True),
+            json.dumps(case["completion"], sort_keys=True),
             case["description"],
         )))
 PY
@@ -169,8 +184,10 @@ PY
 validate_manifest() {
 	python3 - "$CASE_MANIFEST" <<'PY'
 import json
+import ipaddress
 import re
 import sys
+import urllib.parse
 from pathlib import PurePath
 
 phases = {"preselection", "public-discovery", "local-direct", "pinned-endpoint"}
@@ -181,14 +198,57 @@ def fail(message):
     print(f"invalid network trace manifest: {message}", file=sys.stderr)
     raise SystemExit(1)
 
+def split_endpoint(value):
+    if value.startswith("["):
+        separator = value.find("]:")
+        if separator < 0:
+            return None
+        return value[1:separator], value[separator + 2:]
+    host, separator, port = value.rpartition(":")
+    if not separator:
+        return None
+    return host, port
+
+def valid_ip_endpoint(value):
+    parsed = split_endpoint(value)
+    if parsed is None:
+        return False
+    host, port = parsed
+    try:
+        port_number = int(port)
+        ipaddress.ip_network(host, strict=False)
+    except (ValueError, TypeError):
+        return False
+    return 0 <= port_number <= 65535
+
+def valid_dns_endpoint(value):
+    if value.startswith("unix:"):
+        path = value[len("unix:"):]
+        return path.startswith("/") and "\n" not in path and "\r" not in path
+    return valid_ip_endpoint(value)
+
+def valid_public_origin(value):
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        hostname = parsed.hostname
+    except ValueError:
+        return False
+    return (
+        bool(hostname)
+        and hostname.isascii()
+        and hostname == hostname.lower()
+        and not hostname.endswith(".")
+        and value == f"https://{hostname}/.well-known/telegramd/client"
+    )
+
 try:
     with open(sys.argv[1], encoding="utf-8") as manifest:
         document = json.load(manifest)
 except (OSError, json.JSONDecodeError) as error:
     fail(str(error))
 
-if document.get("version") != 2:
-    fail("version must be 2")
+if document.get("version") != 3:
+    fail("version must be 3")
 cases = document.get("cases")
 if not isinstance(cases, list) or not cases:
     fail("cases must be a non-empty list")
@@ -214,6 +274,8 @@ for index, case in enumerate(cases):
     timeout = invocation.get("timeout_seconds")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 300:
         fail(f"{name} needs a timeout from 1 through 300 seconds")
+    if invocation.get("update_mode") not in {"enabled", "disabled"}:
+        fail(f"{name} needs an explicit update mode")
     arguments = invocation.get("arguments")
     if not isinstance(arguments, list) or not arguments or any(
         not isinstance(argument, str) or not argument for argument in arguments
@@ -241,10 +303,69 @@ for index, case in enumerate(cases):
             not isinstance(value, str) or not value for value in values
         ):
             fail(f"{name} has an invalid {field} allowlist")
+        if field != "origins":
+            validator = valid_dns_endpoint if field == "dns" else valid_ip_endpoint
+            if any(not validator(value) for value in values):
+                fail(f"{name} has a non-IP {field} allowlist entry")
     if phase == "public-discovery" and len(allowlist["origins"]) != 1:
         fail(f"{name} needs exactly one public discovery origin")
+    if phase == "public-discovery" and not valid_public_origin(allowlist["origins"][0]):
+        fail(f"{name} has an invalid public discovery origin")
     if phase != "public-discovery" and allowlist["origins"]:
         fail(f"{name} cannot allow a public discovery origin")
+
+    required = case.get("required")
+    if not isinstance(required, dict) or set(required) != {
+        "destinations", "dns", "proxies", "proxy_target"
+    }:
+        fail(f"{name} needs explicit required evidence")
+    for field in ("destinations", "dns", "proxies"):
+        values = required[field]
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value for value in values
+        ):
+            fail(f"{name} has invalid required {field} evidence")
+        if any(value not in allowlist[field] for value in values):
+            fail(f"{name} requires a value outside its {field} allowlist")
+    proxy_target = required["proxy_target"]
+    if proxy_target is not None and (
+        not isinstance(proxy_target, str)
+        or not valid_ip_endpoint(proxy_target)
+        or proxy_target not in required["destinations"]
+    ):
+        fail(f"{name} has an invalid proxy target assertion")
+    if phase == "public-discovery" and (
+        not required["destinations"]
+        or not required["dns"]
+        or set(required["destinations"]) != set(allowlist["destinations"])
+    ):
+        fail(f"{name} must bind its origin to every resolved destination")
+    if phase in {"local-direct", "pinned-endpoint"} and not required["destinations"]:
+        fail(f"{name} needs required endpoint evidence")
+    if name == "proxy-intermediary" and (
+        not required["proxies"] or proxy_target is None
+    ):
+        fail(f"{name} needs proxy transport and target evidence")
+
+    completion = case.get("completion")
+    if not isinstance(completion, dict) or set(completion) != {
+        "log", "marker", "result"
+    }:
+        fail(f"{name} needs a completion contract")
+    log_name = completion["log"]
+    if (
+        not isinstance(log_name, str)
+        or not log_name
+        or PurePath(log_name).name != log_name
+    ):
+        fail(f"{name} needs a relative completion log")
+    for field in ("marker", "result"):
+        if (
+            not isinstance(completion[field], str)
+            or not completion[field]
+            or "\n" in completion[field]
+        ):
+            fail(f"{name} needs a single-line completion {field}")
 
     report = case.get("report")
     if (
@@ -285,8 +406,16 @@ if field == "phase":
     print(case["phase"])
 elif field == "timeout_seconds":
     print(case["invocation"]["timeout_seconds"])
+elif field == "update_mode":
+    print(case["invocation"]["update_mode"])
 elif field == "report":
     print(case["report"])
+elif field == "completion_log":
+    print(case["completion"]["log"])
+elif field == "completion_marker":
+    print(case["completion"]["marker"])
+elif field == "completion_result":
+    print(case["completion"]["result"])
 elif field == "arguments":
     print("\n".join(case["invocation"]["arguments"]))
 elif field == "environment":
@@ -294,6 +423,12 @@ elif field == "environment":
         print(f"{key}\t{value}")
 elif field in {"origins", "destinations", "dns", "proxies"}:
     print("\n".join(case["allowlist"][field]))
+elif field in {"required_destinations", "required_dns", "required_proxies"}:
+    required_field = field[len("required_"):]
+    print("\n".join(case["required"][required_field]))
+elif field == "proxy_target":
+    if case["required"]["proxy_target"] is not None:
+        print(case["required"]["proxy_target"])
 else:
     raise SystemExit(f"unknown contract field: {field}")
 PY
@@ -320,51 +455,14 @@ parse_arguments() {
 	fi
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
-		--manifest)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			CASE_MANIFEST="$2"
-			MANIFEST_MODE=1
-			shift 2
-			;;
 		--case)
 			[ "$#" -ge 2 ] || { usage; exit 2; }
 			CASE_NAME="$2"
 			shift 2
 			;;
-		--phase)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			PHASE="$2"
-			shift 2
-			;;
 		--evidence-dir)
 			[ "$#" -ge 2 ] || { usage; exit 2; }
 			EVIDENCE_DIR="$2"
-			shift 2
-			;;
-		--origin)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			ORIGINS+=("$2")
-			shift 2
-			;;
-		--allow-destination)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			ALLOW_DESTINATIONS+=("$2")
-			shift 2
-			;;
-		--allow-dns)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			ALLOW_DNS+=("$2")
-			shift 2
-			;;
-		--allow-proxy)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			ALLOW_PROXIES+=("$2")
-			shift 2
-			;;
-		--timeout)
-			[ "$#" -ge 2 ] || { usage; exit 2; }
-			TIMEOUT_SECONDS="$2"
-			TIMEOUT_SET=1
 			shift 2
 			;;
 		--)
@@ -385,41 +483,44 @@ parse_arguments "$@"
 [ -n "$EVIDENCE_DIR" ] || { usage; exit 2; }
 [ "${#COMMAND[@]}" -gt 0 ] || { usage; exit 2; }
 require_command python3
-
-if [ "$MANIFEST_MODE" -eq 1 ]; then
-	[ -f "$CASE_MANIFEST" ] || fail "trace case manifest is missing: $CASE_MANIFEST"
-	[ -z "$PHASE" ] || fail "--manifest supplies the phase; omit --phase"
-	[ "$TIMEOUT_SET" -eq 0 ] || fail "--manifest supplies the timeout; omit --timeout"
-	[ "${#ORIGINS[@]}" -eq 0 ] || fail "--manifest supplies origins"
-	[ "${#ALLOW_DESTINATIONS[@]}" -eq 0 ] || fail "--manifest supplies destinations"
-	[ "${#ALLOW_DNS[@]}" -eq 0 ] || fail "--manifest supplies DNS"
-	[ "${#ALLOW_PROXIES[@]}" -eq 0 ] || fail "--manifest supplies proxies"
-	validate_manifest || fail "trace case manifest validation failed"
-	load_case_contract
-	PHASE="$(case_contract_values phase)"
-	TIMEOUT_SECONDS="$(case_contract_values timeout_seconds)"
-	REPORT_NAME="$(case_contract_values report)"
-	while IFS= read -r argument; do
-		[ -n "$argument" ] && INVOCATION_ARGS+=("$argument")
-	done < <(case_contract_values arguments)
-	while IFS=$'\t' read -r key value; do
-		[ -n "$key" ] && INVOCATION_ENV+=("$key=$value")
-	done < <(case_contract_values environment)
-	while IFS= read -r origin; do
-		[ -n "$origin" ] && ORIGINS+=("$origin")
-	done < <(case_contract_values origins)
-	while IFS= read -r destination; do
-		[ -n "$destination" ] && ALLOW_DESTINATIONS+=("$destination")
-	done < <(case_contract_values destinations)
-	while IFS= read -r dns; do
-		[ -n "$dns" ] && ALLOW_DNS+=("$dns")
-	done < <(case_contract_values dns)
-	while IFS= read -r proxy; do
-		[ -n "$proxy" ] && ALLOW_PROXIES+=("$proxy")
-	done < <(case_contract_values proxies)
-else
-	[ -n "$PHASE" ] || { usage; exit 2; }
-fi
+[ -f "$CASE_MANIFEST" ] || fail "trace case manifest is missing: $CASE_MANIFEST"
+validate_manifest || fail "trace case manifest validation failed"
+load_case_contract
+PHASE="$(case_contract_values phase)"
+TIMEOUT_SECONDS="$(case_contract_values timeout_seconds)"
+REPORT_NAME="$(case_contract_values report)"
+UPDATE_MODE="$(case_contract_values update_mode)"
+COMPLETION_LOG_NAME="$(case_contract_values completion_log)"
+COMPLETION_MARKER="$(case_contract_values completion_marker)"
+COMPLETION_RESULT="$(case_contract_values completion_result)"
+PROXY_TARGET="$(case_contract_values proxy_target)"
+while IFS= read -r argument; do
+	[ -n "$argument" ] && INVOCATION_ARGS+=("$argument")
+done < <(case_contract_values arguments)
+while IFS=$'\t' read -r key value; do
+	[ -n "$key" ] && INVOCATION_ENV+=("$key=$value")
+done < <(case_contract_values environment)
+while IFS= read -r origin; do
+	[ -n "$origin" ] && ORIGINS+=("$origin")
+done < <(case_contract_values origins)
+while IFS= read -r destination; do
+	[ -n "$destination" ] && ALLOW_DESTINATIONS+=("$destination")
+done < <(case_contract_values destinations)
+while IFS= read -r dns; do
+	[ -n "$dns" ] && ALLOW_DNS+=("$dns")
+done < <(case_contract_values dns)
+while IFS= read -r proxy; do
+	[ -n "$proxy" ] && ALLOW_PROXIES+=("$proxy")
+done < <(case_contract_values proxies)
+while IFS= read -r destination; do
+	[ -n "$destination" ] && REQUIRED_DESTINATIONS+=("$destination")
+done < <(case_contract_values required_destinations)
+while IFS= read -r dns; do
+	[ -n "$dns" ] && REQUIRED_DNS+=("$dns")
+done < <(case_contract_values required_dns)
+while IFS= read -r proxy; do
+	[ -n "$proxy" ] && REQUIRED_PROXIES+=("$proxy")
+done < <(case_contract_values required_proxies)
 case "$PHASE" in
 preselection|public-discovery|local-direct|pinned-endpoint)
 	;;
@@ -440,6 +541,9 @@ validate_case || fail "trace case validation failed"
 mkdir -p "$EVIDENCE_DIR"
 RUN_ROOT="$(mktemp -d "$EVIDENCE_DIR/run.XXXXXX")"
 mkdir -p "$RUN_ROOT/home" "$RUN_ROOT/workdir"
+TEST_EVIDENCE_DIR="$EVIDENCE_DIR/test-evidence"
+PROXY_ASSERTION_FILE="$TEST_EVIDENCE_DIR/proxy-target.txt"
+mkdir -p "$TEST_EVIDENCE_DIR"
 TRACE_PREFIX="$RUN_ROOT/strace"
 REPORT="$EVIDENCE_DIR/$REPORT_NAME"
 COMMAND_FILE="$EVIDENCE_DIR/command.txt"
@@ -458,9 +562,7 @@ printf '%s\n' "${ALLOW_DESTINATIONS[@]}" > "$EVIDENCE_DIR/allowed-destinations.t
 printf '%s\n' "${ALLOW_DNS[@]}" > "$EVIDENCE_DIR/allowed-dns.txt"
 printf '%s\n' "${ALLOW_PROXIES[@]}" > "$EVIDENCE_DIR/allowed-proxies.txt"
 
-if [ "$MANIFEST_MODE" -eq 1 ]; then
-	COMMAND+=("${INVOCATION_ARGS[@]}")
-fi
+COMMAND+=("${INVOCATION_ARGS[@]}")
 
 has_argument() {
 	local value="$1"
@@ -472,8 +574,12 @@ has_argument() {
 	return 1
 }
 
-if ! has_argument -noupdate "${COMMAND[@]}"; then
-	COMMAND+=( -noupdate )
+if [ "$UPDATE_MODE" = "disabled" ]; then
+	if ! has_argument -noupdate "${COMMAND[@]}"; then
+		COMMAND+=( -noupdate )
+	fi
+elif has_argument -noupdate "${COMMAND[@]}"; then
+	fail "case $CASE_NAME requires update mode"
 fi
 if ! has_argument -debug "${COMMAND[@]}"; then
 	COMMAND+=( -debug )
@@ -491,9 +597,11 @@ env \
 	XDG_CONFIG_HOME="$RUN_ROOT/home/.config" \
 	XDG_DATA_HOME="$RUN_ROOT/home/.local/share" \
 	RES_OPTIONS="attempts:1 timeout:1" \
+	TDESKTOP_TEST_EVIDENCE_DIR="$TEST_EVIDENCE_DIR" \
+	TDESKTOP_PROXY_ASSERTION_FILE="$PROXY_ASSERTION_FILE" \
 	"${INVOCATION_ENV[@]}" \
 	timeout --signal=TERM --kill-after=5s "$TIMEOUT_SECONDS" \
-	strace -ff -ttt -yy -s 4096 -e trace=%network -o "$TRACE_PREFIX" \
+	strace -ff -ttt -yy -s 0 -e trace=%network -o "$TRACE_PREFIX" \
 	"${COMMAND[@]}" \
 	> "$EVIDENCE_DIR/stdout.log" \
 	2> "$EVIDENCE_DIR/stderr.log" &
@@ -506,7 +614,8 @@ printf 'process_status=%s\n' "$PROCESS_STATUS" > "$EVIDENCE_DIR/process-status.t
 
 PARSER_COMMAND=(python3 "$PARSER" --trace "$TRACE_PREFIX.*"
 	--case "$CASE_NAME" --phase "$PHASE"
-	--target-status "$PROCESS_STATUS" --report "$REPORT")
+	--target-status "$PROCESS_STATUS" --report "$REPORT"
+	--proxy-target "$PROXY_TARGET")
 for origin in "${ORIGINS[@]}"; do
 	PARSER_COMMAND+=(--origin "$origin")
 done
@@ -519,16 +628,54 @@ done
 for proxy in "${ALLOW_PROXIES[@]}"; do
 	PARSER_COMMAND+=(--allow-proxy "$proxy")
 done
+for destination in "${REQUIRED_DESTINATIONS[@]}"; do
+	PARSER_COMMAND+=(--require-destination "$destination")
+done
+for dns in "${REQUIRED_DNS[@]}"; do
+	PARSER_COMMAND+=(--require-dns "$dns")
+done
+for proxy in "${REQUIRED_PROXIES[@]}"; do
+	PARSER_COMMAND+=(--require-proxy "$proxy")
+done
+if [ -n "$PROXY_TARGET" ]; then
+	PARSER_COMMAND+=(--proxy-target-proof "$PROXY_ASSERTION_FILE")
+fi
 
 set +e
 "${PARSER_COMMAND[@]}" > "$EVIDENCE_DIR/network-report.stdout.json"
 CHECK_STATUS=$?
 set -e
-if [ "$CHECK_STATUS" -eq 0 ]; then
-	printf 'PASS: case=%s phase=%s process_status=%s\n' \
-		"$CASE_NAME" "$PHASE" "$PROCESS_STATUS" | tee "$STATUS_FILE"
-	exit 0
+for trace_file in "$TRACE_PREFIX".*; do
+	if [ -f "$trace_file" ]; then
+		rm -f -- "$trace_file"
+	fi
+done
+if [ "$CHECK_STATUS" -ne 0 ]; then
+	printf 'FAIL: case=%s phase=%s process_status=%s report=%s\n' \
+		"$CASE_NAME" "$PHASE" "$PROCESS_STATUS" "$REPORT" | tee "$STATUS_FILE" >&2
+	exit 1
 fi
-printf 'FAIL: case=%s phase=%s process_status=%s report=%s\n' \
-	"$CASE_NAME" "$PHASE" "$PROCESS_STATUS" "$REPORT" | tee "$STATUS_FILE" >&2
-exit 1
+
+case "$PROCESS_STATUS" in
+124|137|143)
+	printf 'FAIL: case=%s timed out or was terminated process_status=%s\n' \
+		"$CASE_NAME" "$PROCESS_STATUS" | tee "$STATUS_FILE" >&2
+	exit 1
+;;
+esac
+
+COMPLETION_LOG="$TEST_EVIDENCE_DIR/$COMPLETION_LOG_NAME"
+if ! grep -Fqx "$COMPLETION_MARKER" "$COMPLETION_LOG" 2>/dev/null; then
+	printf 'FAIL: case=%s missing completion marker=%s\n' \
+		"$CASE_NAME" "$COMPLETION_MARKER" | tee "$STATUS_FILE" >&2
+	exit 1
+fi
+if ! grep -Fqx "$COMPLETION_RESULT" "$COMPLETION_LOG" 2>/dev/null; then
+	printf 'FAIL: case=%s missing completion result=%s\n' \
+		"$CASE_NAME" "$COMPLETION_RESULT" | tee "$STATUS_FILE" >&2
+	exit 1
+fi
+
+printf 'PASS: case=%s phase=%s process_status=%s\n' \
+	"$CASE_NAME" "$PHASE" "$PROCESS_STATUS" | tee "$STATUS_FILE"
+exit 0
