@@ -141,7 +141,6 @@ jobs:
           cmake -Bbuild . \
             -DTDESKTOP_API_TEST=ON \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
-            -DDESKTOP_APP_DISABLE_SWIFT6=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             $DEFINE
           cmake --build build
