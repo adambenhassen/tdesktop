@@ -9,6 +9,10 @@ cmake_minimum_required(VERSION 3.25...3.31)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 include(cmake/validate_special_target.cmake)
+if (APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET 13.0 CACHE STRING "Minimum macOS deployment version" FORCE)
+endif()
+
 include(cmake/version.cmake)
 desktop_app_parse_version(Telegram/build/version)
 
