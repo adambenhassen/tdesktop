@@ -70,7 +70,10 @@ public:
 	[[nodiscard]] bool isTestMode() const;
 
 	void resolveProxyDomain(const QString &host);
-	void setGoodProxyDomain(const QString &host, const QString &ip);
+	void setGoodProxyDomain(
+		const QString &host,
+		const QString &ip,
+		uint64 generation);
 	void suggestMainDcId(DcId mainDcId);
 	void setMainDcId(DcId mainDcId);
 	[[nodiscard]] bool hasMainDcId() const;
@@ -221,7 +224,8 @@ private:
 	void applyDomainIps(
 		const QString &host,
 		const QStringList &ips,
-		crl::time expireAt);
+		crl::time expireAt,
+		uint64 generation);
 
 	void logoutGuestDcs();
 	bool logoutGuestDone(mtpRequestId requestId);
@@ -414,6 +418,11 @@ void Instance::Private::start() {
 }
 
 void Instance::Private::resume() {
+	if (dcOptions().blocked() || dcOptions().unenrolled()) {
+		// Only a durable enrollment pin may reopen the network gate. This
+		// also makes stale queued resume work harmless after cancellation.
+		return;
+	}
 	const auto result = _serverEnrollmentGate.resume();
 	if (!result.resumed) {
 		return;
@@ -480,15 +489,18 @@ bool Instance::Private::isServerEnrollmentStopTokenCurrent(
 }
 
 void Instance::Private::resolveProxyDomain(const QString &host) {
-	if (!networkAllowed()) {
+	if (!networkAllowed() || dcOptions().refusesProductionFallback()) {
 		return;
 	}
+	const auto generation = serverEnrollmentStopToken();
 	if (!_domainResolver) {
 		_domainResolver = std::make_unique<DomainResolver>([=](
 				const QString &host,
 				const QStringList &ips,
 				crl::time expireAt) {
-			applyDomainIps(host, ips, expireAt);
+			if (isServerEnrollmentStopTokenCurrent(generation)) {
+				applyDomainIps(host, ips, expireAt, generation);
+			}
 		});
 	}
 	_domainResolver->resolve(host);
@@ -497,7 +509,13 @@ void Instance::Private::resolveProxyDomain(const QString &host) {
 void Instance::Private::applyDomainIps(
 		const QString &host,
 		const QStringList &ips,
-		crl::time expireAt) {
+		crl::time expireAt,
+		uint64 generation) {
+	if (!networkAllowed()
+		|| !isServerEnrollmentStopTokenCurrent(generation)
+		|| dcOptions().refusesProductionFallback()) {
+		return;
+	}
 	const auto applyToProxy = [&](ProxyData &proxy) {
 		if (!proxy.tryCustomResolve() || proxy.host != host) {
 			return false;
@@ -539,7 +557,13 @@ void Instance::Private::applyDomainIps(
 
 void Instance::Private::setGoodProxyDomain(
 		const QString &host,
-		const QString &ip) {
+		const QString &ip,
+		uint64 generation) {
+	if (!networkAllowed()
+		|| !isServerEnrollmentStopTokenCurrent(generation)
+		|| dcOptions().refusesProductionFallback()) {
+		return;
+	}
 	const auto applyToProxy = [&](ProxyData &proxy) {
 		if (!proxy.tryCustomResolve() || proxy.host != host) {
 			return false;
@@ -695,14 +719,17 @@ void Instance::Private::requestConfigIfExpired() {
 }
 
 void Instance::Private::requestCDNConfig() {
-	if (!networkAllowed() || _cdnConfigLoadRequestId || !hasMainDcId()) {
+	if (!networkAllowed()
+		|| dcOptions().refusesProductionFallback()
+		|| _cdnConfigLoadRequestId
+		|| !hasMainDcId()) {
 		return;
 	}
 	_cdnConfigLoadRequestId = request(
 		MTPhelp_GetCdnConfig()
 	).done([this](const MTPCdnConfig &result) {
 		_cdnConfigLoadRequestId = 0;
-		if (!networkAllowed()) {
+		if (!networkAllowed() || dcOptions().refusesProductionFallback()) {
 			return;
 		}
 		result.match([&](const MTPDcdnConfig &data) {
@@ -2080,8 +2107,11 @@ void Instance::resolveProxyDomain(const QString &host) {
 	_private->resolveProxyDomain(host);
 }
 
-void Instance::setGoodProxyDomain(const QString &host, const QString &ip) {
-	_private->setGoodProxyDomain(host, ip);
+void Instance::setGoodProxyDomain(
+		const QString &host,
+		const QString &ip,
+		uint64 generation) {
+	_private->setGoodProxyDomain(host, ip, generation);
 }
 
 void Instance::suggestMainDcId(DcId mainDcId) {

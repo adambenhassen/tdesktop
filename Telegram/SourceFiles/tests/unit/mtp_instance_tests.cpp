@@ -107,3 +107,21 @@ TEST_CASE(RetireWithoutAReportIsANoop) {
 	CHECK_EQ(emissions.count(), 1); // only the initial empty value
 	CHECK(!channel.current().has_value());
 }
+
+// Pausing an instance invalidates callbacks immediately. Incrementing only
+// when resume() runs leaves a late resolver or timer callback looking current
+// during the entire enrollment pause.
+TEST_CASE(PausingEnrollmentInvalidatesTheCurrentGeneration) {
+	ServerEnrollmentGate gate;
+	CHECK(gate.start());
+	const auto beforePause = gate.stopToken();
+
+	CHECK(gate.pause());
+	CHECK(!gate.stopTokenIsCurrent(beforePause));
+	CHECK(!gate.networkAllowed());
+
+	const auto whilePaused = gate.stopToken();
+	CHECK(gate.resume().resumed);
+	CHECK(!gate.stopTokenIsCurrent(whilePaused));
+	CHECK(gate.networkAllowed());
+}
