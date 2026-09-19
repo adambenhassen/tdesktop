@@ -1,85 +1,242 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {
       "name": "fresh-empty",
       "phase": "preselection",
-      "description": "Empty storage before a server selection."
+      "description": "Empty storage before a server selection.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "fresh-empty"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     },
     {
       "name": "malformed-selection",
       "phase": "preselection",
-      "description": "Malformed input rejected without network activity."
+      "description": "Malformed input rejected without network activity.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "malformed-selection"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     },
     {
       "name": "canceled-selection",
       "phase": "preselection",
-      "description": "Canceled discovery cannot leave a live request."
+      "description": "Canceled discovery cannot leave a live request.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "canceled-selection"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     },
     {
       "name": "failed-selection",
       "phase": "preselection",
-      "description": "Failed discovery cannot fall back to production."
+      "description": "Failed discovery cannot fall back to production.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "failed-selection"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     },
     {
       "name": "partial-selection",
       "phase": "preselection",
-      "description": "Partial discovery response is terminal."
+      "description": "Partial discovery response is terminal.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "partial-selection"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     },
     {
       "name": "timed-out-selection",
       "phase": "preselection",
-      "description": "Timed-out discovery leaves the account paused."
+      "description": "Timed-out discovery leaves the account paused.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "timed-out-selection"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     },
     {
       "name": "public-selection",
       "phase": "public-discovery",
-      "description": "Public discovery uses only its normalized HTTPS origin."
+      "description": "Public discovery uses only its normalized HTTPS origin.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "public-selection"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": ["https://public.example/.well-known/telegramd/client"],
+        "destinations": ["203.0.113.10:443"],
+        "dns": ["127.0.0.53:53"],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "public-failure",
       "phase": "public-discovery",
-      "description": "Public failure cannot downgrade to local/direct trust."
+      "description": "Public failure cannot downgrade to local/direct trust.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "public-failure"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": ["https://public.example/.well-known/telegramd/client"],
+        "destinations": ["203.0.113.10:443"],
+        "dns": ["127.0.0.53:53"],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "local-preflight",
       "phase": "local-direct",
-      "description": "Local/direct selection uses only the typed endpoint."
+      "description": "Local/direct selection uses only the typed endpoint.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "local-preflight"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "pinned-endpoint",
       "phase": "pinned-endpoint",
-      "description": "Committed work uses only the pinned endpoint."
+      "description": "Committed work uses only the pinned endpoint.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "pinned-endpoint"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "restart-pinned",
       "phase": "pinned-endpoint",
-      "description": "Restart cannot reuse another account binding."
+      "description": "Restart cannot reuse another account binding.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "restart-pinned"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "multiple-account-isolation",
       "phase": "pinned-endpoint",
-      "description": "One account's pin cannot authorize another account."
+      "description": "One account's pin cannot authorize another account.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "multiple-account-isolation"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "proxy-intermediary",
       "phase": "pinned-endpoint",
-      "description": "A proxy is a transport intermediary, not a destination."
+      "description": "A proxy is a transport intermediary, not a destination.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "proxy-intermediary"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": ["198.51.100.9:1080"]
+      },
+      "report": "network-report.json"
     },
     {
       "name": "background-refresh",
       "phase": "pinned-endpoint",
-      "description": "Locale, config, CDN, and update work stays bounded."
+      "description": "Locale, config, CDN, and update work stays bounded.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "background-refresh"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "selected-endpoint-failure",
       "phase": "pinned-endpoint",
-      "description": "Pinned endpoint failure produces no fallback contact."
+      "description": "Pinned endpoint failure produces no fallback contact.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "selected-endpoint-failure"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {
+        "origins": [],
+        "destinations": ["192.0.2.10:443"],
+        "dns": [],
+        "proxies": []
+      },
+      "report": "network-report.json"
     },
     {
       "name": "late-callback",
       "phase": "preselection",
-      "description": "Late timers, resolver results, and callbacks stay inert."
+      "description": "Late timers, resolver results, and callbacks stay inert.",
+      "invocation": {
+        "arguments": ["-testagent"],
+        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "late-callback"},
+        "timeout_seconds": 20
+      },
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "report": "network-report.json"
     }
   ]
 }
