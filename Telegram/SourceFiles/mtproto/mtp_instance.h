@@ -23,22 +23,6 @@ class Session;
 
 } // namespace details
 
-// Keep the http-time special-config boundary pure and observable. The
-// delegated domain is only usable when the account is allowed to use the
-// production fallback path; callers still own the actual request lifetime.
-[[nodiscard]] inline bool CanStartSpecialConfigRequest(
-		const QString &delegatedDomain,
-		bool networkAllowed,
-		bool httpTimeValid,
-		bool requestActive,
-		bool refusesProductionFallback) {
-	return !delegatedDomain.isEmpty()
-		&& networkAllowed
-		&& !httpTimeValid
-		&& !requestActive
-		&& !refusesProductionFallback;
-}
-
 class DcOptions;
 class Config;
 struct ConfigFields;

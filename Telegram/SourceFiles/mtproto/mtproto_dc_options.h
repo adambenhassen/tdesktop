@@ -55,6 +55,16 @@ enum class Environment : uchar {
 	Test,
 };
 
+// Keep the http-time special-config boundary pure and observable. The
+// delegated domain is only usable when the account is allowed to use the
+// production fallback path; callers still own the actual request lifetime.
+[[nodiscard]] bool CanStartSpecialConfigRequest(
+	const QString &delegatedDomain,
+	bool networkAllowed,
+	bool httpTimeValid,
+	bool requestActive,
+	bool refusesProductionFallback);
+
 class DcOptions {
 public:
 	using Flag = MTPDdcOption::Flag;

@@ -167,6 +167,19 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 
 } // namespace
 
+bool CanStartSpecialConfigRequest(
+		const QString &delegatedDomain,
+		bool networkAllowed,
+		bool httpTimeValid,
+		bool requestActive,
+		bool refusesProductionFallback) {
+	return !delegatedDomain.isEmpty()
+		&& networkAllowed
+		&& !httpTimeValid
+		&& !requestActive
+		&& !refusesProductionFallback;
+}
+
 class DcOptions::WriteLocker {
 public:
 	WriteLocker(not_null<DcOptions*> that)
