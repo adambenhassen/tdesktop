@@ -21,12 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QEventLoop>
 #include <QSize>
 
-#if defined(Q_OS_LINUX)
-#include <execinfo.h>
-#include <signal.h>
-#include <unistd.h>
-#endif
-
 namespace {
 
 bool CheckSignupControl(
@@ -73,25 +67,6 @@ Widget *FindWidget(QWidget *parent) {
 } // namespace
 
 int RunSignupControlsRegression() {
-#if defined(Q_OS_LINUX)
-	// The isolated CI launcher cannot preserve a core file in its container.
-	// Keep the first crashing frame observable while diagnosing this regression.
-	const auto signalHandler = [](int signal) {
-		static constexpr char message[] = "GUI regression signal backtrace:\n";
-		::write(STDERR_FILENO, message, sizeof(message) - 1);
-		void *frames[64];
-		const auto count = ::backtrace(frames, 64);
-		::backtrace_symbols_fd(frames, count, STDERR_FILENO);
-		::_exit(128 + signal);
-	};
-	struct sigaction action = {};
-	action.sa_handler = signalHandler;
-	sigemptyset(&action.sa_mask);
-	action.sa_flags = SA_RESETHAND;
-	sigaction(SIGSEGV, &action, nullptr);
-	sigaction(SIGBUS, &action, nullptr);
-#endif
-
 	const auto &domain = Core::App().domain();
 	if (!domain.started() || domain.accounts().empty()) {
 		return 1;
