@@ -109,6 +109,17 @@ TEST_CASE(PinnedCustomServerSurvivesSerialization) {
 	}
 }
 
+// Authorization state is server-scoped. A copied key-destruction state may
+// only be reused when the endpoint and verified key are exactly unchanged.
+TEST_CASE(AuthorizationStateCannotCrossServerPin) {
+	const auto original = MakeCustomServer();
+	CHECK(SameCustomServerPin(original, original));
+
+	auto changed = original;
+	changed.port += 1;
+	CHECK(!SameCustomServerPin(original, changed));
+}
+
 // Address-only discovery stores the normalized selection and the origin that
 // authenticated it alongside the operational binding. Losing either field
 // on restart would turn a verified enrollment into an unclassified legacy

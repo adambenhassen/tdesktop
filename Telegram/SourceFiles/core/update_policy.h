@@ -16,6 +16,7 @@ enum class UpdateEntryPoint {
 	Periodic,
 	Settings,
 	CrashWindowRetry,
+	CrashWindowGetApp,
 	Manual,
 };
 

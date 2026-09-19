@@ -248,6 +248,29 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		config->dcOptions().constructUnenrolled();
 	}
 	const auto customServer = config->customServer();
+	const auto currentPinAuthorized = customServer.key
+		&& config->dcOptions().isAuthorized(customServer.dcId);
+	if (!_sessionUserId
+		&& (!customServer.key
+			|| !currentPinAuthorized
+			|| config->dcOptions().blocked()
+			|| config->dcOptions().unenrolled())) {
+		// An unenrolled account cannot carry authorization state from the
+		// previous pin. Drop both the live keys and deferred destruction list
+		// before the new enrollment can resume the instance.
+		_mtpFields.keys.clear();
+		discardStaleAuthorizationState();
+	} else if (!_mtpKeysToDestroy.empty()) {
+		if (!currentPinAuthorized
+			|| (_mtpKeysToDestroyPin
+				&& !MTP::SameCustomServerPin(
+					*_mtpKeysToDestroyPin,
+					customServer))) {
+			discardStaleAuthorizationState();
+		} else {
+			_mtpKeysToDestroyPin = customServer;
+		}
+	}
 	const auto startPaused = !_sessionUserId
 		&& (!customServer.key
 			|| !config->dcOptions().isAuthorized(customServer.dcId));
@@ -283,9 +306,24 @@ void Account::watchProxyChanges() {
 			}
 		}
 		if (_mtpForKeysDestroy) {
-			_mtpForKeysDestroy->restart();
+			if (!authorizationStateMatchesCurrentPin(_mtpForKeysDestroyPin)) {
+				discardStaleAuthorizationState();
+			} else {
+				_mtpForKeysDestroy->restart();
+			}
 		}
 	}, _lifetime);
+}
+
+bool Account::authorizationStateMatchesCurrentPin(
+		const std::optional<MTP::CustomServer> &pin) const {
+	if (!_mtp || !pin || !pin->key || !_mtp->dcOptions().hasCustomServer()) {
+		return false;
+	}
+	const auto currentPin = _mtp->dcOptions().customServer();
+	return currentPin.key
+		&& _mtp->dcOptions().isAuthorized(currentPin.dcId)
+		&& MTP::SameCustomServerPin(*pin, currentPin);
 }
 
 void Account::watchSessionChanges() {
@@ -538,14 +576,24 @@ QByteArray Account::serializeMtpAuthorization() const {
 		return result;
 	};
 	if (_mtp) {
-		const auto keys = _mtp->getKeysForWrite();
-		auto keysToDestroy = _mtpForKeysDestroy
-			? _mtpForKeysDestroy->getKeysForWrite()
-			: MTP::AuthKeysList();
-		keysToDestroy.insert(
-			keysToDestroy.end(),
-			_mtpKeysToDestroy.begin(),
-			_mtpKeysToDestroy.end());
+		auto keys = _mtp->getKeysForWrite();
+		const auto currentPin = _mtp->dcOptions().customServer();
+		const auto currentPinAuthorized = currentPin.key
+			&& _mtp->dcOptions().isAuthorized(currentPin.dcId);
+		if (!_sessionUserId && !sessionExists() && !currentPinAuthorized) {
+			keys.clear();
+		}
+		auto keysToDestroy = MTP::AuthKeysList();
+		if (_mtpForKeysDestroy
+			&& authorizationStateMatchesCurrentPin(_mtpForKeysDestroyPin)) {
+			keysToDestroy = _mtpForKeysDestroy->getKeysForWrite();
+		}
+		if (authorizationStateMatchesCurrentPin(_mtpKeysToDestroyPin)) {
+			keysToDestroy.insert(
+				keysToDestroy.end(),
+				_mtpKeysToDestroy.begin(),
+				_mtpKeysToDestroy.end());
+		}
 		return serialize(_mtp->mainDcId(), keys, keysToDestroy);
 	}
 	const auto &keys = _mtpFields.keys;
@@ -790,23 +838,35 @@ void Account::loggedOut() {
 	_loggingOut = false;
 	Media::Player::mixer()->stopAndClear();
 	destroySession(DestroyReason::LoggedOut);
-	local().reset();
 	if (_mtp) {
 		// Logging out returns the account to enrollment. Stop all queued
-		// work before clearing authorization so a callback cannot reopen a
-		// production endpoint between the two state changes.
+		// work and drop the independent key-destroyer before clearing
+		// authorization, so a proxy callback cannot restart the old pin.
 		_mtp->stopForServerEnrollment();
+		discardStaleAuthorizationState();
 		const auto clearedAuthorization = _mtp->dcOptions().clearAuthorized();
 		const auto unbound = !_mtp->dcOptions().blocked()
 			&& !_mtp->dcOptions().hasCustomServer();
 		if (unbound) {
 			_mtp->dcOptions().constructUnenrolled();
 		}
+		resetAuthorizationKeys();
 		if (clearedAuthorization || unbound) {
 			local().writeMtpConfig();
 		}
+	} else {
+		discardStaleAuthorizationState();
+		_mtpFields.keys.clear();
 	}
+	local().reset();
 	cSetOtherOnline(0);
+}
+
+void Account::discardStaleAuthorizationState() {
+	_mtpForKeysDestroy = nullptr;
+	_mtpForKeysDestroyPin.reset();
+	_mtpKeysToDestroy.clear();
+	_mtpKeysToDestroyPin.reset();
 }
 
 void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
@@ -815,10 +875,20 @@ void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
 	if (keys.empty()) {
 		return;
 	}
-	if (_mtpForKeysDestroy) {
-		_mtpForKeysDestroy->addKeysForDestroy(std::move(keys));
-		local().writeMtpData();
+	if (!authorizationStateMatchesCurrentPin(_mtpKeysToDestroyPin)) {
+		// Old authorization keys must never be sent through the newly bound
+		// endpoint. They are intentionally discarded instead of destroyed by
+		// an unrelated server.
+		_mtpKeysToDestroyPin.reset();
 		return;
+	}
+	if (_mtpForKeysDestroy) {
+		if (authorizationStateMatchesCurrentPin(_mtpForKeysDestroyPin)) {
+			_mtpForKeysDestroy->addKeysForDestroy(std::move(keys));
+			local().writeMtpData();
+			return;
+		}
+		discardStaleAuthorizationState();
 	}
 	auto destroyFields = MTP::Instance::Fields();
 
@@ -827,6 +897,7 @@ void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
 	destroyFields.keys = std::move(keys);
 	destroyFields.deviceModel = Platform::DeviceModelPretty();
 	destroyFields.systemVersion = Platform::SystemVersionPretty();
+	_mtpForKeysDestroyPin = _mtp->dcOptions().customServer();
 	_mtpForKeysDestroy = std::make_unique<MTP::Instance>(
 		MTP::Instance::Mode::KeysDestroyer,
 		std::move(destroyFields));
@@ -839,6 +910,7 @@ void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
 		LOG(("MTP Info: all keys scheduled for destroy are destroyed."));
 		crl::on_main(this, [=] {
 			_mtpForKeysDestroy = nullptr;
+			_mtpForKeysDestroyPin.reset();
 			local().writeMtpData();
 		});
 	}, _mtpForKeysDestroy->lifetime());
@@ -860,6 +932,13 @@ void Account::destroyStaleAuthorizationKeys() {
 		// Disable this for now.
 		if (key->type() == MTP::AuthKey::Type::ReadFromFile) {
 			_mtpKeysToDestroy = _mtp->getKeysForWrite();
+			const auto currentPin = _mtp->dcOptions().customServer();
+			if (currentPin.key
+				&& _mtp->dcOptions().isAuthorized(currentPin.dcId)) {
+				_mtpKeysToDestroyPin = currentPin;
+			} else {
+				_mtpKeysToDestroyPin.reset();
+			}
 			LOG(("MTP Info: destroying stale keys, count: %1"
 				).arg(_mtpKeysToDestroy.size()));
 			resetAuthorizationKeys();

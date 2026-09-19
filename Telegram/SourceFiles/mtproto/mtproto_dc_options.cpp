@@ -144,10 +144,12 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	return nullptr;
 }
 
+} // namespace
+
 // Whether two pins name the same server: the same endpoint identity and
 // the same key bytes. The fingerprint alone would do in practice, but a
 // pin decision should not rest on a digest.
-[[nodiscard]] bool SameCustomServer(
+bool SameCustomServerPin(
 		const CustomServer &a,
 		const CustomServer &b) {
 	if (a.dcId != b.dcId
@@ -164,8 +166,6 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	return a.key->getN() == b.key->getN()
 		&& a.key->getE() == b.key->getE();
 }
-
-} // namespace
 
 bool CanStartSpecialConfigRequest(
 		const QString &delegatedDomain,
@@ -1090,7 +1090,7 @@ bool DcOptions::setCustomServer(
 		WriteLocker lock(this);
 		if (hasCustomServerUnlocked()
 			&& isAuthorizedUnlocked(_customServer.dcId)
-			&& !SameCustomServer(_customServer, server)) {
+			&& !SameCustomServerPin(_customServer, server)) {
 			// A pinned account's peer and message ids are small
 			// server-scoped integers: reading them against another
 			// server sends a forward for "user 12345" to an unrelated

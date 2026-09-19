@@ -43,6 +43,12 @@ struct CustomServer {
 	}
 };
 
+// Authorization state is scoped to the complete verified pin, not merely to
+// an address or a DC id. Callers use this before reusing deferred key state.
+[[nodiscard]] bool SameCustomServerPin(
+	const CustomServer &left,
+	const CustomServer &right);
+
 enum class DcType {
 	Regular,
 	Temporary,

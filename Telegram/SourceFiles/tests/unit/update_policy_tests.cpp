@@ -16,6 +16,7 @@ TEST_CASE(EveryUpdaterEntryPointIsDenied) {
 	CHECK(!UpdateNetworkAllowed(UpdateEntryPoint::Periodic));
 	CHECK(!UpdateNetworkAllowed(UpdateEntryPoint::Settings));
 	CHECK(!UpdateNetworkAllowed(UpdateEntryPoint::CrashWindowRetry));
+	CHECK(!UpdateNetworkAllowed(UpdateEntryPoint::CrashWindowGetApp));
 	CHECK(!UpdateNetworkAllowed(UpdateEntryPoint::Manual));
 }
 

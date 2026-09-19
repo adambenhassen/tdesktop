@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/sandbox.h"
 #include "core/update_checker.h"
+#include "core/update_policy.h"
 #include "core/ui_integration.h"
 #include "core/version.h"
 #include "window/main_window.h"
@@ -24,7 +25,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QFontInfo>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
-#include <QtGui/QDesktopServices>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 
@@ -480,10 +480,10 @@ LastCrashedWindow::LastCrashedWindow(
 	});
 	_saveReport.setText(u"SAVE TO FILE"_q);
 	connect(&_saveReport, &QPushButton::clicked, [=] { saveReport(); });
-	_getApp.setText(u"GET THE LATEST OFFICIAL VERSION OF TELEGRAM DESKTOP"_q);
-	connect(&_getApp, &QPushButton::clicked, [=] {
-		QDesktopServices::openUrl(u"https://desktop.telegram.org"_q);
-	});
+	// This fork has no trusted update origin. Keep the legacy control hidden
+	// and without a handler, even when the crash window is shown before the
+	// normal updater policy has initialized.
+	_getApp.hide();
 
 	_send.setText(u"SEND CRASH REPORT"_q);
 	connect(&_send, &QPushButton::clicked, [=] { sendReport(); });
@@ -695,6 +695,8 @@ void LastCrashedWindow::checkingFinished() {
 
 void LastCrashedWindow::updateControls() {
 	int padding = _size, h = padding + _networkSettings.height() + padding;
+	const auto getAppAllowed = Core::UpdateNetworkAllowed(
+		Core::UpdateEntryPoint::CrashWindowGetApp);
 
 	_label.show();
 	if (_updaterData) {
@@ -752,7 +754,8 @@ void LastCrashedWindow::updateControls() {
 					if (_sendingState == SendingTooOld || _sendingState == SendingUnofficial) {
 						QString verStr = getReportField(qstr("version"), qstr("Version:"));
 						qint64 ver = verStr.isEmpty() ? 0 : verStr.toLongLong();
-						if (!ver || (ver == AppVersion) || (ver < 0 && (-ver / 1000) == AppVersion)) {
+						if (getAppAllowed
+							&& (!ver || (ver == AppVersion) || (ver < 0 && (-ver / 1000) == AppVersion))) {
 							h += _getApp.height() + padding;
 							_getApp.show();
 							h -= _yourReportName.height() + padding; // hide report name
@@ -904,7 +907,7 @@ void LastCrashedWindow::updateControls() {
 			}
 		}
 
-		_getApp.show();
+		_getApp.hide();
 		h += _networkSettings.height() + padding;
 	}
 
