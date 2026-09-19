@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/session.h"
 
 #include "mtproto/details/mtproto_dcenter.h"
+#include "mtproto/mtp_instance.h"
 #include "mtproto/session_private.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "core/application.h"
@@ -278,6 +279,19 @@ void Session::restart() {
 	}
 }
 
+void Session::resumeAfterServerEnrollment() {
+	if (_killed) {
+		DEBUG_LOG(("Session Error: can't resume a killed session"));
+		return;
+	}
+	refreshOptions();
+	if (const auto captured = _private) {
+		InvokeQueued(captured, [=] {
+			captured->resumeAfterServerEnrollment();
+		});
+	}
+}
+
 void Session::refreshOptions() {
 	auto &settings = Core::App().settings().proxy();
 	const auto &proxy = settings.selected();
@@ -367,6 +381,9 @@ void Session::needToResumeAndSend() {
 		DEBUG_LOG(("Session Info: can't resume a killed session"));
 		return;
 	}
+	if (!_instance->isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
 	if (!_private) {
 		DEBUG_LOG(("Session Info: resuming session dcWithShift %1").arg(_shiftedDcId));
 		start();
@@ -394,9 +411,14 @@ void Session::stopUntilPinChange() {
 	if (_killed || !_private) {
 		return;
 	}
-	InvokeQueued(_private, [captured = _private] {
-		captured->stopUntilPinChange();
-	});
+	const auto token = _instance->serverEnrollmentStopToken();
+	QueueServerEnrollmentStop(
+		_private,
+		token,
+		[instance = _instance](uint64 token) {
+			return instance->isServerEnrollmentStopTokenCurrent(token);
+		},
+		[captured = _private] { captured->stopUntilPinChange(); });
 }
 
 void Session::resetDone() {

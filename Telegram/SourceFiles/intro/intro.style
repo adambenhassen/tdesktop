@@ -184,23 +184,20 @@ introQrCenterSize: 44px;
 introQrPlane: icon {{ "intro_qr_plane", activeButtonFg }};
 
 introServerNextTop: 320px;
-introServerErrorTop: 253px;
 introUsernameErrorTop: 172px;
 introSignUpNoteTop: 165px;
 introSignUpNameErrorTop: 200px;
 introSignUpPasswordErrorTop: 239px;
-introServerKeyField: InputField(introCountry) {
-	textMargins: margins(12px, 22px, 12px, 6px);
-	style: TextStyle(defaultTextStyle) {
-		font: font(12px);
-		lineHeight: 16px;
-	}
-	width: 300px;
-	heightMin: 80px;
-	heightMax: 80px;
-}
-introServerPanelWidth: 340px;
-introServerPanelRadius: 6px;
-introServerPanelBg: windowBgOver;
-introServerIdentityFont: font(13px);
-introServerCompareField: InputField(introCountry) { width: 324px; }
+introServerScrollTop: 124px;
+introServerScrollGap: 8px;
+introServerScrollBottom: 8px;
+introServerFieldSideMargin: 40px;
+introServerAddressLabelMargins: margins(introServerFieldSideMargin, 0px, introServerFieldSideMargin, 8px);
+introServerAddressFieldMargins: margins(introServerFieldSideMargin, 0px, introServerFieldSideMargin, 8px);
+introServerAddressStatusMargins: margins(introServerFieldSideMargin, 0px, introServerFieldSideMargin, 0px);
+introServerAddressButtonMargins: margins(introServerFieldSideMargin, 16px, introServerFieldSideMargin, 0px);
+introServerSavedAddressLabelMargins: margins(introServerFieldSideMargin, 0px, introServerFieldSideMargin, 8px);
+introServerSavedAddressMargins: margins(introServerFieldSideMargin, 0px, introServerFieldSideMargin, 16px);
+introServerSavedStatusMargins: margins(introServerFieldSideMargin, 0px, introServerFieldSideMargin, 0px);
+introServerSavedContinueMargins: margins(introServerFieldSideMargin, 16px, introServerFieldSideMargin, 0px);
+introServerAddAccountMargins: margins(introServerFieldSideMargin, 16px, introServerFieldSideMargin, 0px);

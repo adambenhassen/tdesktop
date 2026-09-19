@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_changes.h"
+#include "data/data_download_manager.h"
 #include "window/window_controller.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
@@ -28,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "styles/style_layers.h"
 #include "main/main_app_config.h"
+#include "main/main_account_persistence.h"
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
@@ -38,10 +40,11 @@ namespace {
 constexpr auto kWideIdsTag = ~uint64(0);
 
 // Why an account that must be pinned to a custom server could not
-// start on it. All three end in the same blocked state — no endpoint,
+// start on it. All end in the same blocked state — no endpoint,
 // no key, no connection — and differ only in what the user is told.
 enum class PinFailure {
 	None,
+	AuthorizationWriteFailed, // A prior auth snapshot did not reach disk.
 	ConfigUnreadable, // Marker set, config blob missing or corrupt.
 	PinMissing,       // Marker set, config parses but carries no pin.
 	MarkerUnreadable, // Prefs unreadable, so pinned-unknown.
@@ -49,6 +52,8 @@ enum class PinFailure {
 
 [[nodiscard]] const char *PinFailureLog(PinFailure failure) {
 	switch (failure) {
+	case PinFailure::AuthorizationWriteFailed:
+		return "previous authorization snapshot was not durable";
 	case PinFailure::ConfigUnreadable: return "config could not be read";
 	case PinFailure::PinMissing: return "config carries no pin";
 	case PinFailure::MarkerUnreadable: return "prefs could not be read";
@@ -62,7 +67,10 @@ enum class PinFailure {
 	// the unreadable-prefs case gets its own cause. Not knowing which
 	// server this account uses is the state that case is reporting, so
 	// the rest of the text must not imply the app knows either.
-	const auto cause = (failure == PinFailure::MarkerUnreadable)
+	const auto cause = (failure == PinFailure::AuthorizationWriteFailed)
+		? u"The last authorization save did not complete, so this account "
+			u"stays blocked rather than risk using a stale key."_q
+		: (failure == PinFailure::MarkerUnreadable)
 		? u"This account's local data could not be read, so there is "
 			u"no way to tell which server it belongs to."_q
 		: u"The saved server settings for this account could not be "
@@ -74,7 +82,7 @@ enum class PinFailure {
 		u"restarts the app. Nothing else is removed — your messages and "
 		u"local data stay. If this account used a private server, its "
 		u"address and key have to be entered again; until they are, "
-		u"this app connects to Telegram's servers.\n\n"
+		u"this app connects to no server.\n\n"
 		u"See 'log.txt' for details."_q;
 }
 
@@ -128,6 +136,28 @@ Account::Account(not_null<Domain*> domain, const QString &dataName, int index)
 }
 
 Account::~Account() {
+	// Auth keys are normally persisted from a postponed write request. During
+	// shutdown the event loop can finish before that callback runs, so take a
+	// final durable authorization snapshot while the MTP instance still owns
+	// the current key and pin.
+	if (_mtp) {
+		static_cast<void>(details::CommitTeardownMtpAuthorization(
+			_local.get(),
+			[] {},
+			[=] {
+				// Keep the last recoverable on-disk binding and key snapshot;
+				// never leave a live instance looking usable after its final
+				// authorization commit failed.
+				if (!_local->writeMtpAuthorizationFailure()) {
+					LOG(("MTP Error: could not persist the authorization failure "
+						"marker; keeping the account blocked for this shutdown."));
+				} else {
+					LOG(("MTP Error: final authorization snapshot failed; "
+						"keeping the account blocked for restart."));
+				}
+				_mtp->dcOptions().constructBlocked();
+			}));
+	}
 	if (const auto session = maybeSession()) {
 		session->saveSettingsNowIfNeeded();
 		_local->writeSearchSuggestionsIfNeeded();
@@ -161,7 +191,9 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 	// settles it whatever the marker says; otherwise the marker
 	// decides, and an unreadable marker counts as pinned.
 	const auto failure = [&] {
-		if (config && config->hasCustomServer()) {
+		if (_local->mtpAuthorizationWriteFailed()) {
+			return PinFailure::AuthorizationWriteFailed;
+		} else if (config && config->hasCustomServer()) {
 			return PinFailure::None;
 		} else if (_local->customServerPinUnknown()) {
 			return PinFailure::MarkerUnreadable;
@@ -181,12 +213,13 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 			).arg(QString::fromUtf8(PinFailureLog(failure))));
 		config = std::make_unique<MTP::Config>(MTP::Environment::Production);
 		config->dcOptions().constructBlocked();
-		// Nothing else records this. The blocked config is never
-		// written back, and unreadable prefs are deleted by the read
-		// that failed, so the next start would find no marker and go
-		// to production.
-		_local->writeCustomServerBlocked(
-			failure == PinFailure::MarkerUnreadable);
+		// The authorization-write marker is already durable and has its own
+		// reason. Other startup failures need the custom-server marker because
+		// the blocked config is never written back.
+		if (failure != PinFailure::AuthorizationWriteFailed) {
+			_local->writeCustomServerBlocked(
+				failure == PinFailure::MarkerUnreadable);
+		}
 		// Only a config write clears the markers, and a blocked account
 		// never performs one, so without a way out the block is
 		// terminal — including for an account that never had a custom
@@ -204,8 +237,16 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		config = std::make_unique<MTP::Config>(
 			Core::App().fallbackProductionConfig());
 	}
-	startMtp(std::move(config));
-	_appConfig->start();
+	const auto customServer = config->customServer();
+	const auto startPaused = !_sessionUserId
+		&& (!customServer.key
+			|| !config->dcOptions().isAuthorized(customServer.dcId));
+	if (!startMtp(std::move(config), startPaused)) {
+		return;
+	}
+	if (!startPaused) {
+		_appConfig->start();
+	}
 	watchProxyChanges();
 	watchSessionChanges();
 }
@@ -255,17 +296,17 @@ uint64 Account::willHaveSessionUniqueId(MTP::Config *config) const {
 		| (config && config->isTestMode() ? 0x0100'0000'0000'0000ULL : 0ULL);
 }
 
-void Account::createSession(
+bool Account::createSession(
 		const MTPUser &user,
 		std::unique_ptr<SessionSettings> settings) {
-	createSession(
+	return createSession(
 		user,
 		QByteArray(),
 		0,
 		settings ? std::move(settings) : std::make_unique<SessionSettings>());
 }
 
-void Account::createSession(
+bool Account::createSession(
 		UserId id,
 		QByteArray serialized,
 		int streamVersion,
@@ -276,11 +317,12 @@ void Account::createSession(
 	const auto flags = MTPDuser::Flag::f_self | (phone.isEmpty()
 		? MTPDuser::Flag()
 		: MTPDuser::Flag::f_phone);
+	const auto sessionUserId = _sessionUserId;
 
-	createSession(
+	return createSession(
 		MTP_user(
 			MTP_flags(flags),
-			MTP_long(base::take(_sessionUserId).bare),
+			MTP_long(sessionUserId.bare),
 			MTPlong(), // access_hash
 			MTPstring(), // first_name
 			MTPstring(), // last_name
@@ -306,7 +348,7 @@ void Account::createSession(
 		std::move(settings));
 }
 
-void Account::createSession(
+bool Account::createSession(
 		const MTPUser &user,
 		QByteArray serialized,
 		int streamVersion,
@@ -319,16 +361,54 @@ void Account::createSession(
 	if (!serialized.isEmpty()) {
 		local().readSelf(_session.get(), serialized, streamVersion);
 	}
-	_sessionValue = _session.get();
+	const auto previousOptions = _mtp->dcOptions().serialize();
 	const auto customServer = _mtp->dcOptions().customServer();
 	const auto authorizedDcId = customServer.key
 		? customServer.dcId
 		: _mtp->mainDcId();
-	if (_mtp->dcOptions().markAuthorized(authorizedDcId)) {
-		local().writeMtpConfig();
+	const auto markedAuthorized = _mtp->dcOptions().markAuthorized(
+		authorizedDcId);
+	const auto restoreOptions = [&] {
+		if (!_mtp->dcOptions().constructFromSerialized(previousOptions)) {
+			_mtp->dcOptions().constructBlocked();
+		}
+	};
+	const auto committed = details::CommitPostAuthMtpAuthorization(
+		_local.get(),
+		[=] {
+			if (!_mtpKeysToDestroy.empty()) {
+				destroyMtpKeys(base::take(_mtpKeysToDestroy));
+			}
+			// Session construction can fail the durable authorization commit.
+			// Register it only after that commit succeeds, while it is still
+			// unpublished and before observers see the session.
+			Core::App().downloadManager().trackSession(_session.get());
+			_sessionValue = _session.get();
+			_sessionUserId = 0;
+		},
+		[=] {
+			if (!local().writeMtpAuthorizationFailure()) {
+				LOG(("MTP Error: could not persist the authorization failure "
+					"marker; keeping the account closed."));
+			}
+			LOG(("MTP Error: could not synchronously persist the authorization "
+				"state; keeping the account closed."));
+			if (markedAuthorized) {
+				restoreOptions();
+				if (!local().writeMtpConfig(true)) {
+					_mtp->dcOptions().constructBlocked();
+				}
+			} else {
+				_mtp->dcOptions().constructBlocked();
+			}
+			_session.reset();
+		});
+	if (!committed) {
+		return false;
 	}
 
 	Ensures(_session != nullptr);
+	return true;
 }
 
 void Account::destroySession(DestroyReason reason) {
@@ -431,8 +511,8 @@ QByteArray Account::serializeMtpAuthorization() const {
 			QDataStream stream(&result, QIODevice::WriteOnly);
 			stream.setVersion(QDataStream::Qt_5_1);
 
-			const auto currentUserId = sessionExists()
-				? session().userId()
+			const auto currentUserId = _session
+				? _session->userId()
 				: UserId();
 			stream
 				<< quint64(kWideIdsTag)
@@ -449,9 +529,13 @@ QByteArray Account::serializeMtpAuthorization() const {
 	};
 	if (_mtp) {
 		const auto keys = _mtp->getKeysForWrite();
-		const auto keysToDestroy = _mtpForKeysDestroy
+		auto keysToDestroy = _mtpForKeysDestroy
 			? _mtpForKeysDestroy->getKeysForWrite()
 			: MTP::AuthKeysList();
+		keysToDestroy.insert(
+			keysToDestroy.end(),
+			_mtpKeysToDestroy.begin(),
+			_mtpKeysToDestroy.end());
 		return serialize(_mtp->mainDcId(), keys, keysToDestroy);
 	}
 	const auto &keys = _mtpFields.keys;
@@ -544,13 +628,18 @@ void Account::setMtpAuthorization(const QByteArray &serialized) {
 		).arg(_mtpKeysToDestroy.size()));
 }
 
-void Account::startMtp(std::unique_ptr<MTP::Config> config) {
+bool Account::startMtp(
+		std::unique_ptr<MTP::Config> config,
+		bool startPaused) {
 	Expects(!_mtp);
 
+	const auto restoringSession = bool(_sessionUserId);
+	const auto pausedUntilSessionCommit = startPaused || restoringSession;
 	auto fields = base::take(_mtpFields);
 	fields.config = std::move(config);
 	fields.deviceModel = Platform::DeviceModelPretty();
 	fields.systemVersion = Platform::SystemVersionPretty();
+	fields.startPaused = pausedUntilSessionCommit;
 	_mtp = std::make_unique<MTP::Instance>(
 		MTP::Instance::Mode::Normal,
 		std::move(fields));
@@ -605,18 +694,32 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
 		}
 	});
 
-	if (!_mtpKeysToDestroy.empty()) {
+	// A paused enrollment account must not create the separate key-destroyer
+	// instance either. Keep these keys until the account has authenticated,
+	// when createSession() resumes their normal cleanup path.
+	if (!pausedUntilSessionCommit && !_mtpKeysToDestroy.empty()) {
 		destroyMtpKeys(base::take(_mtpKeysToDestroy));
 	}
 
-	if (_sessionUserId) {
-		createSession(
+	if (restoringSession) {
+		if (!createSession(
 			_sessionUserId,
-			base::take(_sessionUserSerialized),
-			base::take(_sessionUserStreamVersion),
+			_sessionUserSerialized,
+			_sessionUserStreamVersion,
 			(_storedSessionSettings
 				? std::move(_storedSessionSettings)
-				: std::make_unique<SessionSettings>()));
+				: std::make_unique<SessionSettings>()))) {
+			// The instance was held behind the enrollment gate until the
+			// authorization snapshot committed. Do not publish it, resume
+			// network traffic, or consume the stored user id after failure.
+			_mtp->dcOptions().constructBlocked();
+			LOG(("MTP Error: stored authorization could not be restored; "
+				"keeping the account blocked."));
+			return false;
+		}
+		_sessionUserSerialized = {};
+		_sessionUserStreamVersion = 0;
+		_mtp->resume();
 	}
 	_storedSessionSettings = nullptr;
 
@@ -626,6 +729,7 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
 	}
 
 	_mtpValue = _mtp.get();
+	return true;
 }
 
 bool Account::checkForUpdates(const MTP::Response &message) {
@@ -758,7 +862,11 @@ void Account::resetAuthorizationKeys() {
 	{
 		const auto old = base::take(_mtp);
 		auto config = std::make_unique<MTP::Config>(old->config());
-		startMtp(std::move(config));
+		const auto customServer = config->customServer();
+		const auto startPaused = !_sessionUserId
+			&& (!customServer.key
+				|| !config->dcOptions().isAuthorized(customServer.dcId));
+		startMtp(std::move(config), startPaused);
 	}
 	local().writeMtpData();
 }

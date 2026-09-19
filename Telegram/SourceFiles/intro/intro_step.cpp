@@ -241,11 +241,13 @@ void Step::createSession(
 	settings->setDialogsFiltersEnabled(hasFilters);
 
 	const auto account = _account;
-	account->createSession(user, std::move(settings));
+	if (!account->createSession(user, std::move(settings))) {
+		showError(rpl::single(Lang::Hard::ServerError()));
+		return;
+	}
 
 	// "this" is already deleted here by creating the main widget.
 	account->local().enforceModernStorageIdBots();
-	account->local().writeMtpData();
 	auto &session = account->session();
 	session.data().chatsFilters().setPreloaded(filters, tagsEnabled);
 	if (hasFilters) {
@@ -256,6 +258,7 @@ void Step::createSession(
 			session.user(),
 			{ std::move(photo) });
 	}
+	account->appConfig().start();
 	account->appConfig().refresh();
 	if (session.supportMode()) {
 		PrepareSupportMode(&session);
@@ -305,6 +308,14 @@ rpl::producer<bool> Step::backAvailable() const {
 }
 
 QWidget *Step::firstTabWidget() const {
+	return nullptr;
+}
+
+QWidget *Step::lastTabWidget() const {
+	return nullptr;
+}
+
+QWidget *Step::nextButtonFocusWidget() const {
 	return nullptr;
 }
 
@@ -514,6 +525,14 @@ int Step::contentTop() const {
 		result += qRound(added * st::introContentTopAdd);
 	}
 	return result;
+}
+
+int Step::descriptionBottom() const {
+	return _description->y() + _description->height();
+}
+
+rpl::producer<QRect> Step::descriptionGeometryValue() const {
+	return _description->geometryValue();
 }
 
 void Step::setErrorCentered(bool centered) {

@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_cloud_password.h"
 #include "media/player/media_player_float.h"
 
+#include <optional>
+
 namespace Main {
 class Account;
 } // namespace Main
@@ -75,9 +77,11 @@ struct Data {
 
 	Window::TermsLock termsLock;
 
-	// Set by ServerWidget on valid input, consumed by ServerKeyWidget.
-	QString serverAddress;
-	QString serverPem;
+	// The editable draft stays local to this new account while the user
+	// corrects discovery or walks back from the username step. It is never
+	// sent to MTProto and is cleared by the account lifecycle.
+	QString serverSelection;
+	QString serverEndpoint;
 
 	// The phone_code_hash UsernameWidget obtained for its username, so
 	// a back-and-forward loop reuses it instead of burning another
@@ -134,6 +138,12 @@ public:
 	void showAnimated(QPixmap oldContentCache, bool back = false);
 
 	void setInnerFocus();
+
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	// Test-only entry point that uses the same history/animation wiring as
+	// the production intro flow before the signup steps are driven.
+	void startSignupControlsRegressionStep();
+#endif
 
 	[[nodiscard]] rpl::producer<> showSettingsRequested() const;
 

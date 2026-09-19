@@ -14,11 +14,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QFile>
 #include <QtCore/QRegularExpression>
+#include <QtNetwork/QHostAddress>
 
 namespace MTP {
 namespace {
 
-constexpr auto kVersion = 4;
+constexpr auto kVersion = 5;
 
 using namespace details;
 
@@ -77,6 +78,49 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
+[[nodiscard]] bool ValidDiscoveryMetadata(const CustomServer &server) {
+	if (server.discoveryPolicy == ServerDiscoveryPolicy::Legacy) {
+		return server.serverSelection.empty()
+			&& server.discoveryOrigin.empty();
+	}
+	if (server.serverSelection.empty() || server.discoveryOrigin.empty()) {
+		return false;
+	}
+	const auto selection = CheckServerSelection(
+		QString::fromStdString(server.serverSelection));
+	if (!selection || selection.policy != server.discoveryPolicy) {
+		return false;
+	}
+	if (selection.requestedPort
+		&& selection.requestedPort != server.port) {
+		return false;
+	}
+	const auto expectedOrigin = (server.discoveryPolicy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? PublicDiscoveryUrl(selection)
+		: (u"local:"_q + selection.normalizedSelection);
+	if (QString::fromStdString(server.discoveryOrigin) != expectedOrigin) {
+		return false;
+	}
+	const auto host = QString::fromStdString(server.ip);
+	auto address = QHostAddress();
+	if (server.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps) {
+		return address.setAddress(host)
+			&& server.ipv6
+				== (address.protocol() == QAbstractSocket::IPv6Protocol)
+			&& IsPublicAddress(address);
+	}
+	const auto endpoint = CheckServerSelection(
+		address.setAddress(host)
+			? ((address.protocol() == QAbstractSocket::IPv6Protocol)
+				? (u"["_q + host + u"]"_q)
+				: host) + u":"_q + QString::number(server.port)
+			: host + u":"_q + QString::number(server.port));
+	return endpoint
+		&& endpoint.policy == server.discoveryPolicy
+		&& endpoint.ipv6 == server.ipv6;
+}
+
 // A pin is all-or-nothing. Every one of these leaves an account that
 // looks pinned but is not: an invalid key trips the fingerprint
 // assertions, and a zero dc id matches no real DC, so the CDN refusal
@@ -86,12 +130,16 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 		return "no RSA key";
 	} else if (!server.key->valid()) {
 		return "an invalid RSA key";
-	} else if (!server.dcId) {
+	} else if (server.dcId <= 0) {
 		return "no dc id";
 	} else if (server.ip.empty()) {
 		return "no address";
 	} else if (server.port <= 0) {
 		return "no port";
+	} else if (server.port > 65535) {
+		return "bad port";
+	} else if (!ValidDiscoveryMetadata(server)) {
+		return "invalid discovery metadata";
 	}
 	return nullptr;
 }
@@ -105,7 +153,10 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	if (a.dcId != b.dcId
 		|| a.ip != b.ip
 		|| a.port != b.port
-		|| a.ipv6 != b.ipv6) {
+		|| a.ipv6 != b.ipv6
+		|| a.serverSelection != b.serverSelection
+		|| a.discoveryPolicy != b.discoveryPolicy
+		|| a.discoveryOrigin != b.discoveryOrigin) {
 		return false;
 	} else if (!a.key || !b.key) {
 		return false;
@@ -531,6 +582,9 @@ QByteArray DcOptions::serialize() const {
 	qint32 customDcId = 0, customPort = 0;
 	auto customIp = std::string();
 	bytes::vector customKeyN, customKeyE;
+	auto customSelection = std::string();
+	auto customOrigin = std::string();
+	auto customPolicy = ServerDiscoveryPolicy::Legacy;
 	if (_customServer.key) {
 		pinned = true;
 		customDcId = _customServer.dcId;
@@ -538,6 +592,9 @@ QByteArray DcOptions::serialize() const {
 		customIp = _customServer.ip;
 		customKeyN = _customServer.key->getN();
 		customKeyE = _customServer.key->getE();
+		customSelection = _customServer.serverSelection;
+		customPolicy = _customServer.discoveryPolicy;
+		customOrigin = _customServer.discoveryOrigin;
 	}
 	size += sizeof(qint32); // pinned
 	if (pinned) {
@@ -548,6 +605,12 @@ QByteArray DcOptions::serialize() const {
 			+ Serialize::bytesSize(customKeyE);
 	}
 	size += sizeof(qint32) + _authorizedDcIds.size() * sizeof(qint32);
+	if (pinned) {
+		// Discovery metadata (v5): policy, normalized selection, and the
+		// authenticated origin are part of the durable binding.
+		size += sizeof(qint32) + sizeof(qint32) + customSelection.size();
+		size += sizeof(qint32) + customOrigin.size();
+	}
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -599,6 +662,18 @@ QByteArray DcOptions::serialize() const {
 		for (const auto dcId : _authorizedDcIds) {
 			stream << qint32(dcId);
 		}
+
+		if (pinned) {
+			stream << qint32(int(customPolicy))
+				<< qint32(customSelection.size());
+			stream.writeRawData(
+				customSelection.data(),
+				customSelection.size());
+			stream << qint32(customOrigin.size());
+			stream.writeRawData(
+				customOrigin.data(),
+				customOrigin.size());
+		}
 	}
 	return result;
 }
@@ -630,6 +705,10 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		return false;
 	}
 	_data.clear();
+	_publicKeys.clear();
+	_cdnPublicKeys.clear();
+	readBuiltInPublicKeys();
+	_customServer = CustomServer();
 	_authorizedDcIds.clear();
 	for (auto i = 0; i != count; ++i) {
 		qint32 id = 0, flags = 0, port = 0, ipSize = 0;
@@ -793,6 +872,50 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 				return false;
 			}
 			_authorizedDcIds.emplace(DcId(dcId));
+		}
+	}
+	if (version > 4 && _customServer.key) {
+		qint32 policy = 0;
+		qint32 selectionSize = 0;
+		stream >> policy >> selectionSize;
+		constexpr auto kMaxSelectionSize = 1024;
+		constexpr auto kMaxOriginSize = 2048;
+		if (policy < int(ServerDiscoveryPolicy::Legacy)
+			|| policy > int(ServerDiscoveryPolicy::LocalDirect)
+			|| selectionSize < 0
+			|| selectionSize > kMaxSelectionSize
+			|| stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Bad discovery metadata in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		auto selection = std::string(selectionSize, ' ');
+		stream.readRawData(selection.data(), selectionSize);
+		qint32 originSize = 0;
+		stream >> originSize;
+		if (originSize < 0
+			|| originSize > kMaxOriginSize
+			|| stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Bad discovery origin in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		auto origin = std::string(originSize, ' ');
+		stream.readRawData(origin.data(), originSize);
+		if (stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Truncated discovery metadata in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		if (policy == int(ServerDiscoveryPolicy::Legacy)
+			? (!selection.empty() || !origin.empty())
+			: (selection.empty() || origin.empty())) {
+			LOG(("MTP Error: Incomplete discovery metadata in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		_customServer.discoveryPolicy = ServerDiscoveryPolicy(policy);
+		_customServer.serverSelection = std::move(selection);
+		_customServer.discoveryOrigin = std::move(origin);
+		if (!ValidDiscoveryMetadata(_customServer)) {
+			LOG(("MTP Error: Discovery metadata does not match the stored custom server."));
+			return false;
 		}
 	}
 	return true;

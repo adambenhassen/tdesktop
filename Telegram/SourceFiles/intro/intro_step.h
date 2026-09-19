@@ -79,7 +79,7 @@ public:
 		Fn<void(Fn<void()> callback)> callback);
 
 	void prepareShowAnimated(Step *after);
-	void showAnimated(Animate animate);
+	virtual void showAnimated(Animate animate);
 	void showFast();
 	[[nodiscard]] bool animating() const;
 	void setShowAnimationClipping(QRect clipping);
@@ -110,8 +110,19 @@ public:
 	// field ahead of Next, Back and Settings.
 	[[nodiscard]] virtual QWidget *firstTabWidget() const;
 
+	// Steps with an action inside a scroll area return it here. Their own
+	// content establishes the fields between firstTabWidget() and this tail;
+	// Widget only connects that tail to the shell Back button.
+	[[nodiscard]] virtual QWidget *lastTabWidget() const;
+
+	// Return a step-local primary action when the shell Next button is not
+	// part of the scrollable content.
+	[[nodiscard]] virtual QWidget *nextButtonFocusWidget() const;
+
 	[[nodiscard]] int contentLeft() const;
 	[[nodiscard]] int contentTop() const;
+	[[nodiscard]] int descriptionBottom() const;
+	[[nodiscard]] rpl::producer<QRect> descriptionGeometryValue() const;
 
 	void setErrorCentered(bool centered);
 	void showError(rpl::producer<QString> text);

@@ -425,7 +425,10 @@ void Domain::removeRedundantAccounts() {
 
 	const auto was = _accounts.size();
 	for (auto i = _accounts.begin(); i != _accounts.end();) {
-		if (Core::App().separateWindowFor(not_null(i->account.get()))
+		// The active account may not have a window during startup or a
+		// headless regression, but dropping it invalidates _active.
+		if (i->account.get() == _active.current()
+			|| Core::App().separateWindowFor(not_null(i->account.get()))
 			|| i->account->sessionExists()) {
 			++i;
 			continue;

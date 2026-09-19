@@ -322,6 +322,8 @@ jobs:
       # already produced it, so this only executes it: seconds, not a second
       # compile. Placed before the artifact steps so a red test stops the
       # upload rather than shipping a binary nothing checked.
+      # Telegramd ships for macOS, so Linux CI gates the standalone unit cases
+      # without running the desktop GUI regression under Xvfb.
       - name: Unit tests.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -329,7 +331,14 @@ jobs:
           -u $(id -u) \
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
-          /usr/src/tdesktop/out/Debug/test_unit
+          bash -lc '
+            cd /usr/src/tdesktop
+            /usr/src/tdesktop/out/Debug/test_unit
+            TEST_STATUS=$?
+            if test "$TEST_STATUS" -ne 0; then
+              exit "$TEST_STATUS"
+            fi
+          '
 
       - name: Move artifact.
         if: env.UPLOAD_ARTIFACT == 'true'

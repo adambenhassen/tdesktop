@@ -95,6 +95,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "core/cached_webview_availability.h"
 #include "test/test_agent.h"
+#include "tests/signup_controls_regression.h"
+#include "tests/account_lifecycle_regression.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
@@ -264,6 +266,20 @@ Application::~Application() {
 }
 
 void Application::run() {
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	const auto headlessRegression
+		= qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")
+		|| qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION");
+	if (headlessRegression) {
+		// The regression exercises QWidget paths only. Keep unrelated GPU
+		// probing out of the headless process before its first RpWindow.
+		Ui::GL::ForceDisable(true);
+	}
+#endif // TDESKTOP_LIFECYCLE_REGRESSION
+#if !defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	constexpr auto headlessRegression = false;
+#endif // !TDESKTOP_LIFECYCLE_REGRESSION
+
 	// Depends on OpenSSL on macOS, so on ThirdParty::start().
 	// Depends on notifications settings.
 	_notifications = std::make_unique<Window::Notifications::System>();
@@ -302,13 +318,18 @@ void Application::run() {
 	Ui::InitTextOptions();
 	Ui::StartCachedCorners();
 	Ui::Emoji::Init();
+
+	auto regressionResult = 0;
+
 	Ui::PreloadTextSpoilerMask();
 	startShortcuts();
 	startEmojiImageLoader();
 	startSystemDarkModeViewer();
-	Media::Player::start(_audio.get());
+	if (!headlessRegression) {
+		Media::Player::start(_audio.get());
+	}
 
-	if (MediaControlsManager::Supported()) {
+	if (!headlessRegression && MediaControlsManager::Supported()) {
 		_mediaControlsManager = std::make_unique<MediaControlsManager>();
 	}
 
@@ -335,58 +356,78 @@ void Application::run() {
 	// Create mime database, so it won't be slow later.
 	QMimeDatabase().mimeTypeForName(u"text/plain"_q);
 
-	// Check now to avoid re-entrance later.
-	[[maybe_unused]] const auto &webviewAvailability
-		= Core::CachedWebviewAvailability();
+	// Check now to avoid re-entrance later. The lifecycle regressions do not
+	// create a WebView, and starting its helper process makes the isolated
+	// Xvfb run depend on an unrelated GLib/GTK subprocess teardown.
+	if (!headlessRegression) {
+		[[maybe_unused]] const auto &webviewAvailability
+			= Core::CachedWebviewAvailability();
+	}
 
-	_windows.emplace(nullptr, std::make_unique<Window::Controller>());
-	setLastActiveWindow(_windows.front().second.get());
-	_windowInSettings = _lastActivePrimaryWindow = _lastActiveWindow;
+	if (!headlessRegression) {
+		_windows.emplace(nullptr, std::make_unique<Window::Controller>());
+		setLastActiveWindow(_windows.front().second.get());
+		_windowInSettings = _lastActivePrimaryWindow = _lastActiveWindow;
 
-	_domain->activeChanges(
-	) | rpl::on_next([=](not_null<Main::Account*> account) {
-		showAccount(account);
-	}, _lifetime);
+		_domain->activeChanges(
+		) | rpl::on_next([=](not_null<Main::Account*> account) {
+			showAccount(account);
+		}, _lifetime);
 
-	(
-		_domain->activeValue(
-		) | rpl::to_empty | rpl::filter([=] {
-			return _domain->started();
-		}) | rpl::take(1)
-	) | rpl::then(
-		_domain->accountsChanges()
-	) | rpl::map([=] {
-		return (_domain->accounts().size() > Main::Domain::kMaxAccounts)
-			? _domain->activeChanges()
-			: rpl::never<not_null<Main::Account*>>();
-	}) | rpl::flatten_latest(
-	) | rpl::on_next([=](not_null<Main::Account*> account) {
-		const auto ordered = _domain->orderedAccounts();
-		const auto it = ranges::find(ordered, account);
-		if (_lastActivePrimaryWindow && it != end(ordered)) {
-			const auto index = std::distance(begin(ordered), it);
-			if ((index + 1) > _domain->maxAccounts()) {
-				_lastActivePrimaryWindow->show(Box(
-					AccountsLimitBox,
-					&account->session()));
+		(
+			_domain->activeValue(
+			) | rpl::to_empty | rpl::filter([=] {
+				return _domain->started();
+			}) | rpl::take(1)
+		) | rpl::then(
+			_domain->accountsChanges()
+		) | rpl::map([=] {
+			return (_domain->accounts().size() > Main::Domain::kMaxAccounts)
+				? _domain->activeChanges()
+				: rpl::never<not_null<Main::Account*>>();
+		}) | rpl::flatten_latest(
+		) | rpl::on_next([=](not_null<Main::Account*> account) {
+			const auto ordered = _domain->orderedAccounts();
+			const auto it = ranges::find(ordered, account);
+			if (_lastActivePrimaryWindow && it != end(ordered)) {
+				const auto index = std::distance(begin(ordered), it);
+				if ((index + 1) > _domain->maxAccounts()) {
+					_lastActivePrimaryWindow->show(Box(
+						AccountsLimitBox,
+						&account->session()));
+				}
 			}
-		}
-	}, _lifetime);
+		}, _lifetime);
 
-	QCoreApplication::instance()->installEventFilter(this);
+		QCoreApplication::instance()->installEventFilter(this);
 
-	appDeactivatedValue(
-	) | rpl::on_next([=](bool deactivated) {
-		if (deactivated) {
-			handleAppDeactivated();
-		} else {
-			handleAppActivated();
-		}
-	}, _lifetime);
+		appDeactivatedValue(
+		) | rpl::on_next([=](bool deactivated) {
+			if (deactivated) {
+				handleAppDeactivated();
+			} else {
+				handleAppActivated();
+			}
+		}, _lifetime);
+	}
 
 	DEBUG_LOG(("Application Info: window created..."));
 
 	startDomain();
+
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
+		regressionResult |= RunSignupControlsRegression();
+	}
+
+	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
+		regressionResult |= Tests::RunAccountLifecycleRegression();
+		QCoreApplication::exit(regressionResult);
+		return;
+	}
+	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
+		QCoreApplication::exit(regressionResult);
+		return;
+	}
 	startTray();
 
 	_lastActivePrimaryWindow->firstShow();

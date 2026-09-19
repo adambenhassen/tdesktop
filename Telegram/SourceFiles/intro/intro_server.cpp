@@ -7,516 +7,953 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "intro/intro_server.h"
 
-#include "intro/intro_widget.h"
+#include "intro/intro_server_discovery.h"
 #include "intro/intro_username.h"
+#include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
+#include "main/main_domain.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "mtproto/mtproto_server_enrollment.h"
+#include "storage/storage_account.h"
+#include "base/random.h"
+#include "core/application.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
-#include "ui/rp_widget.h"
-#include "ui/ui_utility.h"
+#include "ui/widgets/scroll_area.h"
+#include "ui/wrap/vertical_layout.h"
 #include "window/window_controller.h"
 #include "styles/style_intro.h"
 
+#include <QtCore/QTimer>
 #include <QtGui/QAccessible>
-#include <QtGui/QClipboard>
-#include <QtGui/QGuiApplication>
-#include <QtGui/QPainter>
-#include <QtGui/QFontDatabase>
-#include <QtGui/QFontMetrics>
+#include <QtGui/QColor>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkProxy>
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QHostInfo>
+#include <QtNetwork/QSslError>
 #include <QtWidgets/QTextEdit>
+
+#include <algorithm>
+#include <optional>
+#include <utility>
 
 namespace Intro {
 namespace details {
 namespace {
 
-// Paints the two-row identity display into p at the standard position.
-// Returns true when the rows were drawn; returns false when neither
-// 13px nor 12px fits in the panel's inner width, in which case the
-// caller should show a short fallback message instead.
-[[nodiscard]] bool PaintIdentityRows(
-		QPainter &p,
-		const QString &identity,
-		int panelWidth) {
-	constexpr auto kRow1Len = 8 * 4 + 7; // 39 chars: 8 groups of 4 + 7 dashes
-	const auto textX = 8;
-	const auto innerWidth = panelWidth - textX * 2;
-	const auto row1 = identity.left(kRow1Len) + u"-"_q;
-	const auto row2 = identity.mid(kRow1Len + 1);
+constexpr auto kDiscoveryTimeout = 10 * 1000;
+constexpr auto kMaxDiscoveryBody = 16 * 1024;
+constexpr auto kMaxDiscoveryHeaders = 16 * 1024;
 
-	auto monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	monoFont.setPixelSize(13);
-	const auto fm13 = QFontMetrics(monoFont);
-	const auto adv13 = std::max(
-		fm13.horizontalAdvance(row1),
-		fm13.horizontalAdvance(row2));
-	monoFont.setPixelSize(12);
-	const auto fm12 = QFontMetrics(monoFont);
-	const auto adv12 = std::max(
-		fm12.horizontalAdvance(row1),
-		fm12.horizontalAdvance(row2));
+void ConfigureAddressField(not_null<Ui::InputField*> field) {
+	field->setSubmitSettings(Ui::InputField::SubmitSettings::None);
+	field->setMarkdownReplacesEnabled(false);
+	field->setInstantReplacesEnabled(rpl::single(false));
+	field->rawTextEdit()->setAcceptRichText(false);
+	field->rawTextEdit()->setInputMethodHints(
+		Qt::ImhNoPredictiveText
+		| Qt::ImhNoAutoUppercase);
+	field->rawTextEdit()->setTabChangesFocus(true);
+}
 
-	const auto layout = MTP::ChooseIdentityLayout(innerWidth, adv13, adv12);
-	if (!layout.fits) {
-		return false;
+[[nodiscard]] QString CustomServerEndpoint(const MTP::CustomServer &server) {
+	const auto host = QString::fromStdString(server.ip);
+	return (server.ipv6 ? (u"["_q + host + u"]"_q) : host)
+		+ u":"_q
+		+ QString::number(server.port);
+}
+
+[[nodiscard]] QString AddressWithPort(
+		const QHostAddress &address,
+		int port) {
+	const auto host = address.toString();
+	return (address.protocol() == QAbstractSocket::IPv6Protocol
+		? (u"["_q + host + u"]"_q)
+		: host)
+		+ u":"_q
+		+ QString::number(port);
+}
+
+[[nodiscard]] bool HasBoundServer(Main::Account &account) {
+	const auto &options = account.mtp().dcOptions();
+	return options.hasCustomServer() || options.blocked();
+}
+
+[[nodiscard]] bool DiscoveryHeadersWithinBound(
+		QNetworkReply *reply) {
+	auto size = 0;
+	for (const auto &header : reply->rawHeaderPairs()) {
+		size += header.first.size() + header.second.size() + 4;
+		if (size > kMaxDiscoveryHeaders) {
+			return false;
+		}
 	}
-
-	monoFont.setPixelSize(layout.pixelSize);
-	const auto fm = QFontMetrics(monoFont);
-	p.setFont(monoFont);
-	p.setPen(st::windowFg->c);
-	p.drawText(textX, 8 + fm.ascent(), row1);
-	p.drawText(textX, 28 + fm.ascent(), row2);
 	return true;
 }
 
 } // namespace
 
 ServerWidget::ServerWidget(
-	QWidget *parent,
-	not_null<Main::Account*> account,
-	not_null<Data*> data)
+		QWidget *parent,
+		not_null<Main::Account*> account,
+		not_null<Data*> data)
 : Step(parent, account, data)
-, _address(
-	this,
-	st::introCountry,
-	tr::lng_intro_server_address_ph())
-, _key(
-	this,
-	st::introServerKeyField,
-	Ui::InputField::Mode::MultiLine,
-	tr::lng_intro_server_key_ph()) {
-	// This screen is never reached while the account holds readable local
-	// data from another server. Two invariants protect it:
-	//
-	// 1. The intro is only shown when the mtp blob carries user id 0.
-	//    setMtpAuthorization (main_account.cpp:510) sets _sessionUserId
-	//    before reading any key; startMtp creates the session from it
-	//    alone at :605. An account whose blob still names a user restores
-	//    a session and bypasses the intro entirely.
-	//    Break shape: zeroing the user id inside resetAuthorizationKeys()
-	//    before its write (main_account.cpp:745) would let a kill during
-	//    forcedLogOut() reach this screen with peer ids still cached.
-	//
-	// 2. Storage::Account::reset() zeroes every FileKey and flushes the
-	//    map before handing file removal to crl::async
-	//    (storage_account.cpp:821-824). An interrupted wipe leaves
-	//    orphaned ciphertext and a blob naming user id 0 — not readable
-	//    data — so invariant 1 prevents the intro from being reached.
-	//    Break shape: reordering reset() to delete files before writeMap()
-	//    would leave readable data behind an invalidated map.
-	setTitleText(tr::lng_intro_server_title());
-	setDescriptionText(tr::lng_intro_server_desc());
+, _scroll(this)
+, _localDiscovery(new ServerWidgetDiscovery(this))
+, _deadline(new QTimer(this))
+, _readOnly(readOnly()) {
+	_deadline->setSingleShot(true);
+	connect(_deadline, &QTimer::timeout, this, [=] {
+		discoveryTimeout();
+	});
+
+	setTitleText(_readOnly
+		? tr::lng_intro_server_saved_title()
+		: tr::lng_intro_server_title());
+	setDescriptionText(_readOnly
+		? tr::lng_intro_server_saved_desc()
+		: tr::lng_intro_server_desc());
+
+	_content = _scroll->setOwnedWidget(
+		object_ptr<Ui::VerticalLayout>(_scroll));
+	setupSelection();
+	setupBound();
+	if (!_readOnly) {
+		_savedAddressLabel->hide();
+		_savedAddress->hide();
+		_savedStatus->hide();
+		_savedContinue->hide();
+		_addAccount->hide();
+	} else {
+		_addressLabel->hide();
+		_address->hide();
+		_status->hide();
+		_continue->hide();
+	}
+	descriptionGeometryValue() | rpl::on_next([=](QRect) {
+		if (_content) {
+			layoutContent();
+		}
+	}, lifetime());
+	layoutContent();
+}
+
+bool ServerWidget::readOnly() const {
+	return HasBoundServer(account());
+}
+
+void ServerWidget::setupSelection() {
+	_addressLabel = Ui::CreateChild<Ui::FlatLabel>(
+		_content,
+		tr::lng_intro_server_address_label(),
+		st::introDescription);
+	_address = Ui::CreateChild<Ui::InputField>(
+		_content,
+		st::introCountry,
+		Ui::InputField::Mode::SingleLine,
+		tr::lng_intro_server_address_ph());
+	_status = Ui::CreateChild<Ui::FlatLabel>(
+		_content,
+		QString(),
+		st::introError);
+	_continue = Ui::CreateChild<Ui::RoundButton>(
+		_content,
+		tr::lng_intro_server_continue(),
+		st::introNextButton);
 
 	_address->setAccessibleName(
+		tr::lng_intro_server_address_label(tr::now));
+	_address->setAccessibleDescription(
 		tr::lng_intro_server_address_ph(tr::now));
-	_key->setAccessibleName(
-		tr::lng_intro_server_key_ph(tr::now));
-	_address->setMaxLength(120);
+	ConfigureAddressField(_address);
+	_address->changes() | rpl::on_next([=] {
+		selectionChanged();
+	}, _address->lifetime());
+	_address->submits() | rpl::on_next([=](Qt::KeyboardModifiers) {
+		submitSelection();
+	}, _address->lifetime());
+	_continue->setClickedCallback([=] {
+		submitSelection();
+	});
+	_status->setTextColorOverride(st::boxTextFgError->c);
 
-	const auto onChanged = [=] {
-		hideError();
-		setAccessibleDescription(QString());
-	};
-	_address->changes() | rpl::on_next(onChanged, _address->lifetime());
-	_key->changes() | rpl::on_next(onChanged, _key->lifetime());
+	_content->add(
+		object_ptr<Ui::FlatLabel>::fromRaw(_addressLabel),
+		st::introServerAddressLabelMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::InputField>::fromRaw(_address),
+		st::introServerAddressFieldMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::FlatLabel>::fromRaw(_status),
+		st::introServerAddressStatusMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::RoundButton>::fromRaw(_continue),
+		st::introServerAddressButtonMargins,
+		style::al_justify);
+	_status->hide();
+	QWidget::setTabOrder(_address, _continue);
 
-	if (!getData()->serverAddress.isEmpty()) {
-		_address->setText(getData()->serverAddress);
+	if (!getData()->serverSelection.isEmpty()) {
+		_suppressChanges = true;
+		_address->setText(getData()->serverSelection);
+		_suppressChanges = false;
 	}
-	if (!getData()->serverPem.isEmpty()) {
-		_key->setText(getData()->serverPem);
+}
+
+void ServerWidget::setupBound() {
+	const auto blocked = account().mtp().dcOptions().blocked();
+	const auto authorized = account().sessionExists();
+	const auto custom = account().mtp().dcOptions().customServer();
+	const auto endpoint = custom.serverSelection.empty()
+		? (custom.empty() ? QString() : CustomServerEndpoint(custom))
+		: QString::fromStdString(custom.serverSelection);
+	_savedAddressLabel = Ui::CreateChild<Ui::FlatLabel>(
+		_content,
+		tr::lng_intro_server_address_label(),
+		st::introDescription);
+	_savedAddress = Ui::CreateChild<Ui::FlatLabel>(
+		_content,
+		endpoint,
+		st::introDescription);
+	_savedStatus = Ui::CreateChild<Ui::FlatLabel>(
+		_content,
+		QString(),
+		st::introError);
+	_savedContinue = Ui::CreateChild<Ui::RoundButton>(
+		_content,
+		tr::lng_intro_server_continue(),
+		st::introNextButton);
+	_addAccount = Ui::CreateChild<Ui::LinkButton>(
+		_content,
+		tr::lng_intro_server_add_account(tr::now));
+
+	_savedAddress->setSelectable(true);
+	_savedAddress->setLayoutDirection(Qt::LeftToRight);
+	_savedAddress->setBreakEverywhere(true);
+	_savedAddress->setFocusPolicy(Qt::TabFocus);
+	_savedAddress->setContextCopyText(
+		tr::lng_context_copy_selected(tr::now));
+	_savedAddress->setAccessibleName(
+		tr::lng_intro_server_address_label(tr::now));
+	_savedStatus->setTextColorOverride(st::boxTextFgError->c);
+	_savedContinue->setClickedCallback([=] {
+		submit();
+	});
+	_addAccount->setClickedCallback([=] {
+		Core::App().domain().addActivated(account().mtp().environment());
+	});
+
+	_content->add(
+		object_ptr<Ui::FlatLabel>::fromRaw(_savedAddressLabel),
+		st::introServerSavedAddressLabelMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::FlatLabel>::fromRaw(_savedAddress),
+		st::introServerSavedAddressMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::FlatLabel>::fromRaw(_savedStatus),
+		st::introServerSavedStatusMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::RoundButton>::fromRaw(_savedContinue),
+		st::introServerSavedContinueMargins,
+		style::al_justify);
+	_content->add(
+		object_ptr<Ui::LinkButton>::fromRaw(_addAccount),
+		st::introServerAddAccountMargins,
+		style::al_left);
+	_savedStatus->hide();
+
+	if (blocked) {
+		_savedStatus->setText(
+			tr::lng_intro_server_saved_settings_unreadable(tr::now));
+		_savedStatus->show();
+		_savedContinue->setDisabled(true);
+		_savedAddressLabel->hide();
+		_savedAddress->hide();
+		_savedContinue->hide();
+	} else if (authorized) {
+		_savedContinue->hide();
 	}
+	if (!endpoint.isEmpty()) {
+		QWidget::setTabOrder(_savedAddress, (!blocked && !authorized)
+			? static_cast<QWidget*>(_savedContinue)
+			: static_cast<QWidget*>(_addAccount));
+	}
+	if (!blocked && !authorized) {
+		QWidget::setTabOrder(_savedContinue, _addAccount);
+	}
+}
+
+void ServerWidget::switchToBound() {
+	_readOnly = true;
+	setTitleText(tr::lng_intro_server_saved_title());
+	setDescriptionText(tr::lng_intro_server_saved_desc());
+	_addressLabel->hide();
+	_address->hide();
+	_status->hide();
+	_continue->hide();
+	_savedAddressLabel->show();
+	_savedAddress->show();
+	_savedContinue->show();
+	_addAccount->show();
+	const auto custom = account().mtp().dcOptions().customServer();
+	_savedAddress->setText(custom.serverSelection.empty()
+		? CustomServerEndpoint(custom)
+		: QString::fromStdString(custom.serverSelection));
+	if (account().mtp().dcOptions().blocked()) {
+		_savedStatus->setText(
+			tr::lng_intro_server_saved_settings_unreadable(tr::now));
+		_savedStatus->show();
+		_savedContinue->setDisabled(true);
+	}
+	layoutContent();
 }
 
 int ServerWidget::nextButtonTop() const {
 	return contentTop() + st::introServerNextTop;
 }
 
-int ServerWidget::errorTop() const {
-	return contentTop() + st::introServerErrorTop;
-}
-
 void ServerWidget::setInnerFocus() {
-	_address->setFocusFast();
+	if (_readOnly) {
+		if (account().mtp().dcOptions().blocked()
+			|| account().sessionExists()) {
+			_addAccount->setFocus(Qt::OtherFocusReason);
+		} else {
+			_savedContinue->setFocus(Qt::OtherFocusReason);
+		}
+	} else {
+		_address->setFocusFast();
+	}
 }
 
 void ServerWidget::activate() {
 	Step::activate();
-	_address->show();
-	_key->show();
-	_address->setFocusFast();
+	_scroll->show();
+	if (!_readOnly && readOnly()) {
+		switchToBound();
+	}
+	setInnerFocus();
+}
+
+void ServerWidget::submit() {
+	if (!_readOnly) {
+		submitSelection();
+		return;
+	}
+	if (account().mtp().dcOptions().blocked()) {
+		return;
+	}
+	if (account().sessionExists()) {
+		return;
+	}
+	// A freshly restarted account is intentionally paused until its stored
+	// binding is selected again. The binding was durably committed before
+	// this point, so resuming here cannot send an unbound request.
+	account().mtp().resume();
+	getData()->serverEndpoint = CustomServerEndpoint(
+		account().mtp().dcOptions().customServer());
+	goNext<UsernameWidget>();
+}
+
+void ServerWidget::cancelled() {
+	if (_connecting) {
+		cancelDiscovery();
+	}
+	if (_readOnly) {
+		return;
+	}
+	account().mtp().stopForServerEnrollment();
+	getData()->phone.clear();
+	getData()->phoneHash.clear();
+	getData()->pwdState = {};
+	getData()->usernameCode.drop();
+	getData()->signupName.clear();
+	getData()->usernameError.clear();
+	getData()->signupNameError.clear();
+	getData()->email.clear();
+	getData()->emailPatternSetup.clear();
+	getData()->emailPatternLogin.clear();
+	getData()->emailStatus = EmailStatus::None;
+	getData()->termsLock = Window::TermsLock();
 }
 
 void ServerWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
-	_address->moveToLeft(contentLeft(), contentTop() + 100);
-	_key->moveToLeft(contentLeft(), contentTop() + 167);
+	layoutContent();
 }
 
-void ServerWidget::submit() {
-	const auto addressText = _address->getLastText();
-	const auto keyText = _key->getLastText();
+void ServerWidget::layoutContent() {
+	const auto scrollWidth = std::min(st::introStepWidth, width());
+	const auto scrollLeft = (width() - scrollWidth) / 2;
+	const auto scrollTop = std::max(
+		st::introServerScrollTop,
+		descriptionBottom() - contentTop() + st::introServerScrollGap);
+	const auto scrollHeight = std::max(
+		0,
+		height() - contentTop() - scrollTop - st::introServerScrollBottom);
+	_scroll->setGeometry(
+		scrollLeft,
+		contentTop() + scrollTop,
+		scrollWidth,
+		scrollHeight);
+	_content->resizeToWidth(scrollWidth);
+}
 
-	const auto endpointCheck = MTP::CheckServerEndpoint(addressText);
-	if (!endpointCheck) {
-		QString msg;
-		// Common options disable switch warnings; keep this status-to-copy
-		// map exhaustive as the enum grows.
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic error "-Wswitch-enum"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic error "-Wswitch-enum"
-#endif
-		switch (endpointCheck.status) {
-		case MTP::ServerEndpointStatus::Empty:
-			msg = tr::lng_intro_server_address_empty(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::NoPort:
-			msg = tr::lng_intro_server_address_no_port(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::BadPort:
-			msg = tr::lng_intro_server_address_bad_port(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::EmptyHost:
-			msg = tr::lng_intro_server_address_empty_host(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::BadHost:
-			msg = tr::lng_intro_server_address_bad_host(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::HostTooLong:
-			msg = tr::lng_intro_server_address_too_long(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::UnbracketedIPv6:
-			msg = tr::lng_intro_server_address_ipv6(tr::now);
-			break;
-		case MTP::ServerEndpointStatus::Valid:
-			// No default branch on purpose: adding a status must fail
-			// the build until its message exists. This branch is not
-			// reachable: !endpointCheck means the status is not Valid.
-			msg = tr::lng_intro_server_address_invalid(tr::now);
-			break;
-		}
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
+QWidget *ServerWidget::firstTabWidget() const {
+	if (_readOnly && account().mtp().dcOptions().blocked()) {
+		return _addAccount;
+	}
+	return _readOnly
+		? static_cast<QWidget*>(_savedAddress)
+		: static_cast<QWidget*>(_address);
+}
+
+QWidget *ServerWidget::lastTabWidget() const {
+	return _readOnly
+		? static_cast<QWidget*>(_addAccount)
+		: static_cast<QWidget*>(_continue);
+}
+
+QWidget *ServerWidget::nextButtonFocusWidget() const {
+	if (!_readOnly) {
+		return _continue;
+	} else if (account().mtp().dcOptions().blocked()
+		|| account().sessionExists()) {
+		return _addAccount;
+	} else {
+		return _savedContinue;
+	}
+}
+
+rpl::producer<QString> ServerWidget::nextButtonText() const {
+	return rpl::single(QString());
+}
+
+void ServerWidget::selectionChanged() {
+	if (_suppressChanges || !_address || _connecting) {
+		return;
+	}
+	getData()->serverSelection = _address->getLastText();
+	_address->hideError();
+	clearStatus();
+	_continue->setText(tr::lng_intro_server_continue());
+}
+
+QString ServerWidget::selectionError(MTP::ServerSelectionStatus status) const {
+	switch (status) {
+	case MTP::ServerSelectionStatus::Valid:
+		return {};
+	case MTP::ServerSelectionStatus::Empty:
+		return tr::lng_intro_server_address_empty(tr::now);
+	case MTP::ServerSelectionStatus::NoPort:
+		return tr::lng_intro_server_address_no_port(tr::now);
+	case MTP::ServerSelectionStatus::BadPort:
+		return tr::lng_intro_server_address_bad_port(tr::now);
+	case MTP::ServerSelectionStatus::EmptyHost:
+		return tr::lng_intro_server_address_empty_host(tr::now);
+	case MTP::ServerSelectionStatus::BadHost:
+		return tr::lng_intro_server_address_invalid(tr::now);
+	case MTP::ServerSelectionStatus::HostTooLong:
+		return tr::lng_intro_server_address_too_long(tr::now);
+	case MTP::ServerSelectionStatus::UnbracketedIPv6:
+		return tr::lng_intro_server_address_ipv6(tr::now);
+	case MTP::ServerSelectionStatus::InvalidSpecialAddress:
+		return tr::lng_intro_server_address_invalid(tr::now);
+	}
+	Unexpected("Unhandled server selection status.");
+}
+
+void ServerWidget::submitSelection() {
+	if (_readOnly || _connecting || !_address) {
+		return;
+	}
+	const auto checked = MTP::CheckServerSelection(_address->getLastText());
+	if (!checked) {
 		_address->showError();
-		showError(rpl::single(msg));
-		setAccessibleDescription(msg);
+		showStatus(selectionError(checked.status), true);
+		_address->setFocusFast();
 		return;
 	}
-
-	const auto keyCheck = MTP::CheckServerKey(keyText);
-	if (!keyCheck) {
-		QString msg;
-		// The repository's common warning options carry -Wno-switch, which
-		// would let a future ServerKeyStatus compile through silently. Promote
-		// the unhandled-enum diagnostic to an error for this mapping alone so
-		// the "no default branch" guarantee below is enforced by the compiler,
-		// not by review. Only that diagnostic can fire here; every other case
-		// has a branch. The pragma is compiler-specific: -Wswitch on GCC and
-		// Clang, C4062 on MSVC (the GCC form is an unknown-pragma C4068
-		// there, which the Windows build rejects). C4062 is off by default,
-		// so enable it at level 4 before promoting it to an error.
-#if defined __GNUC__ || defined __clang__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic error "-Wswitch"
-#elif defined _MSC_VER
-#pragma warning(push)
-#pragma warning(4:4062)
-#pragma warning(error:4062)
-#endif // __GNUC__ || __clang__ || _MSC_VER
-		switch (keyCheck.status) {
-		case MTP::ServerKeyStatus::Empty:
-			msg = tr::lng_intro_server_key_empty(tr::now);
-			break;
-		case MTP::ServerKeyStatus::PrivateKey:
-			_key->setText(QString());
-			_key->rawTextEdit()->document()->clearUndoRedoStacks();
-			msg = tr::lng_intro_server_key_private(tr::now);
-			break;
-		case MTP::ServerKeyStatus::NotRsaKey:
-			msg = tr::lng_intro_server_key_not_rsa(tr::now);
-			break;
-		case MTP::ServerKeyStatus::BadModulusSize:
-			msg = tr::lng_intro_server_key_bits(
-				tr::now,
-				lt_bits,
-				QString::number(keyCheck.modulusBits));
-			break;
-		case MTP::ServerKeyStatus::InternalError:
-			msg = tr::lng_intro_server_key_internal(tr::now);
-			break;
-		case MTP::ServerKeyStatus::Unreadable:
-			msg = tr::lng_intro_server_key_unreadable(tr::now);
-			break;
-		case MTP::ServerKeyStatus::Valid:
-			// No default branch on purpose: adding a status must fail
-			// the build until its message exists. This branch is not
-			// reachable: !keyCheck means the status is not Valid.
-			msg = tr::lng_intro_server_key_invalid(tr::now);
-			break;
+	auto acquisition = _localDiscovery->acquireAttempt();
+	if (!acquisition.token) {
+		const auto error = tr::lng_intro_server_connect_failed(tr::now);
+		_address->showError();
+		_address->rawTextEdit()->setReadOnly(acquisition.fieldEditable
+			? false
+			: true);
+		_continue->setDisabled(!acquisition.retryable);
+		if (acquisition.retryable) {
+			_continue->setText(tr::lng_intro_server_try_again());
 		}
-#if defined __GNUC__ || defined __clang__
-#pragma GCC diagnostic pop
-#elif defined _MSC_VER
-#pragma warning(pop)
-#endif // __GNUC__ || __clang__ || _MSC_VER
-		_key->showError();
-		showError(rpl::single(msg));
-		setAccessibleDescription(msg);
+		_address->setAccessibleDescription(error);
+		showStatus(error, true);
+		_address->setFocusFast();
+		_scroll->scrollToWidget(_continue);
 		return;
 	}
-
-	getData()->serverAddress = addressText;
-	getData()->serverPem = keyText;
-	goNext<ServerKeyWidget>();
+	_selection = checked;
+	getData()->serverSelection = _selection.normalizedSelection;
+	_discoveryAttempt = std::move(acquisition.token);
+	_connecting = true;
+	++_attempt;
+	_address->rawTextEdit()->setReadOnly(true);
+	_continue->setDisabled(true);
+	_continue->setText(tr::lng_intro_server_connecting());
+	_address->setAccessibleDescription(
+		tr::lng_intro_server_connecting(tr::now));
+	showStatus(tr::lng_intro_server_connecting(tr::now), false);
+	_deadline->start(kDiscoveryTimeout);
+	if (_selection.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
+		beginPublicDiscovery();
+	} else {
+		beginLocalDiscovery();
+	}
 }
 
-ServerKeyWidget::ServerKeyWidget(
-	QWidget *parent,
-	not_null<Main::Account*> account,
-	not_null<Data*> data)
-: Step(parent, account, data)
-, _panel(this)
-, _compare(
-	_panel,
-	st::introServerCompareField,
-	tr::lng_intro_server_check_ph())
-, _copy(
-	_panel,
-	tr::lng_intro_server_check_copy(tr::now)) {
-	setTitleText(tr::lng_intro_server_check_title());
-	setDescriptionText(tr::lng_intro_server_check_desc());
-
-	_endpoint = MTP::CheckServerEndpoint(getData()->serverAddress);
-	_keyCheck = MTP::CheckServerKey(getData()->serverPem);
-
-	_panelA11yBase = [&] {
-		if (!_keyCheck.valid()) {
-			return tr::lng_intro_server_check_title(tr::now);
+void ServerWidget::beginPublicDiscovery() {
+	if (!_network) {
+		_network = new QNetworkAccessManager(this);
+		_network->setProxy(QNetworkProxy::NoProxy);
+	}
+	_publicResponse.clear();
+	const auto url = QUrl(MTP::PublicDiscoveryUrl(_selection));
+	QNetworkRequest request(url);
+	MTP::ConfigurePublicDiscoveryRequest(request);
+	_reply = _network->get(request);
+	const auto reply = _reply;
+	reply->setReadBufferSize(kMaxDiscoveryBody);
+	connect(reply, &QNetworkReply::readyRead, this, [=] {
+		if (!_connecting || _reply != reply) {
+			return;
 		}
-		const auto identity = _keyCheck.identity;
-		const auto groupsString = [&] {
-			auto result = QString();
-			auto charInGroup = 0;
-			for (const auto ch : identity) {
-				if (ch == QChar::fromLatin1('-')) {
-					result += u", "_q;
-					charInGroup = 0;
-				} else {
-					if (charInGroup > 0) {
-						result += QChar::fromLatin1(' ');
-					}
-					result += ch;
-					++charInGroup;
-				}
-			}
-			return result;
-		}();
-		return tr::lng_intro_server_check_value_a11y(
-			tr::now,
-			lt_groups,
-			groupsString);
-	}();
-	_panel->setAccessibleName(_panelA11yBase);
-
-	_compare->setAccessibleName(
-		tr::lng_intro_server_check_ph(tr::now));
-
-	_panel->paintRequest(
-	) | rpl::on_next([=](QRect clip) {
-		auto p = QPainter(_panel.data());
-		paintPanel(p);
-	}, _panel->lifetime());
-
-	_panel->setLayoutDirection(Qt::LeftToRight);
-	_panel->setFocusPolicy(Qt::TabFocus);
-	_panel->setContextMenuPolicy(Qt::CustomContextMenu);
-	QObject::connect(
-		_panel.data(),
-		&QWidget::customContextMenuRequested,
-		[=](const QPoint &) {
-			if (_keyCheck.valid()) {
-				QGuiApplication::clipboard()->setText(_keyCheck.identity);
-				getData()->controller->showToast(
-					tr::lng_text_copied(tr::now));
-			}
-		});
-
-	_compare->changes() | rpl::on_next([=] {
-		updateVerdict();
-	}, _compare->lifetime());
-
-	_copy->setClickedCallback([=] {
-		if (_keyCheck.valid()) {
-			QGuiApplication::clipboard()->setText(_keyCheck.identity);
-			getData()->controller->showToast(
-				tr::lng_text_copied(tr::now));
+		if (!DiscoveryHeadersWithinBound(reply)) {
+			discoveryFailed(false);
+			return;
 		}
+		const auto contentLength = reply->header(
+			QNetworkRequest::ContentLengthHeader).toLongLong();
+		if (contentLength > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+			return;
+		}
+		_publicResponse += reply->readAll();
+		if (_publicResponse.size() > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+		}
+	});
+	connect(reply, &QNetworkReply::sslErrors, this, [=](const auto &) {
+		if (_connecting && _reply == reply) {
+			discoveryFailed(false);
+		}
+	});
+	connect(reply, &QNetworkReply::redirected, this, [=](const QUrl &) {
+		if (_connecting && _reply == reply) {
+			discoveryFailed(false);
+		}
+	});
+	connect(reply, &QNetworkReply::finished, this, [=] {
+		if (!_connecting || _reply != reply) {
+			return;
+		}
+		if (reply->error() != QNetworkReply::NoError) {
+			discoveryFailed(true);
+			return;
+		}
+		if (!DiscoveryHeadersWithinBound(reply)) {
+			discoveryFailed(false);
+			return;
+		}
+		const auto status = reply->attribute(
+			QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		const auto contentType = reply->header(
+			QNetworkRequest::ContentTypeHeader).toString()
+			.section(QChar::fromLatin1(';'), 0, 0)
+			.trimmed();
+		_publicResponse += reply->readAll();
+		if (status != 200
+			|| contentType.compare(
+				u"application/json"_q,
+				Qt::CaseInsensitive) != 0
+			|| !reply->rawHeader("Content-Encoding").isEmpty()
+			|| _publicResponse.size() > kMaxDiscoveryBody) {
+			discoveryFailed(false);
+			return;
+		}
+		discoveryFinished(MTP::ParsePublicDiscoveryResponse(
+			_selection,
+			_publicResponse));
 	});
 }
 
-int ServerKeyWidget::nextButtonTop() const {
-	return contentTop() + st::introServerNextTop;
-}
-
-void ServerKeyWidget::activate() {
-	Step::activate();
-	_panel->show();
-	_compare->setFocusFast();
-}
-
-void ServerKeyWidget::resizeEvent(QResizeEvent *e) {
-	Step::resizeEvent(e);
-
-	const auto panelW = st::introServerPanelWidth;
-	const auto panelX = (width() - panelW) / 2;
-	const auto panelY = contentTop() + 120;
-
-	const auto panelH = 182;
-	_panel->setGeometry(panelX, panelY, panelW, panelH);
-
-	const auto compareX = (panelW - st::introServerCompareField.width) / 2;
-	_compare->moveToLeft(compareX, 65);
-
-	const auto copyWidth = _copy->width();
-	_copy->moveToLeft(panelW - copyWidth - 8, 152);
-}
-
-void ServerKeyWidget::paintEvent(QPaintEvent *e) {
-	Step::paintEvent(e);
-}
-
-void ServerKeyWidget::paintPanel(QPainter &p) {
-	const auto r = QRect(0, 0, _panel->width(), _panel->height());
-
-	p.setRenderHint(QPainter::Antialiasing);
-
-	p.setPen(Qt::NoPen);
-	p.setBrush(st::introServerPanelBg->b);
-	const auto radius = st::introServerPanelRadius;
-	p.drawRoundedRect(r, radius, radius);
-
-	if (!_keyCheck.valid()) {
+void ServerWidget::beginLocalDiscovery() {
+	_localNonce.resize(32);
+	base::RandomFill(_localNonce.data(), _localNonce.size());
+	const auto address = QHostAddress(_selection.host);
+	if (!address.isNull()) {
+		startLocalDiscovery({ address });
 		return;
 	}
-
-	const auto identity = _keyCheck.identity;
-	if (!PaintIdentityRows(p, identity, _panel->width())) {
-		p.setPen(st::windowSubTextFg->c);
-		p.setFont(st::normalFont);
-		const auto textX = 8;
-		const auto innerW = _panel->width() - textX * 2;
-		p.drawText(
-			QRect(textX, 8, innerW, 50),
-			tr::lng_intro_server_identity_too_wide(tr::now),
-			QTextOption(Qt::AlignLeft | Qt::AlignTop));
-	}
-
-	p.setPen(st::shadowFg->c);
-	p.drawLine(8, 58, _panel->width() - 8, 58);
-
-	const auto verdictY = 152;
-	const auto copyOffset = _copy
-		? (_panel->width() - _copy->width() - 8)
-		: _panel->width();
-	const auto verdictMaxW = copyOffset - 12;
-	const auto verdictRect = QRect(8, verdictY, verdictMaxW, 30);
-	const auto textOpt = QTextOption(Qt::AlignLeft | Qt::AlignTop);
-	switch (_compareStatus) {
-	case MTP::KeyIdCompare::None:
-		p.setPen(st::windowSubTextFg->c);
-		p.drawText(verdictRect,
-			tr::lng_intro_server_check_none(tr::now),
-			textOpt);
-		break;
-	case MTP::KeyIdCompare::Match:
-		p.setPen(st::activeLineFg->c);
-		p.drawText(verdictRect,
-			tr::lng_intro_server_check_match(tr::now),
-			textOpt);
-		break;
-	case MTP::KeyIdCompare::Mismatch:
-		p.setPen(st::boxTextFgError->c);
-		p.drawText(verdictRect,
-			tr::lng_intro_server_check_mismatch(tr::now),
-			textOpt);
-		break;
-	case MTP::KeyIdCompare::Unreadable:
-		p.setPen(st::windowSubTextFg->c);
-		p.drawText(verdictRect,
-			tr::lng_intro_server_check_unreadable(tr::now),
-			textOpt);
-		break;
+	const auto attempt = _attempt;
+	_hostLookupId = QHostInfo::lookupHost(
+		_selection.host,
+		this,
+		[=](const QHostInfo &info) {
+			if (!_connecting || _attempt != attempt) {
+				return;
+			}
+			_hostLookupId = -1;
+			if (info.error() != QHostInfo::NoError) {
+				discoveryFailed(true);
+				return;
+			}
+			if (info.addresses().isEmpty()) {
+				discoveryFailed(true);
+				return;
+			}
+			_deadline->start(kDiscoveryTimeout);
+			startLocalDiscovery(info.addresses());
+		});
+	if (_hostLookupId < 0) {
+		discoveryFailed(true);
 	}
 }
 
-void ServerKeyWidget::updateVerdict() {
-	hideError();
-	setAccessibleDescription(QString());
-	const auto typed = MTP::ExtractKeyId(_compare->getLastText());
-	_compareStatus = MTP::CompareKeyId(typed, _keyCheck.identity);
-	_panel->update();
-	const auto verdictText = [&]() -> QString {
-		switch (_compareStatus) {
-		case MTP::KeyIdCompare::None: return tr::lng_intro_server_check_none(tr::now);
-		case MTP::KeyIdCompare::Match: return tr::lng_intro_server_check_match(tr::now);
-		case MTP::KeyIdCompare::Mismatch: return tr::lng_intro_server_check_mismatch(tr::now);
-		case MTP::KeyIdCompare::Unreadable: return tr::lng_intro_server_check_unreadable(tr::now);
+void ServerWidget::startLocalDiscovery(
+		const QList<QHostAddress> &addresses) {
+	_localDiscovery->start(
+		_selection,
+		_localNonce,
+		addresses,
+		{
+			.finished = [=](MTP::ServerDiscoveryResult result) {
+				if (_connecting) {
+					discoveryFinished(std::move(result));
+				}
+			},
+			.failed = [=](bool connectionFailure) {
+				if (_connecting) {
+					discoveryFailed(connectionFailure);
+				}
+			},
+			.candidateStarted = [=] {
+				if (_connecting) {
+					_deadline->start(kDiscoveryTimeout);
+				}
+			},
+		});
+}
+
+void ServerWidget::discoveryTimeout() {
+	if (!_connecting) {
+		return;
+	}
+	if (_selection.policy == MTP::ServerDiscoveryPolicy::LocalDirect
+		&& _localDiscovery->running()) {
+		const auto advanced = _localDiscovery->timeout();
+		if (!advanced && _connecting) {
+			discoveryFailed(true);
 		}
-		return {};
-	}();
-	_panel->setAccessibleName(
-		verdictText.isEmpty()
-			? _panelA11yBase
-			: _panelA11yBase + u". "_q + verdictText);
-	QAccessibleEvent nameEvent(_panel.data(), QAccessible::NameChanged);
-	QAccessible::updateAccessibility(&nameEvent);
-}
-
-void ServerKeyWidget::commitAndAdvance() {
-	if (!_endpoint || !_keyCheck) {
 		return;
 	}
-	const auto key = std::make_shared<MTP::details::RSAPublicKey>(
-		_keyCheck.key);
+	discoveryFailed(true);
+}
+
+void ServerWidget::discoveryFinished(MTP::ServerDiscoveryResult result) {
+	if (!_connecting) {
+		return;
+	}
+	if (!result) {
+		discoveryFailed(false);
+		return;
+	}
+	if (_reply) {
+		const auto reply = _reply;
+		_reply = nullptr;
+		reply->deleteLater();
+	}
+	if (result.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
+		resolvePublicEndpoint(std::move(result));
+	} else {
+		_deadline->stop();
+		commitBinding(std::move(result));
+	}
+}
+
+void ServerWidget::resolvePublicEndpoint(
+		MTP::ServerDiscoveryResult result) {
+	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
+	if (!MTP::IsPublicDiscoveryEndpoint(endpoint)) {
+		discoveryFailed(false);
+		return;
+	}
+	auto address = QHostAddress();
+	if (address.setAddress(endpoint.host)) {
+		if (address.protocol() != QAbstractSocket::IPv4Protocol
+			&& address.protocol() != QAbstractSocket::IPv6Protocol) {
+			discoveryFailed(false);
+			return;
+		}
+		if (!MTP::IsPublicAddress(address)) {
+			discoveryFailed(false);
+			return;
+		}
+		result.resolvedAddress = address.toString();
+		commitBinding(std::move(result));
+		return;
+	}
+
+	_deadline->start(kDiscoveryTimeout);
+	const auto attempt = _attempt;
+	_hostLookupId = QHostInfo::lookupHost(
+		endpoint.host,
+		this,
+		[=](const QHostInfo &info) {
+			if (!_connecting || _attempt != attempt) {
+				return;
+			}
+			_hostLookupId = -1;
+			publicEndpointResolved(result, info);
+		});
+	if (_hostLookupId < 0) {
+		discoveryFailed(true);
+	}
+}
+
+void ServerWidget::publicEndpointResolved(
+		MTP::ServerDiscoveryResult result,
+		const QHostInfo &info) {
+	if (!_connecting) {
+		return;
+	}
+	if (info.error() != QHostInfo::NoError) {
+		discoveryFailed(true);
+		return;
+	}
+	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
+	if (!MTP::IsPublicDiscoveryEndpoint(endpoint)
+		|| result.policy != MTP::ServerDiscoveryPolicy::PublicHttps) {
+		discoveryFailed(false);
+		return;
+	}
+	for (const auto &address : info.addresses()) {
+		if (address.protocol() != QAbstractSocket::IPv4Protocol
+			&& address.protocol() != QAbstractSocket::IPv6Protocol) {
+			continue;
+		}
+		if (MTP::IsPublicAddress(address)) {
+			result.resolvedAddress = address.toString();
+			commitBinding(std::move(result));
+			return;
+		}
+	}
+	discoveryFailed(false);
+}
+
+void ServerWidget::discoveryFailed(bool connectionFailure) {
+	if (!_connecting) {
+		return;
+	}
+	_connecting = false;
+	_localDiscovery->cancel();
+	_discoveryAttempt.reset();
+	++_attempt;
+	_deadline->stop();
+	if (_hostLookupId >= 0) {
+		QHostInfo::abortHostLookup(_hostLookupId);
+		_hostLookupId = -1;
+	}
+	if (_reply) {
+		const auto reply = _reply;
+		_reply = nullptr;
+		disconnect(reply, nullptr, this, nullptr);
+		reply->abort();
+		reply->deleteLater();
+	}
+	_address->rawTextEdit()->setReadOnly(false);
+	_continue->setDisabled(false);
+	_continue->setText(tr::lng_intro_server_try_again());
+	_address->setAccessibleDescription(connectionFailure
+		? tr::lng_intro_server_connect_failed(tr::now)
+		: tr::lng_intro_server_unsupported(tr::now));
+	showStatus(
+		connectionFailure
+			? tr::lng_intro_server_connect_failed(tr::now)
+			: tr::lng_intro_server_unsupported(tr::now),
+		true);
+	_address->setFocusFast();
+	_scroll->scrollToWidget(_continue);
+}
+
+void ServerWidget::cancelDiscovery() {
+	if (!_connecting) {
+		return;
+	}
+	_connecting = false;
+	_localDiscovery->cancel();
+	_discoveryAttempt.reset();
+	++_attempt;
+	_deadline->stop();
+	if (_hostLookupId >= 0) {
+		QHostInfo::abortHostLookup(_hostLookupId);
+		_hostLookupId = -1;
+	}
+	if (_reply) {
+		const auto reply = _reply;
+		_reply = nullptr;
+		disconnect(reply, nullptr, this, nullptr);
+		reply->abort();
+		reply->deleteLater();
+	}
+	_address->rawTextEdit()->setReadOnly(false);
+	_continue->setDisabled(false);
+	_continue->setText(tr::lng_intro_server_continue());
+	_address->hideError();
+	clearStatus();
+}
+
+void ServerWidget::showStatus(const QString &text, bool error) {
+	_status->setTextColorOverride(error
+		? std::optional<QColor>(st::boxTextFgError->c)
+		: std::optional<QColor>(st::windowSubTextFg->c));
+	_status->setText(text);
+	_status->show();
+	setAccessibleDescription(text);
+	announceStatus();
+}
+
+void ServerWidget::clearStatus() {
+	_status->setText(QString());
+	_status->hide();
+	setAccessibleDescription(QString());
+	_address->setAccessibleDescription(
+		tr::lng_intro_server_address_ph(tr::now));
+}
+
+void ServerWidget::announceStatus() {
+	auto event = QAccessibleEvent(this, QAccessible::Alert);
+	QAccessible::updateAccessibility(&event);
+}
+
+void ServerWidget::commitBinding(
+		const MTP::ServerDiscoveryResult &result) {
+	if (result.policy != MTP::ServerDiscoveryPolicy::PublicHttps
+		&& result.policy != MTP::ServerDiscoveryPolicy::LocalDirect) {
+		discoveryFailed(false);
+		return;
+	}
+	const auto expectedOrigin = (result.policy
+		== MTP::ServerDiscoveryPolicy::PublicHttps)
+		? MTP::PublicDiscoveryUrl(_selection)
+		: (u"local:"_q + _selection.normalizedSelection);
+	if (result.origin != expectedOrigin || result.dcId <= 0) {
+		discoveryFailed(false);
+		return;
+	}
+	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
+	const auto endpointAllowed = (result.policy
+		== MTP::ServerDiscoveryPolicy::PublicHttps)
+		? MTP::IsPublicDiscoveryEndpoint(endpoint)
+		: (endpoint && endpoint.policy == result.policy);
+	if (!endpointAllowed
+		|| !result.key.valid()) {
+		discoveryFailed(false);
+		return;
+	}
+	const auto connectionHost = result.resolvedAddress.isEmpty()
+		? endpoint.host
+		: result.resolvedAddress;
+	auto connectionAddress = QHostAddress();
+	const auto connectionIsLiteral = connectionAddress.setAddress(
+		connectionHost);
+	const auto connectionEndpoint = MTP::CheckServerSelection(
+		connectionIsLiteral
+			? AddressWithPort(connectionAddress, endpoint.operationalPort)
+			: connectionHost + u":"_q
+				+ QString::number(endpoint.operationalPort));
+	const auto connectionSafe = (result.policy
+		== MTP::ServerDiscoveryPolicy::PublicHttps)
+		? (connectionIsLiteral && MTP::IsPublicAddress(connectionAddress))
+		: (connectionEndpoint
+			&& connectionEndpoint.policy
+				== MTP::ServerDiscoveryPolicy::LocalDirect);
+	if (!connectionSafe) {
+		discoveryFailed(false);
+		return;
+	}
+	_deadline->stop();
+	if (account().sessionExists()
+		|| account().mtp().dcOptions().hasCustomServer()) {
+		// A concurrent authorization or binding won the race. The existing
+		// account remains immutable and this candidate is discarded.
+		discoveryFailed(false);
+		return;
+	}
+	const auto key = std::make_shared<MTP::details::RSAPublicKey>(result.key);
 	const auto server = MTP::CustomServer{
-		.dcId = 2,
-		.ip = _endpoint.host,
-		.port = _endpoint.port,
-		.ipv6 = _endpoint.ipv6,
+		.dcId = result.dcId,
+		.ip = connectionEndpoint.host.toStdString(),
+		.port = endpoint.operationalPort,
+		.ipv6 = connectionEndpoint.ipv6,
 		.key = key,
+		.serverSelection = _selection.normalizedSelection.toStdString(),
+		.discoveryPolicy = result.policy,
+		.discoveryOrigin = result.origin.toStdString(),
 	};
-	if (!account().mtp().dcOptions().setCustomServer(server)) {
-		const auto setFailedMsg = tr::lng_intro_server_set_failed(tr::now);
-		showError(rpl::single(setFailedMsg));
-		setAccessibleDescription(setFailedMsg);
+	const auto previousOptions = account().mtp().dcOptions().serialize();
+	const auto previousWasBlocked = account().mtp().dcOptions().blocked();
+	if (!MTP::CommitServerEnrollment(
+		[&] {
+			return account().mtp().dcOptions().setCustomServer(server);
+		},
+		[&] {
+			return account().local().writeMtpConfig(true);
+		},
+		[&] {
+			account().mtp().resume();
+		},
+		[&] {
+			if (previousWasBlocked) {
+				account().mtp().dcOptions().constructBlocked();
+			} else if (!account().mtp().dcOptions().constructFromSerialized(
+				previousOptions)) {
+				account().mtp().dcOptions().constructBlocked();
+			}
+		})) {
+		_connecting = false;
+		_discoveryAttempt.reset();
+		++_attempt;
+		_deadline->stop();
+		_readOnly = false;
+		_addressLabel->show();
+		_address->show();
+		_status->show();
+		_continue->show();
+		_address->rawTextEdit()->setReadOnly(false);
+		_continue->setDisabled(false);
+		_continue->setText(tr::lng_intro_server_try_again());
+		showStatus(tr::lng_intro_server_save_failed(tr::now), true);
+		_address->setAccessibleDescription(
+			tr::lng_intro_server_save_failed(tr::now));
+		_address->setFocusFast();
+		_scroll->scrollToWidget(_continue);
 		return;
 	}
-	account().mtp().restart();
-	goNext<UsernameWidget>();
-}
 
-void ServerKeyWidget::submit() {
-	// An unreadable entry blocks like a mismatch: the user tried to
-	// compare and produced nothing comparable, so nothing was verified.
-	// Only an empty field (None) and a confirmed Match advance.
-	if (!MTP::KeyIdCompareAllowsAdvance(_compareStatus)) {
-		const auto msg = (_compareStatus == MTP::KeyIdCompare::Mismatch)
-			? tr::lng_intro_server_check_mismatch(tr::now)
-			: tr::lng_intro_server_check_unreadable(tr::now);
-		showError(rpl::single(msg));
-		setAccessibleDescription(msg);
-		return;
-	}
-	commitAndAdvance();
+	_discoveryAttempt.reset();
+	_connecting = false;
+	getData()->serverEndpoint = result.endpoint;
+	switchToBound();
+	goNext<UsernameWidget>();
 }
 
 } // namespace details

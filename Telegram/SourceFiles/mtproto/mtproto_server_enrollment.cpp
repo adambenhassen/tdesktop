@@ -11,7 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_custom_server_input.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/Qt>
 #include <QtCore/QStringList>
+#include <QtGui/QKeyEvent>
 #include <QtNetwork/QHostAddress>
 
 #include <optional>
@@ -221,6 +223,12 @@ const char *ServerEnrollmentStatusName(ServerEnrollmentStatus status) {
 	return nullptr;
 }
 
+bool ShouldOpenServerEnrollment(
+		bool hasBoundServer,
+		bool hasAuthenticatedAccount) {
+	return hasBoundServer || hasAuthenticatedAccount;
+}
+
 ServerEnrollmentCheck CheckServerEnrollment(const QString &artifact) {
 	const auto normalized = NormalizeLineEndings(artifact);
 	if (!normalized || normalized->isEmpty()) {
@@ -360,6 +368,38 @@ ServerEnrollmentCheck CheckServerEnrollment(const QString &artifact) {
 		.key = std::move(keyCheck.key),
 		.identity = std::move(keyCheck.identity),
 	};
+}
+
+bool CommitServerEnrollment(
+		const std::function<bool()> &setPin,
+		const std::function<bool()> &persistPin,
+		const std::function<void()> &resume,
+		const std::function<void()> &rollbackPin) {
+	if (!setPin()) {
+		return false;
+	}
+	if (!persistPin()) {
+		if (rollbackPin) {
+			rollbackPin();
+		}
+		return false;
+	}
+	resume();
+	return true;
+}
+
+bool IsServerEnrollmentActivationKey(int key) {
+	return key == Qt::Key_Enter
+		|| key == Qt::Key_Return
+		|| key == Qt::Key_Space;
+}
+
+bool ConsumeServerEnrollmentActivationKey(QKeyEvent &event) {
+	if (!IsServerEnrollmentActivationKey(event.key())) {
+		return false;
+	}
+	event.accept();
+	return true;
 }
 
 } // namespace MTP

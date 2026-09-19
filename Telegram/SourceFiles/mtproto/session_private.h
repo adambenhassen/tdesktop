@@ -41,6 +41,7 @@ public:
 	[[nodiscard]] int32 getShiftedDcId() const;
 	void dcOptionsChanged();
 	void cdnConfigChanged();
+	void resumeAfterServerEnrollment();
 
 	[[nodiscard]] int32 getState() const;
 	[[nodiscard]] QString transport() const;
@@ -207,7 +208,8 @@ private:
 
 	// Set when the endpoint fails the pin check — an unknown public
 	// key, or a server DC id that does not confirm the pin. A stop,
-	// not a retry: only a corrected pin (dcOptionsChanged) clears it.
+	// not a retry: only a corrected pin (dcOptionsChanged or the explicit
+	// enrollment resume) clears it.
 	bool _gaveUpOnPinnedFailure = false;
 
 	base::Timer _oldConnectionTimer;
