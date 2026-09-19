@@ -141,7 +141,6 @@ jobs:
           cmake -Bbuild . \
             -DTDESKTOP_API_TEST=ON \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
-            -DDESKTOP_APP_DISABLE_SWIFT6=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             $DEFINE
           cmake --build build
@@ -205,8 +204,21 @@ jobs:
             echo "strong Translation.framework load is incompatible with macOS $min_os"
             exit 1
           fi
-          if grep -F 'Translation' "$abi_symbols" >/dev/null; then
-            echo "macOS 26-only Translation symbol reference detected"
+          weak_loads="$(awk '
+            /cmd LC_LOAD_WEAK_DYLIB$/ {
+              in_weak=1
+              next
+            }
+            in_weak && /^ *cmd / { in_weak=0 }
+            in_weak && $1 == "name" { print }
+          ' "$abi_loads")"
+          printf '%s\n' "$weak_loads" > "$package_root/abi-weak-loads.txt"
+          translation_weak_loads="$(printf '%s\n' "$weak_loads" | grep -F 'Translation.framework' || true)"
+          if [ -z "$translation_weak_loads" ]; then
+            echo "weak Translation.framework load missing"
+            if grep -F 'Translation' "$abi_symbols" >/dev/null; then
+              echo "Translation symbol reference has no weak framework load"
+            fi
             exit 1
           fi
 
@@ -351,6 +363,7 @@ jobs:
             echo "- Symlink topology: preserved, including \`Versions/Current\`"
             echo "- ABI minimum OS: \`$min_os\`"
             echo "- ABI strong-load inspection: passed"
+            echo "- ABI weak-load inspection: Translation.framework weak load present"
             echo "- ABI symbol inspection: passed"
             echo "- ABI availability metadata inspection: passed"
             echo "- Bundle identifier: \`com.adambenhassen.telegramd\`"
