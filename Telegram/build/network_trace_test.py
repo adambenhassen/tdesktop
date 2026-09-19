@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
 import unittest
+import sys
+from pathlib import Path
 
-try:
-    from network_trace import check_trace, parse_trace_lines
-except ImportError:
-    check_trace = None
-    parse_trace_lines = None
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from network_trace import check_trace, parse_trace_lines
 
 
 class NetworkTraceTest(unittest.TestCase):
@@ -35,7 +34,7 @@ class NetworkTraceTest(unittest.TestCase):
         )
 
         self.assertTrue(result["passed"], result)
-        self.assertEqual(result["events"], [])
+        self.assertEqual(result["events"][0]["kind"], "local")
 
     def test_preselection_rejects_official_connect(self):
         events = parse_trace_lines([
@@ -93,6 +92,8 @@ class NetworkTraceTest(unittest.TestCase):
             allowed_origins=[
                 "https://public.example/.well-known/telegramd/client",
             ],
+            required_destinations=["203.0.113.10:443"],
+            required_dns=["127.0.0.53:53"],
         )
 
         self.assertTrue(result["passed"], result)
@@ -117,6 +118,23 @@ class NetworkTraceTest(unittest.TestCase):
 
         self.assertFalse(result["passed"], result)
         self.assertIn("127.0.0.1:443", " ".join(result["violations"]))
+
+    def test_public_discovery_requires_observed_origin_contact(self):
+        result = check_trace(
+            [],
+            case="public-selection",
+            phase="public-discovery",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=["127.0.0.53:53"],
+            allowed_origins=[
+                "https://public.example/.well-known/telegramd/client",
+            ],
+            required_destinations=["203.0.113.10:443"],
+            required_dns=["127.0.0.53:53"],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("required destination", " ".join(result["violations"]))
 
     def test_public_discovery_does_not_use_configured_proxy(self):
         events = parse_trace_lines([
@@ -151,10 +169,11 @@ class NetworkTraceTest(unittest.TestCase):
 
         result = check_trace(
             events,
-            case="local-preflight-and-bind",
+            case="local-preflight",
             phase="local-direct",
             allowed_destinations=["192.0.2.10:443"],
             allowed_dns=[],
+            required_destinations=["192.0.2.10:443"],
         )
 
         self.assertTrue(result["passed"], result)
@@ -186,14 +205,91 @@ class NetworkTraceTest(unittest.TestCase):
 
         result = check_trace(
             events,
-            case="bound-endpoint",
+            case="pinned-endpoint",
             phase="pinned-endpoint",
             allowed_destinations=["192.0.2.10:443"],
             allowed_dns=[],
+            required_destinations=["192.0.2.10:443"],
         )
 
         self.assertFalse(result["passed"], result)
         self.assertIn("[2001:db8::10]:443", " ".join(result["violations"]))
+
+    def test_ipv4_mapped_ipv6_matches_ipv4_allowlist(self):
+        events = parse_trace_lines([
+            'socket(AF_INET6, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
+            'connect(3, {sa_family=AF_INET6, sin6_port=htons(443), '
+            'sin6_addr=inet_pton(AF_INET6, "::ffff:192.0.2.10")}, 28) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="pinned-endpoint",
+            phase="pinned-endpoint",
+            allowed_destinations=["192.0.2.10:443"],
+            allowed_dns=[],
+            required_destinations=["192.0.2.10:443"],
+        )
+
+        self.assertTrue(result["passed"], result)
+
+    def test_unknown_network_family_fails_closed(self):
+        events = parse_trace_lines([
+            'socket(AF_PACKET, SOCK_RAW|SOCK_CLOEXEC, htons(0x0800)) = 3',
+        ])
+
+        result = check_trace(
+            events,
+            case="fresh-empty",
+            phase="preselection",
+            allowed_destinations=[],
+            allowed_dns=[],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("unknown network family", " ".join(result["violations"]))
+
+    def test_resolver_unix_socket_is_not_ignored(self):
+        events = parse_trace_lines([
+            'socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0) = 3',
+            'connect(3, {sa_family=AF_UNIX, '
+            'sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 52) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="fresh-empty",
+            phase="preselection",
+            allowed_destinations=[],
+            allowed_dns=[],
+        )
+
+        self.assertFalse(result["passed"], result)
+
+    def test_resolver_unix_socket_can_be_explicit_dns_evidence(self):
+        events = parse_trace_lines([
+            'socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0) = 3',
+            'connect(3, {sa_family=AF_UNIX, '
+            'sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 52) = 0',
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4',
+            'connect(4, {sa_family=AF_INET, sin_port=htons(443), '
+            'sin_addr=inet_addr("203.0.113.10")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="public-selection",
+            phase="public-discovery",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=["unix:/run/systemd/resolve/io.systemd.Resolve"],
+            allowed_origins=[
+                "https://public.example/.well-known/telegramd/client",
+            ],
+            required_destinations=["203.0.113.10:443"],
+            required_dns=["unix:/run/systemd/resolve/io.systemd.Resolve"],
+        )
+
+        self.assertTrue(result["passed"], result)
 
     def test_socket_without_destination_fails_closed(self):
         events = parse_trace_lines([
@@ -202,10 +298,11 @@ class NetworkTraceTest(unittest.TestCase):
 
         result = check_trace(
             events,
-            case="late-callback",
+            case="pinned-endpoint",
             phase="pinned-endpoint",
             allowed_destinations=["192.0.2.10:443"],
             allowed_dns=[],
+            required_destinations=["192.0.2.10:443"],
         )
 
         self.assertFalse(result["passed"], result)
@@ -225,6 +322,10 @@ class NetworkTraceTest(unittest.TestCase):
             allowed_destinations=["192.0.2.10:443"],
             allowed_dns=[],
             allowed_proxies=["198.51.100.9:1080"],
+            required_destinations=["192.0.2.10:443"],
+            required_proxies=["198.51.100.9:1080"],
+            proxy_target="192.0.2.10:443",
+            proxy_target_proven=True,
         )
 
         self.assertTrue(result["passed"], result)
@@ -248,6 +349,109 @@ class NetworkTraceTest(unittest.TestCase):
         )
 
         self.assertFalse(rejected["passed"], rejected)
+
+    def test_payload_text_cannot_supply_the_destination(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_UDP) = 3',
+            'sendto(3, "inet_addr(\\"203.0.113.10\\")", 30, 0, '
+            '{sa_family=AF_INET, sin_port=htons(443), '
+            'sin_addr=inet_addr("198.51.100.10")}, 16) = 30',
+        ])
+
+        result = check_trace(
+            events,
+            case="pinned-endpoint",
+            phase="pinned-endpoint",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=[],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("198.51.100.10:443", " ".join(result["violations"]))
+        self.assertNotIn("line", result["events"][0])
+
+    def test_sendmsg_payload_cannot_supply_msg_name(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_UDP) = 3',
+            'sendmsg(3, {msg_name={sa_family=AF_INET, '
+            'sin_port=htons(443), sin_addr=inet_addr("198.51.100.10")}, '
+            'msg_namelen=16, msg_iov=[{iov_base="msg_name={sa_family=AF_INET, '
+            'sin_port=htons(443), sin_addr=inet_addr(203.0.113.10)}", '
+            'iov_len=30}]}, 0) = 30',
+        ])
+
+        result = check_trace(
+            events,
+            case="pinned-endpoint",
+            phase="pinned-endpoint",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=[],
+            required_destinations=["203.0.113.10:443"],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("198.51.100.10:443", " ".join(result["violations"]))
+
+    def test_empty_endpoint_trace_fails_closed(self):
+        result = check_trace(
+            [],
+            case="pinned-endpoint",
+            phase="pinned-endpoint",
+            allowed_destinations=["192.0.2.10:443"],
+            allowed_dns=[],
+            required_destinations=["192.0.2.10:443"],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("required destination", " ".join(result["violations"]))
+
+    def test_hostname_allowlist_is_rejected(self):
+        result = check_trace(
+            [],
+            case="fresh-empty",
+            phase="preselection",
+            allowed_destinations=["telegram.example:443"],
+            allowed_dns=[],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("invalid destination allowlist", " ".join(result["violations"]))
+
+    def test_proxy_target_proof_replaces_process_target_connect(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
+            'connect(3, {sa_family=AF_INET, sin_port=htons(1080), '
+            'sin_addr=inet_addr("198.51.100.9")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="proxy-intermediary",
+            phase="pinned-endpoint",
+            allowed_destinations=["192.0.2.10:443"],
+            allowed_dns=[],
+            allowed_proxies=["198.51.100.9:1080"],
+            required_destinations=["192.0.2.10:443"],
+            required_proxies=["198.51.100.9:1080"],
+            proxy_target="192.0.2.10:443",
+            proxy_target_proven=True,
+        )
+
+        self.assertTrue(result["passed"], result)
+
+        unproven = check_trace(
+            events,
+            case="proxy-intermediary",
+            phase="pinned-endpoint",
+            allowed_destinations=["192.0.2.10:443"],
+            allowed_dns=[],
+            allowed_proxies=["198.51.100.9:1080"],
+            required_destinations=["192.0.2.10:443"],
+            required_proxies=["198.51.100.9:1080"],
+            proxy_target="192.0.2.10:443",
+        )
+
+        self.assertFalse(unproven["passed"], unproven)
 
     def test_public_origin_must_be_normalized_https_discovery_url(self):
         result = check_trace(
@@ -296,6 +500,7 @@ class NetworkTraceTest(unittest.TestCase):
             phase="pinned-endpoint",
             allowed_destinations=["192.0.2.10:443"],
             allowed_dns=[],
+            required_destinations=["192.0.2.10:443"],
         )
 
         self.assertTrue(result["passed"], result)

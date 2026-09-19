@@ -32,6 +32,7 @@ _IPV4 = re.compile(
 )
 _IPV6 = re.compile(r"inet_pton\(AF_INET6,\s*\"([^\"]+)\"\)")
 _FAMILY = re.compile(r"sa_family=(AF_[A-Z0-9_]+)")
+_UNIX_PATH = re.compile(r"sun_path=\"([^\"]*)\"")
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,86 @@ def _is_network_family(family: str | None) -> bool:
     return family in {"AF_INET", "AF_INET6"}
 
 
+def _split_call_args(text: str) -> list[str]:
+    result = []
+    start = 0
+    depth = 0
+    quote = False
+    escaped = False
+    for index, character in enumerate(text):
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quote = False
+            continue
+        if character == '"':
+            quote = True
+        elif character in "{[(":
+            depth += 1
+        elif character in "}])":
+            depth = max(0, depth - 1)
+        elif character == "," and depth == 0:
+            result.append(text[start:index].strip())
+            start = index + 1
+    result.append(text[start:].strip())
+    return result
+
+
+def _named_values(text: str, name: str) -> list[str]:
+    text = text.strip()
+    if len(text) < 2 or text[0] not in "{[" or text[-1] not in "}]":
+        return []
+    result = []
+    for field in _split_call_args(text[1:-1]):
+        field = field.strip()
+        if not field:
+            continue
+        if field[0] in "{[":
+            result.extend(_named_values(field, name))
+            continue
+        key, separator, value = field.partition("=")
+        if not separator:
+            continue
+        if key.strip() == name:
+            result.append(value.strip())
+        if value.strip().startswith(("{", "[")):
+            result.extend(_named_values(value.strip(), name))
+    return result
+
+
+def _sockaddr_texts(syscall: str, args: str) -> list[str]:
+    parts = _split_call_args(args)
+    if syscall == "connect":
+        return [parts[1]] if len(parts) > 1 else [""]
+    if syscall == "sendto":
+        return [parts[4]] if len(parts) > 4 else [""]
+    if syscall in {"sendmsg", "sendmmsg"}:
+        values = _named_values(parts[1], "msg_name") if len(parts) > 1 else []
+        return values or [""]
+    return [""]
+
+
+def _unix_path(text: str) -> str | None:
+    match = _UNIX_PATH.search(text)
+    return match.group(1) if match else None
+
+
+def _is_local_unix_path(path: str | None) -> bool:
+    return bool(path) and (
+        path == "/tmp/display"
+        or path.startswith("/tmp/.X11-unix/")
+        or path == "/run/dbus/system_bus_socket"
+        or (path.startswith("/run/user/") and path.endswith("/bus"))
+    )
+
+
+def _is_resolver_unix_path(path: str | None) -> bool:
+    return bool(path) and path.startswith("/run/systemd/resolve/")
+
+
 def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
     result = []
     for raw_line in lines:
@@ -98,11 +179,11 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
         args = match.group("args")
         if syscall == "socket":
             family = args.split(",", 1)[0].strip()
-            if not _is_network_family(family):
+            if family == "AF_UNIX":
                 continue
             fd, socket_id = _fd_info(match.group("result"))
             result.append(NetworkEvent(
-                kind="socket",
+                kind="socket" if _is_network_family(family) else "unknown",
                 syscall=syscall,
                 fd=fd,
                 socket_id=socket_id,
@@ -114,30 +195,41 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
             continue
         if syscall not in {"connect", "sendto", "sendmsg", "sendmmsg"}:
             continue
-        family, destination = _destination(args)
-        if family is not None and not _is_network_family(family):
-            continue
         fd, socket_id = _fd_info(args)
-        if syscall == "connect":
-            kind = "dns" if destination and destination.endswith(":53") else "connect"
-        elif destination and destination.endswith(":53"):
-            kind = "dns"
-        else:
-            kind = "send"
-        result.append(NetworkEvent(
-            kind=kind,
-            syscall=syscall,
-            fd=fd,
-            socket_id=socket_id,
-            destination=destination,
-            family=family,
-            line=line,
-            pid=pid,
-        ))
+        for sockaddr in _sockaddr_texts(syscall, args):
+            family, destination = _destination(sockaddr)
+            if family == "AF_UNIX":
+                path = _unix_path(sockaddr)
+                destination = f"unix:{path}" if path else None
+                kind = (
+                    "local" if _is_local_unix_path(path)
+                    else "dns" if _is_resolver_unix_path(path)
+                    else "unknown"
+                )
+            elif not _is_network_family(family):
+                kind = "unknown"
+            elif syscall == "connect":
+                kind = "dns" if destination and destination.endswith(":53") else "connect"
+            elif destination and destination.endswith(":53"):
+                kind = "dns"
+            else:
+                kind = "send"
+            result.append(NetworkEvent(
+                kind=kind,
+                syscall=syscall,
+                fd=fd,
+                socket_id=socket_id,
+                destination=destination,
+                family=family,
+                line=line,
+                pid=pid,
+            ))
     return result
 
 
 def _split_destination(destination: str) -> tuple[str, int] | None:
+    if not isinstance(destination, str):
+        return None
     if destination.startswith("["):
         separator = destination.find("]:")
         if separator < 0:
@@ -154,13 +246,52 @@ def _split_destination(destination: str) -> tuple[str, int] | None:
         return None
 
 
+def _valid_unix_destination(destination: str) -> bool:
+    return (
+        isinstance(destination, str)
+        and destination.startswith("unix:/")
+        and "\n" not in destination
+        and "\r" not in destination
+    )
+
+
+def _valid_ip_destination(destination: str) -> bool:
+    if not isinstance(destination, str):
+        return False
+    parsed = _split_destination(destination)
+    if parsed is None:
+        return False
+    host, port = parsed
+    if not 0 <= port <= 65535:
+        return False
+    try:
+        ipaddress.ip_network(host, strict=False)
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_allowlist_destination(
+        destination: str,
+        *,
+        allow_unix: bool) -> bool:
+    return (
+        _valid_unix_destination(destination)
+        if allow_unix and destination.startswith("unix:")
+        else _valid_ip_destination(destination)
+    )
+
+
 def _destination_allowed(
         destination: str | None,
         allowed: Sequence[str]) -> bool:
-    if destination is None:
+    if not isinstance(destination, str):
         return False
-    if destination in allowed:
-        return True
+    if destination.startswith("unix:"):
+        return any(
+            _valid_unix_destination(candidate) and candidate == destination
+            for candidate in allowed
+        )
     actual = _split_destination(destination)
     if actual is None:
         return False
@@ -169,7 +300,12 @@ def _destination_allowed(
         address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    addresses = [address]
+    if address.version == 6 and address.ipv4_mapped:
+        addresses.append(address.ipv4_mapped)
     for candidate in allowed:
+        if not _valid_ip_destination(candidate):
+            continue
         parsed = _split_destination(candidate)
         if parsed is None or parsed[1] != port:
             continue
@@ -177,7 +313,7 @@ def _destination_allowed(
             network = ipaddress.ip_network(parsed[0], strict=False)
         except ValueError:
             continue
-        if address in network:
+        if any(candidate_address in network for candidate_address in addresses):
             return True
     return False
 
@@ -213,10 +349,18 @@ def check_trace(
         allowed_destinations: Sequence[str],
         allowed_dns: Sequence[str],
         allowed_origins: Sequence[str] = (),
-        allowed_proxies: Sequence[str] = ()) -> dict:
-    destinations = list(allowed_destinations)
-    dns = list(allowed_dns)
-    proxies = list(allowed_proxies)
+        allowed_proxies: Sequence[str] = (),
+        required_destinations: Sequence[str] = (),
+        required_dns: Sequence[str] = (),
+        required_proxies: Sequence[str] = (),
+        proxy_target: str | None = None,
+        proxy_target_proven: bool = False) -> dict:
+    configured_destinations = list(allowed_destinations)
+    configured_dns = list(allowed_dns)
+    configured_proxies = list(allowed_proxies)
+    destinations = list(configured_destinations)
+    dns = list(configured_dns)
+    proxies = list(configured_proxies)
     if phase == "preselection":
         destinations = []
         dns = []
@@ -226,6 +370,42 @@ def check_trace(
     elif phase == "local-direct":
         proxies = []
     violations = []
+    for label, values, allow_unix in (
+        ("destination", configured_destinations, False),
+        ("DNS", configured_dns, True),
+        ("proxy", configured_proxies, False),
+    ):
+        for value in values:
+            if not _valid_allowlist_destination(value, allow_unix=allow_unix):
+                violations.append(f"invalid {label} allowlist destination {value}")
+    for label, values, allow_unix in (
+        ("required destination", required_destinations, False),
+        ("required DNS", required_dns, True),
+        ("required proxy", required_proxies, False),
+    ):
+        for value in values:
+            if not _valid_allowlist_destination(value, allow_unix=allow_unix):
+                violations.append(f"invalid {label} {value}")
+    if any(value not in configured_destinations for value in required_destinations):
+        violations.append("required destination is outside the destination allowlist")
+    if any(value not in configured_dns for value in required_dns):
+        violations.append("required DNS destination is outside the DNS allowlist")
+    if any(value not in configured_proxies for value in required_proxies):
+        violations.append("required proxy is outside the proxy allowlist")
+    if proxy_target:
+        if not _valid_ip_destination(proxy_target):
+            violations.append(f"invalid proxy target {proxy_target}")
+        elif proxy_target not in configured_destinations:
+            violations.append("proxy target is outside the destination allowlist")
+        elif not proxy_target_proven:
+            violations.append("proxy target assertion was not proven")
+    if phase == "public-discovery" and (
+        not required_destinations or not required_dns
+    ):
+        violations.append("public discovery requires destination and DNS evidence")
+    if phase in {"local-direct", "pinned-endpoint"} and not required_destinations:
+        if not (proxy_target and proxy_target_proven):
+            violations.append("endpoint phase requires destination evidence")
     if phase == "public-discovery":
         if len(allowed_origins) != 1:
             violations.append("public discovery requires one origin")
@@ -233,11 +413,20 @@ def check_trace(
             violations.append(
                 f"invalid public discovery origin {allowed_origins[0]}"
             )
+    elif allowed_origins:
+        violations.append("non-public phases cannot allow a discovery origin")
     allowed_fds = set()
     socket_events = []
     for event in events:
         if event.kind == "socket":
             socket_events.append(event)
+            continue
+        if event.kind == "local":
+            continue
+        if event.kind == "unknown":
+            violations.append(
+                f"unknown network family {event.family or '<unknown>'}"
+            )
             continue
         if event.kind == "dns":
             if _destination_allowed(event.destination, dns):
@@ -263,17 +452,51 @@ def check_trace(
             violations.append(
                 f"network socket has no allowed destination fd={event.fd}"
             )
+    for required in required_destinations:
+        if proxy_target_proven and required == proxy_target:
+            continue
+        if not any(
+                event.kind in {"connect", "send"}
+                and _destination_allowed(event.destination, [required])
+                for event in events):
+            violations.append(f"required destination not observed {required}")
+    if required_dns and not any(
+            event.kind == "dns"
+            and any(
+                _destination_allowed(event.destination, [required])
+                for required in required_dns
+            )
+            for event in events):
+        violations.append(
+            "required DNS destination not observed "
+            + ", ".join(required_dns)
+        )
+    for required in required_proxies:
+        if not any(
+                event.kind in {"connect", "send"}
+                and _destination_allowed(event.destination, [required])
+                for event in events):
+            violations.append(f"required proxy not observed {required}")
+
+    def event_report(event: NetworkEvent) -> dict:
+        report = asdict(event)
+        del report["line"]
+        return report
+
     return {
         "case": case,
         "phase": phase,
         "passed": not violations,
-        "events": [asdict(event) for event in events],
+        "events": [event_report(event) for event in events],
         "violations": violations,
         "allowlist": {
             "origins": list(allowed_origins),
             "destinations": destinations,
             "dns": dns,
             "proxies": proxies,
+            "required_destinations": list(required_destinations),
+            "required_dns": list(required_dns),
+            "required_proxies": list(required_proxies),
         },
     }
 
@@ -305,6 +528,16 @@ def _read_trace(paths: Sequence[Path]) -> list[NetworkEvent]:
     return events
 
 
+def _proxy_target_proven(path: str | None, expected: str | None) -> bool:
+    if not path or not expected:
+        return False
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return False
+    return lines == [expected]
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Parse and enforce a destination allowlist for strace network events."
@@ -321,6 +554,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-destination", action="append", default=[])
     parser.add_argument("--allow-dns", action="append", default=[])
     parser.add_argument("--allow-proxy", action="append", default=[])
+    parser.add_argument("--require-destination", action="append", default=[])
+    parser.add_argument("--require-dns", action="append", default=[])
+    parser.add_argument("--require-proxy", action="append", default=[])
+    parser.add_argument("--proxy-target")
+    parser.add_argument("--proxy-target-proof")
     parser.add_argument("--target-status", type=int)
     parser.add_argument("--report")
     return parser
@@ -333,6 +571,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("no trace files matched", file=sys.stderr)
         return 2
     events = _read_trace(paths)
+    proxy_target_proven = _proxy_target_proven(
+        args.proxy_target_proof,
+        args.proxy_target,
+    )
     report = check_trace(
         events,
         case=args.case,
@@ -341,10 +583,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         allowed_dns=args.allow_dns,
         allowed_origins=args.origin,
         allowed_proxies=args.allow_proxy,
+        required_destinations=args.require_destination,
+        required_dns=args.require_dns,
+        required_proxies=args.require_proxy,
+        proxy_target=args.proxy_target,
+        proxy_target_proven=proxy_target_proven,
     )
-    report["trace_files"] = [str(path) for path in paths]
+    report["trace_count"] = len(paths)
     if args.target_status is not None:
         report["target_status"] = args.target_status
+    if args.proxy_target:
+        report["proxy_target"] = args.proxy_target
+        report["proxy_target_proven"] = proxy_target_proven
     encoded = json.dumps(report, indent=2, sort_keys=True)
     if args.report:
         Path(args.report).write_text(encoded + "\n", encoding="utf-8")
