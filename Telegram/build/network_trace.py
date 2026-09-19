@@ -321,6 +321,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-destination", action="append", default=[])
     parser.add_argument("--allow-dns", action="append", default=[])
     parser.add_argument("--allow-proxy", action="append", default=[])
+    parser.add_argument("--target-status", type=int)
     parser.add_argument("--report")
     return parser
 
@@ -342,6 +343,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         allowed_proxies=args.allow_proxy,
     )
     report["trace_files"] = [str(path) for path in paths]
+    if args.target_status is not None:
+        report["target_status"] = args.target_status
     encoded = json.dumps(report, indent=2, sort_keys=True)
     if args.report:
         Path(args.report).write_text(encoded + "\n", encoding="utf-8")

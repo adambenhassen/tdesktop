@@ -70,41 +70,49 @@ children with `strace`, and fails closed when a network socket has no allowed
 DNS or destination event. AF_UNIX display and desktop-integration sockets are
 not remote network activity.
 
-The case manifest is the required scenario inventory:
+The case manifest is the required scenario inventory and execution contract:
 
 ```bash
 Telegram/build/network_isolation_test.sh --list-cases
 ```
 
+Every case declares its phase, bounded timeout, `-testagent` arguments, the
+`TDESKTOP_NETWORK_TRACE_CASE` environment binding, all four destination
+allowlists, and the report filename. Run a fixed-head case from that contract
+with no ad-hoc allowlist:
+
 An empty-storage check records no DNS, socket, or connect activity:
 
 ```bash
 Telegram/build/network_isolation_test.sh \
+  --manifest Telegram/build/network_trace_cases.json \
   --case fresh-empty \
-  --phase preselection \
   --evidence-dir "$PWD/network-evidence/fresh-empty" \
   -- "$PWD/out/Debug/Telegram"
 ```
 
-Discovery and pinned-endpoint cases must pass the resolved destination set
-explicitly. The origin is evidence metadata, while the IP:port values are the
-only remote destinations accepted by the trace checker:
+The workflow can invoke each manifest entry the same way. Discovery and
+pinned-endpoint cases carry their resolved destination sets explicitly. The
+origin is evidence metadata, while the IP:port values are the only remote
+destinations accepted by the trace checker:
 
 ```bash
 Telegram/build/network_isolation_test.sh \
+  --manifest Telegram/build/network_trace_cases.json \
   --case public-selection \
-  --phase public-discovery \
-  --origin 'https://public.example/.well-known/telegramd/client' \
-  --allow-destination 203.0.113.10:443 \
-  --allow-dns 127.0.0.53:53 \
   --evidence-dir "$PWD/network-evidence/public-selection" \
   -- "$PWD/out/Debug/Telegram"
 ```
 
-For a configured proxy, list its transport address with `--allow-proxy` and
-keep the pinned endpoint in `--allow-destination`. An unrelated destination
-still fails. The report preserves the origin, destination, DNS, and proxy
-allowlists beside the raw per-process trace.
+For a configured proxy, the manifest lists its transport address separately
+from the pinned endpoint. An unrelated destination still fails. Each report
+preserves the case, observed events, target exit status, origin, destination,
+DNS, and proxy allowlists beside the raw per-process trace.
+
+The target exit status is metadata, not a destination verdict. A target may
+finish with an ordinary nonzero status after producing a valid trace; the
+runner still parses and enforces that trace. Missing or invalid observer
+output remains a hard failure.
 
 The observer and parser have a deterministic self-test. It includes the
 reported official-DC connect as a vulnerable fixture, verifies that it fails,
