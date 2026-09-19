@@ -24,11 +24,13 @@ cat > "$TARGET" <<'EOF'
 printf 'trace-case=%s args=%s\n' "${TDESKTOP_NETWORK_TRACE_CASE:-unset}" "$*"
 if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = proxy-intermediary ] \
 	&& [ "${TDESKTOP_SKIP_PROXY_ASSERTION:-0}" != 1 ]; then
-	printf '%s\n' '192.0.2.10:443' > "$TDESKTOP_PROXY_ASSERTION_FILE"
+	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"192.0.2.10:443","observed":true}' > "$TDESKTOP_PROXY_ASSERTION_FILE"
 fi
-if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-selection ] \
-	|| [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-failure ]; then
-	printf '%s\n' '{"origin":"https://public.example/.well-known/telegramd/client","destinations":["203.0.113.10:443"]}' \
+if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-selection ]; then
+	printf '%s\n' '{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"]}' \
+		> "$TDESKTOP_TEST_EVIDENCE_DIR/network-resolution.json"
+elif [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-failure ]; then
+	printf '%s\n' '{"origin":"https://public-failure.invalid/.well-known/telegramd/client","host":"public-failure.invalid","error":"HostNotFound","addresses":[],"destinations":[]}' \
 		> "$TDESKTOP_TEST_EVIDENCE_DIR/network-resolution.json"
 fi
 if [ "${TDESKTOP_SKIP_COMPLETION:-0}" != 1 ]; then
@@ -68,12 +70,18 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "${TDESKTOP_NETWORK_TRACE_CASE:-}" in
-public-selection|public-failure)
+public-selection)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3
 sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 3
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4
 connect(4, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("203.0.113.10")}, 16) = 0
+TRACE
+	;;
+public-failure)
+	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
+socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3
+sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 3
 TRACE
 	;;
 background-refresh)
@@ -85,7 +93,7 @@ TRACE
 proxy-intermediary)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(1080), sin_addr=inet_addr("198.51.100.9")}, 16) = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(19080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 TRACE
 	;;
 local-preflight|pinned-endpoint|restart-pinned|multiple-account-isolation|selected-endpoint-failure)

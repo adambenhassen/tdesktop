@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "cases": [
     {
       "name": "fresh-empty",
@@ -116,6 +116,7 @@
       "resolution": {
         "file": "network-resolution.json",
         "origin": "https://public.example/.well-known/telegramd/client",
+        "host": "public.example",
         "destinations": ["203.0.113.10:443"]
       },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
@@ -132,21 +133,22 @@
         "update_mode": "disabled"
       },
       "allowlist": {
-        "origins": ["https://public.example/.well-known/telegramd/client"],
-        "destinations": ["203.0.113.10:443"],
+        "origins": ["https://public-failure.invalid/.well-known/telegramd/client"],
+        "destinations": [],
         "dns": ["127.0.0.53:53", "unix:/run/systemd/resolve/io.systemd.Resolve"],
         "proxies": []
       },
       "required": {
-        "destinations": ["203.0.113.10:443"],
+        "destinations": [],
         "dns": ["127.0.0.53:53", "unix:/run/systemd/resolve/io.systemd.Resolve"],
         "proxies": [],
         "proxy_target": null
       },
       "resolution": {
         "file": "network-resolution.json",
-        "origin": "https://public.example/.well-known/telegramd/client",
-        "destinations": ["203.0.113.10:443"]
+        "origin": "https://public-failure.invalid/.well-known/telegramd/client",
+        "host": "public-failure.invalid",
+        "destinations": []
       },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
@@ -221,8 +223,8 @@
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": ["198.51.100.9:1080"]},
-      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": ["198.51.100.9:1080"], "proxy_target": "192.0.2.10:443"},
+      "allowlist": {"origins": [], "destinations": ["192.0.2.10:443"], "dns": [], "proxies": ["127.0.0.1:19080"]},
+      "required": {"destinations": ["192.0.2.10:443"], "dns": [], "proxies": ["127.0.0.1:19080"], "proxy_target": "192.0.2.10:443"},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },

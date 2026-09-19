@@ -335,6 +335,18 @@ def _valid_public_origin(origin: str) -> bool:
     )
 
 
+def _resolution_destinations(addresses: Sequence[str]) -> list[str] | None:
+    result = []
+    for address in addresses:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            return None
+        host = str(parsed)
+        result.append(f"[{host}]:443" if parsed.version == 6 else f"{host}:443")
+    return result
+
+
 def _fd_key(event: NetworkEvent) -> tuple:
     if event.socket_id:
         return ("socket", event.socket_id)
@@ -403,14 +415,16 @@ def check_trace(
         elif not proxy_target_proven:
             violations.append("proxy target assertion was not proven")
     if phase == "public-discovery" and (
-        not required_destinations or not required_dns
+        (case != "public-failure" and not required_destinations)
+        or not required_dns
     ):
         violations.append("public discovery requires destination and DNS evidence")
     if phase in {"local-direct", "pinned-endpoint"} and not required_destinations:
         if not (proxy_target and proxy_target_proven):
             violations.append("endpoint phase requires destination evidence")
     if phase == "public-discovery":
-        if set(required_destinations) != set(configured_destinations):
+        if case != "public-failure" and set(required_destinations) != set(
+                configured_destinations):
             violations.append(
                 "public discovery origin is not bound to its destination allowlist"
             )
@@ -426,14 +440,36 @@ def check_trace(
     if phase == "public-discovery":
         if not isinstance(resolution_evidence, dict):
             violations.append("missing observed resolution evidence")
-        elif set(resolution_evidence) != {"origin", "destinations"}:
-            violations.append("invalid observed resolution evidence shape")
+        elif set(resolution_evidence) != {
+            "origin", "host", "error", "addresses", "destinations"
+        }:
+            violations.append(
+                "invalid observed resolution evidence shape; callback result is required"
+            )
         else:
             observed_origin = resolution_evidence.get("origin")
+            observed_host = resolution_evidence.get("host")
+            observed_error = resolution_evidence.get("error")
+            observed_addresses = resolution_evidence.get("addresses")
             observed_destinations = resolution_evidence.get("destinations")
+            derived_destinations = (
+                _resolution_destinations(observed_addresses)
+                if isinstance(observed_addresses, list)
+                and all(isinstance(address, str) for address in observed_addresses)
+                else None
+            )
             resolution_report = {
                 "origin": observed_origin
                 if isinstance(observed_origin, str)
+                else None,
+                "host": observed_host
+                if isinstance(observed_host, str)
+                else None,
+                "error": observed_error
+                if isinstance(observed_error, str)
+                else None,
+                "addresses": list(observed_addresses)
+                if isinstance(observed_addresses, list)
                 else None,
                 "destinations": list(observed_destinations)
                 if isinstance(observed_destinations, list)
@@ -446,14 +482,40 @@ def check_trace(
                 violations.append(
                     "observed resolution origin does not match the allowlist"
                 )
-            if observed_destinations != list(required_destinations):
+            try:
+                expected_host = urllib.parse.urlsplit(
+                    allowed_origins[0]
+                ).hostname
+            except (IndexError, ValueError):
+                expected_host = None
+            if observed_host != expected_host:
+                violations.append(
+                    "observed resolution host does not match the selected origin"
+                )
+            if observed_error not in {"NoError", "HostNotFound", "UnknownError"}:
+                violations.append("observed resolution has an invalid callback error")
+            if not isinstance(observed_addresses, list) or derived_destinations is None:
+                violations.append("observed resolution addresses are invalid")
+            elif observed_error == "NoError" and not observed_addresses:
+                violations.append("successful resolution returned no addresses")
+            elif observed_error != "NoError" and observed_addresses:
+                violations.append("failed resolution returned addresses")
+            if derived_destinations is not None and (
+                observed_destinations != derived_destinations
+            ):
+                violations.append(
+                    "observed resolution destinations are not derived from callback addresses"
+                )
+            if case != "public-failure" and observed_destinations != list(
+                    required_destinations):
                 violations.append(
                     "observed resolution destinations do not match required evidence"
                 )
-            elif any(
+            elif case == "public-failure" and any(
                 not isinstance(destination, str)
                 or not _valid_ip_destination(destination)
-                for destination in observed_destinations
+                or destination not in configured_destinations
+                for destination in observed_destinations or []
             ):
                 violations.append(
                     "observed resolution contains an invalid destination"
@@ -585,10 +647,16 @@ def _proxy_target_proven(path: str | None, expected: str | None) -> bool:
     if not path or not expected:
         return False
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
+        proof = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return False
-    return lines == [expected]
+    return proof == {
+        "protocol": "SOCKS5",
+        "version": 5,
+        "command": "CONNECT",
+        "target": expected,
+        "observed": True,
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -116,14 +116,21 @@ EOF
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
 EOF
+	cat > "$test_root/public-failure.trace" <<'EOF'
+socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3
+sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 3
+EOF
 	cat > "$test_root/public-resolution.json" <<'EOF'
-{"origin":"https://public.example/.well-known/telegramd/client","destinations":["203.0.113.10:443"]}
+{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"]}
+EOF
+	cat > "$test_root/public-failure-resolution.json" <<'EOF'
+{"origin":"https://public-failure.invalid/.well-known/telegramd/client","host":"public-failure.invalid","error":"HostNotFound","addresses":[],"destinations":[]}
 EOF
 	cat > "$test_root/proxy.trace" <<'EOF'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(1080), sin_addr=inet_addr("198.51.100.9")}, 16) = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(19080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 EOF
-	printf '%s\n' '192.0.2.10:443' > "$test_root/proxy-target.txt"
+	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"192.0.2.10:443","observed":true}' > "$test_root/proxy-target.txt"
 
 	local parser=(python3 "$PARSER")
 	run_expected_failure vulnerable-preselection "${parser[@]}" \
@@ -144,17 +151,23 @@ EOF
 	run_expected_failure public-direct-fallback "${parser[@]}" \
 		--trace "$test_root/public-fallback.trace" \
 		--case public-failure --phase public-discovery \
-		--origin https://public.example/.well-known/telegramd/client \
-		--allow-destination 203.0.113.10:443 \
+		--origin https://public-failure.invalid/.well-known/telegramd/client \
 		--allow-dns 127.0.0.53:53 \
-		--resolution-evidence "$test_root/public-resolution.json"
+		--resolution-evidence "$test_root/public-failure-resolution.json"
+	run_expected_success public-failure-without-fallback "${parser[@]}" \
+		--trace "$test_root/public-failure.trace" \
+		--case public-failure --phase public-discovery \
+		--origin https://public-failure.invalid/.well-known/telegramd/client \
+		--allow-dns 127.0.0.53:53 \
+		--require-dns 127.0.0.53:53 \
+		--resolution-evidence "$test_root/public-failure-resolution.json"
 	run_expected_success proxy-intermediary "${parser[@]}" \
 		--trace "$test_root/proxy.trace" \
 		--case proxy-intermediary --phase pinned-endpoint \
 		--allow-destination 192.0.2.10:443 \
-		--allow-proxy 198.51.100.9:1080 \
+		--allow-proxy 127.0.0.1:19080 \
 		--require-destination 192.0.2.10:443 \
-		--require-proxy 198.51.100.9:1080 \
+		--require-proxy 127.0.0.1:19080 \
 		--proxy-target 192.0.2.10:443 \
 		--proxy-target-proof "$test_root/proxy-target.txt"
 	trap - RETURN
@@ -254,8 +267,8 @@ try:
 except (OSError, json.JSONDecodeError) as error:
     fail(str(error))
 
-if document.get("version") != 4:
-    fail("version must be 4")
+if document.get("version") != 5:
+    fail("version must be 5")
 cases = document.get("cases")
 if not isinstance(cases, list) or not cases:
     fail("cases must be a non-empty list")
@@ -342,9 +355,14 @@ for index, case in enumerate(cases):
     ):
         fail(f"{name} has an invalid proxy target assertion")
     if phase == "public-discovery" and (
-        not required["destinations"]
-        or not required["dns"]
-        or set(required["destinations"]) != set(allowlist["destinations"])
+        not required["dns"]
+        or (
+            name != "public-failure"
+            and (
+                not required["destinations"]
+                or set(required["destinations"]) != set(allowlist["destinations"])
+            )
+        )
     ):
         fail(f"{name} must bind its origin to every resolved destination")
     if phase in {"local-direct", "pinned-endpoint"} and not required["destinations"]:
@@ -357,7 +375,7 @@ for index, case in enumerate(cases):
     resolution = case.get("resolution")
     if phase == "public-discovery":
         if not isinstance(resolution, dict) or set(resolution) != {
-            "file", "origin", "destinations"
+            "file", "origin", "host", "destinations"
         }:
             fail(f"{name} needs observed resolution evidence contract")
         resolution_file = resolution["file"]
@@ -376,6 +394,12 @@ for index, case in enumerate(cases):
             or resolution["origin"] != allowlist["origins"][0]
         ):
             fail(f"{name} resolution origin must match its allowlist")
+        if (
+            not isinstance(resolution["host"], str)
+            or resolution["host"]
+            != urllib.parse.urlsplit(resolution["origin"]).hostname
+        ):
+            fail(f"{name} resolution host must match its origin")
         if (
             not isinstance(resolution["destinations"], list)
             or any(
