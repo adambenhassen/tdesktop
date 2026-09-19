@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "fresh-empty",
+      "phase": "preselection",
+      "description": "Empty storage before a server selection."
+    },
+    {
+      "name": "malformed-selection",
+      "phase": "preselection",
+      "description": "Malformed input rejected without network activity."
+    },
+    {
+      "name": "canceled-selection",
+      "phase": "preselection",
+      "description": "Canceled discovery cannot leave a live request."
+    },
+    {
+      "name": "failed-selection",
+      "phase": "preselection",
+      "description": "Failed discovery cannot fall back to production."
+    },
+    {
+      "name": "partial-selection",
+      "phase": "preselection",
+      "description": "Partial discovery response is terminal."
+    },
+    {
+      "name": "timed-out-selection",
+      "phase": "preselection",
+      "description": "Timed-out discovery leaves the account paused."
+    },
+    {
+      "name": "public-selection",
+      "phase": "public-discovery",
+      "description": "Public discovery uses only its normalized HTTPS origin."
+    },
+    {
+      "name": "public-failure",
+      "phase": "public-discovery",
+      "description": "Public failure cannot downgrade to local/direct trust."
+    },
+    {
+      "name": "local-preflight",
+      "phase": "local-direct",
+      "description": "Local/direct selection uses only the typed endpoint."
+    },
+    {
+      "name": "pinned-endpoint",
+      "phase": "pinned-endpoint",
+      "description": "Committed work uses only the pinned endpoint."
+    },
+    {
+      "name": "restart-pinned",
+      "phase": "pinned-endpoint",
+      "description": "Restart cannot reuse another account binding."
+    },
+    {
+      "name": "multiple-account-isolation",
+      "phase": "pinned-endpoint",
+      "description": "One account's pin cannot authorize another account."
+    },
+    {
+      "name": "proxy-intermediary",
+      "phase": "pinned-endpoint",
+      "description": "A proxy is a transport intermediary, not a destination."
+    },
+    {
+      "name": "background-refresh",
+      "phase": "pinned-endpoint",
+      "description": "Locale, config, CDN, and update work stays bounded."
+    },
+    {
+      "name": "selected-endpoint-failure",
+      "phase": "pinned-endpoint",
+      "description": "Pinned endpoint failure produces no fallback contact."
+    },
+    {
+      "name": "late-callback",
+      "phase": "preselection",
+      "description": "Late timers, resolver results, and callbacks stay inert."
+    }
+  ]
+}
