@@ -2,10 +2,15 @@
 
 import unittest
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from network_trace import check_trace, parse_trace_lines
+from network_trace import (
+    _proxy_target_proven,
+    check_trace,
+    parse_trace_lines,
+)
 
 
 class NetworkTraceTest(unittest.TestCase):
@@ -96,6 +101,9 @@ class NetworkTraceTest(unittest.TestCase):
             required_dns=["127.0.0.53:53"],
             resolution_evidence={
                 "origin": "https://public.example/.well-known/telegramd/client",
+                "host": "public.example",
+                "error": "NoError",
+                "addresses": ["203.0.113.10"],
                 "destinations": ["203.0.113.10:443"],
             },
         )
@@ -132,6 +140,57 @@ class NetworkTraceTest(unittest.TestCase):
             " ".join(result["violations"]),
         )
 
+    def test_public_resolution_evidence_requires_callback_result(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3',
+            'sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, '
+            'sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, '
+            '16) = 3',
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4',
+            'connect(4, {sa_family=AF_INET, sin_port=htons(443), '
+            'sin_addr=inet_addr("203.0.113.10")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="public-selection",
+            phase="public-discovery",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=["127.0.0.53:53"],
+            allowed_origins=[
+                "https://public.example/.well-known/telegramd/client",
+            ],
+            required_destinations=["203.0.113.10:443"],
+            required_dns=["127.0.0.53:53"],
+            resolution_evidence={
+                "origin": "https://public.example/.well-known/telegramd/client",
+                "destinations": ["203.0.113.10:443"],
+            },
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn("callback", " ".join(result["violations"]))
+
+    def test_proxy_proof_requires_observed_socks_exchange(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory) / "proxy-proof.json"
+            proof.write_text(
+                '{"protocol":"SOCKS5","version":5,"command":"CONNECT",'
+                '"target":"192.0.2.10:443","observed":true}\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                _proxy_target_proven(str(proof), "192.0.2.10:443"),
+            )
+
+            proof.write_text(
+                "192.0.2.10:443\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                _proxy_target_proven(str(proof), "192.0.2.10:443"),
+            )
+
     def test_public_failure_rejects_direct_fallback(self):
         events = parse_trace_lines([
             'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
@@ -143,19 +202,51 @@ class NetworkTraceTest(unittest.TestCase):
             events,
             case="public-failure",
             phase="public-discovery",
-            allowed_destinations=["203.0.113.10:443"],
+            allowed_destinations=[],
             allowed_dns=["127.0.0.53:53"],
             allowed_origins=[
-                "https://public.example/.well-known/telegramd/client",
+                "https://public-failure.invalid/.well-known/telegramd/client",
             ],
             resolution_evidence={
-                "origin": "https://public.example/.well-known/telegramd/client",
-                "destinations": ["203.0.113.10:443"],
+                "origin": "https://public-failure.invalid/.well-known/telegramd/client",
+                "host": "public-failure.invalid",
+                "error": "HostNotFound",
+                "addresses": [],
+                "destinations": [],
             },
         )
 
         self.assertFalse(result["passed"], result)
         self.assertIn("127.0.0.1:443", " ".join(result["violations"]))
+
+    def test_public_failure_without_fallback_passes(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3',
+            'sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, '
+            'sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, '
+            '16) = 3',
+        ])
+
+        result = check_trace(
+            events,
+            case="public-failure",
+            phase="public-discovery",
+            allowed_destinations=[],
+            allowed_dns=["127.0.0.53:53"],
+            allowed_origins=[
+                "https://public-failure.invalid/.well-known/telegramd/client",
+            ],
+            required_dns=["127.0.0.53:53"],
+            resolution_evidence={
+                "origin": "https://public-failure.invalid/.well-known/telegramd/client",
+                "host": "public-failure.invalid",
+                "error": "HostNotFound",
+                "addresses": [],
+                "destinations": [],
+            },
+        )
+
+        self.assertTrue(result["passed"], result)
 
     def test_public_discovery_requires_observed_origin_contact(self):
         result = check_trace(
@@ -327,6 +418,9 @@ class NetworkTraceTest(unittest.TestCase):
             required_dns=["unix:/run/systemd/resolve/io.systemd.Resolve"],
             resolution_evidence={
                 "origin": "https://public.example/.well-known/telegramd/client",
+                "host": "public.example",
+                "error": "NoError",
+                "addresses": ["203.0.113.10"],
                 "destinations": ["203.0.113.10:443"],
             },
         )

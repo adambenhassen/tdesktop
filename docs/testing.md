@@ -76,7 +76,7 @@ The case manifest is the required scenario inventory and execution contract:
 Telegram/build/network_isolation_test.sh --list-cases
 ```
 
-Every case declares its phase, bounded timeout, `-testagent` arguments, the
+Every case in the version-5 manifest declares its phase, bounded timeout, `-testagent` arguments, the
 `TDESKTOP_NETWORK_TRACE_CASE` environment binding, all four destination
 allowlists, required evidence, completion marker, update mode, and report
 filename. Public cases also declare the resolution-evidence filename, origin,
@@ -108,21 +108,27 @@ Telegram/build/network_isolation_test.sh \
 ```
 
 For a configured proxy, the manifest lists its transport address separately
-from the pinned endpoint and the scenario must write the exact pinned
-`host:port` value to `$TDESKTOP_PROXY_ASSERTION_FILE`. An unrelated destination
-or missing assertion fails. A public scenario must also write
-`network-resolution.json` under `$TDESKTOP_TEST_EVIDENCE_DIR`; the parser
-requires its normalized origin and destination sequence to match the observed
-connect activity. Each report preserves the case, observed socket metadata,
-target exit status, origin, resolution, destination, DNS, proxy, and required
-evidence contract. Raw `strace` files are not retained.
+from the pinned endpoint. The checked-in driver runs a bounded SOCKS5
+CONNECT exchange against its local observer, which writes a JSON proof only
+after parsing the target request. An unrelated destination, protocol, or
+missing proof fails. A public scenario writes `network-resolution.json` under
+`$TDESKTOP_TEST_EVIDENCE_DIR` only from the `QHostInfo` completion callback;
+the file contains the selected host, callback error, every returned address,
+and derived `host:port` destinations. The parser requires that callback result
+to match the normalized origin and observed connect activity. Each report
+preserves the case, observed socket metadata, target exit status, origin,
+resolution, destination, DNS, proxy, and required evidence contract. Raw
+`strace` files are not retained.
 
 The checked-in Debug driver in `Telegram/SourceFiles/test/test_scenario.cpp`
 consumes `TDESKTOP_NETWORK_TRACE_CASE` and registers every manifest case with
-the test runner. Endpoint cases exercise the fixed-head local discovery socket
-seam; public cases exercise the resolver and discovery-origin path; the proxy
-case records its pinned target assertion. The selected scenario must write the
-manifest's completion log under `$TDESKTOP_TEST_EVIDENCE_DIR`, including both
+the test runner. Preselection cases exercise distinct validation, cancellation,
+timeout, parser, and generation-cancellation paths. Local preflight exercises
+the framed discovery request; pin, restart, account-isolation, selected-failure,
+and refresh cases use separate binding and socket paths. Public cases exercise
+the resolver callback, and the proxy case performs a SOCKS5 target exchange.
+The selected scenario must write the manifest's completion log under
+`$TDESKTOP_TEST_EVIDENCE_DIR`, including both
 `TEST_COMPLETE` and `SCENARIO_RESULT: PASS`. A missing marker, failed result, or
 bounded timeout fails the case even when the trace has no forbidden contact.
 `background-refresh` is the one case whose contract leaves update mode enabled;
