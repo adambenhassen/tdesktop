@@ -72,6 +72,9 @@ int RunAccountLifecycleRegression() {
 	if (!domain.started()) {
 		return 1;
 	}
+	if (Core::App().activePrimaryWindow()) {
+		return 1;
+	}
 
 	// This is the production post-auth caller. It must keep the session
 	// unpublished when the synchronous authorization write is refused.
@@ -97,9 +100,6 @@ int RunAccountLifecycleRegression() {
 	// Its destructor must then recreate the marker through the clean-teardown
 	// caller, leaving the same account fail closed on the next start.
 	account->local().clearCustomServerBlocked();
-	if (const auto window = Core::App().activePrimaryWindow()) {
-		Core::App().closeWindow(window);
-	}
 	domain.local().writeAccounts();
 	domain.finish();
 	if (domain.start(QByteArray()) != Storage::StartResult::Success) {
