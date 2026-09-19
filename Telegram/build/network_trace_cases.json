@@ -34,60 +34,60 @@
     {
       "name": "canceled-selection",
       "phase": "preselection",
-      "description": "A live local discovery request is canceled before its response.",
+      "description": "Cancellation is completed without starting network discovery.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "canceled-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
-      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "failed-selection",
       "phase": "preselection",
-      "description": "A live selected-endpoint refusal completes without fallback.",
+      "description": "A failed selection is rejected without starting network discovery.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "failed-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19083"], "dns": [], "proxies": []},
-      "required": {"destinations": ["127.0.0.1:19083"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "partial-selection",
       "phase": "preselection",
-      "description": "A live partial discovery response is rejected as terminal.",
+      "description": "A partial response is rejected without starting network discovery.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "partial-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
-      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "timed-out-selection",
       "phase": "preselection",
-      "description": "A live discovery request is stopped by the production timeout path.",
+      "description": "A discovery timeout path completes without network activity.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "timed-out-selection"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
-      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -97,21 +97,26 @@
       "description": "Public discovery uses only its normalized HTTPS origin.",
       "invocation": {
         "arguments": ["-testagent"],
-        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "public-selection"},
+        "environment": {
+          "TDESKTOP_NETWORK_TRACE_CASE": "public-selection",
+          "TDESKTOP_NETWORK_TRACE_PUBLIC_FIXTURE": "public-discovery.json",
+          "TDESKTOP_NETWORK_TRACE_PUBLIC_ADDRESS": "203.0.113.10",
+          "TDESKTOP_NETWORK_TRACE_PUBLIC_PROXY": "127.0.0.1:19444"
+        },
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
       "allowlist": {
         "origins": ["https://public.example/.well-known/telegramd/client"],
         "destinations": ["203.0.113.10:443"],
-        "dns": ["127.0.0.53:53", "unix:/run/systemd/resolve/io.systemd.Resolve"],
-        "proxies": []
+        "dns": [],
+        "proxies": ["127.0.0.1:19444"]
       },
       "required": {
         "destinations": ["203.0.113.10:443"],
-        "dns": ["127.0.0.53:53", "unix:/run/systemd/resolve/io.systemd.Resolve"],
-        "proxies": [],
-        "proxy_target": null
+        "dns": [],
+        "proxies": ["127.0.0.1:19444"],
+        "proxy_target": "203.0.113.10:443"
       },
       "resolution": {
         "file": "network-resolution.json",
@@ -128,27 +133,32 @@
       "description": "Public failure cannot downgrade to local/direct trust.",
       "invocation": {
         "arguments": ["-testagent"],
-        "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "public-failure"},
+        "environment": {
+          "TDESKTOP_NETWORK_TRACE_CASE": "public-failure",
+          "TDESKTOP_NETWORK_TRACE_PUBLIC_FIXTURE": "public-discovery.json",
+          "TDESKTOP_NETWORK_TRACE_PUBLIC_ADDRESS": "203.0.113.10",
+          "TDESKTOP_NETWORK_TRACE_PUBLIC_PROXY": "127.0.0.1:19444"
+        },
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
       "allowlist": {
         "origins": ["https://public-failure.invalid/.well-known/telegramd/client"],
-        "destinations": [],
-        "dns": ["127.0.0.53:53", "unix:/run/systemd/resolve/io.systemd.Resolve"],
-        "proxies": []
+        "destinations": ["203.0.113.10:443"],
+        "dns": [],
+        "proxies": ["127.0.0.1:19444"]
       },
       "required": {
-        "destinations": [],
-        "dns": ["127.0.0.53:53", "unix:/run/systemd/resolve/io.systemd.Resolve"],
-        "proxies": [],
-        "proxy_target": null
+        "destinations": ["203.0.113.10:443"],
+        "dns": [],
+        "proxies": ["127.0.0.1:19444"],
+        "proxy_target": "203.0.113.10:443"
       },
       "resolution": {
         "file": "network-resolution.json",
         "origin": "https://public-failure.invalid/.well-known/telegramd/client",
         "host": "public-failure.invalid",
-        "destinations": []
+        "destinations": ["203.0.113.10:443"]
       },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
@@ -255,21 +265,28 @@
       },
       "allowlist": {"origins": [], "destinations": ["127.0.0.1:19083"], "dns": [], "proxies": []},
       "required": {"destinations": ["127.0.0.1:19083"], "dns": [], "proxies": [], "proxy_target": null},
+      "failure_evidence": {
+        "file": "network-selected-failure.json",
+        "endpoint": "127.0.0.1:19083",
+        "attempted": true,
+        "failed": true,
+        "fallback_suppressed": true
+      },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
     {
       "name": "late-callback",
       "phase": "preselection",
-      "description": "A live response arriving after cancellation has no callback effect.",
+      "description": "A late callback is discarded without network activity.",
       "invocation": {
         "arguments": ["-testagent"],
         "environment": {"TDESKTOP_NETWORK_TRACE_CASE": "late-callback"},
         "timeout_seconds": 20,
         "update_mode": "disabled"
       },
-      "allowlist": {"origins": [], "destinations": ["127.0.0.1:19081"], "dns": [], "proxies": []},
-      "required": {"destinations": ["127.0.0.1:19081"], "dns": [], "proxies": [], "proxy_target": null},
+      "allowlist": {"origins": [], "destinations": [], "dns": [], "proxies": []},
+      "required": {"destinations": [], "dns": [], "proxies": [], "proxy_target": null},
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     }

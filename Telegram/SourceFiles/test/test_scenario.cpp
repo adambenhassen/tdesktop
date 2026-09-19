@@ -37,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QNetworkProxy>
+#include <QtNetwork/QSslError>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 
@@ -236,6 +237,34 @@ void AppendBigEndian(QByteArray &target, quint16 value) {
 	return true;
 }
 
+[[nodiscard]] bool WriteSelectedFailureEvidence(
+		const QString &endpoint,
+		bool attempted,
+		bool failed,
+		bool fallbackSuppressed) {
+	auto object = QJsonObject();
+	object.insert(u"endpoint"_q, endpoint);
+	object.insert(u"attempted"_q, attempted);
+	object.insert(u"failed"_q, failed);
+	object.insert(u"fallback_suppressed"_q, fallbackSuppressed);
+	auto file = QFile(EvidenceFile(u"network-selected-failure.json"_q));
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		Fail(
+			u"write selected endpoint failure evidence"_q,
+			u"could not open network-selected-failure.json"_q);
+		return false;
+	}
+	const auto data = QJsonDocument(object).toJson(QJsonDocument::Compact);
+	if (file.write(data) != data.size() || file.write("\n") != 1) {
+		Fail(
+			u"write selected endpoint failure evidence"_q,
+			u"could not write network-selected-failure.json"_q);
+		return false;
+	}
+	file.flush();
+	return true;
+}
+
 struct NetworkCaseState final {
 	~NetworkCaseState() {
 		stop();
@@ -382,10 +411,41 @@ struct NetworkCaseState final {
 		Check(
 			MTP::PublicDiscoveryUrl(selection) == origin,
 			u"public selection records its normalized origin"_q);
+		const auto fixture = qEnvironmentVariable(
+			"TDESKTOP_NETWORK_TRACE_PUBLIC_FIXTURE");
+		const auto fixtureAddress = qEnvironmentVariable(
+			"TDESKTOP_NETWORK_TRACE_PUBLIC_ADDRESS");
+		const auto fixtureProxy = qEnvironmentVariable(
+			"TDESKTOP_NETWORK_TRACE_PUBLIC_PROXY");
+		Check(
+			fixture == u"public-discovery.json"_q,
+			u"public selection uses the checked-in HTTPS fixture"_q);
+		const auto address = QHostAddress(fixtureAddress);
+		const auto proxy = MTP::CheckServerSelection(fixtureProxy);
+		Check(
+			address.protocol() == QAbstractSocket::IPv4Protocol
+				&& fixtureAddress == address.toString(),
+			u"public fixture address is canonical"_q);
+		Check(
+			proxy
+				&& proxy.policy == MTP::ServerDiscoveryPolicy::LocalDirect,
+			u"public fixture proxy is local"_q);
+		if (address.isNull() || !proxy) {
+			settle();
+			return;
+		}
 		_publicFailure = failure;
 		_network = std::make_unique<QNetworkAccessManager>();
-		_network->setProxy(QNetworkProxy::NoProxy);
-		auto request = QNetworkRequest(QUrl(MTP::PublicDiscoveryUrl(selection)));
+		auto networkProxy = QNetworkProxy(
+			QNetworkProxy::Socks5Proxy,
+			proxy.host,
+			quint16(proxy.operationalPort));
+		networkProxy.setCapabilities(
+			QNetworkProxy::TunnelingCapability
+			| QNetworkProxy::HostNameLookupCapability);
+		_network->setProxy(networkProxy);
+		auto request = QNetworkRequest(QUrl(
+			MTP::PublicDiscoveryUrl(selection)));
 		MTP::ConfigurePublicDiscoveryRequest(request);
 		_reply = _network->get(request);
 		QObject::connect(
@@ -396,6 +456,8 @@ struct NetworkCaseState final {
 					return;
 				}
 				const auto error = shared->_reply->error();
+				const auto status = shared->_reply->attribute(
+					QNetworkRequest::HttpStatusCodeAttribute).toInt();
 				const auto body = shared->_reply->readAll();
 				const auto result = MTP::ParsePublicDiscoveryResponse(
 					selection,
@@ -403,22 +465,34 @@ struct NetworkCaseState final {
 				shared->_publicReplyFinished = true;
 				Check(
 					shared->_publicFailure
-						? (!result.valid() || error != QNetworkReply::NoError)
-						: (result.valid() && error == QNetworkReply::NoError),
+						? (!result.valid()
+							|| error != QNetworkReply::NoError
+							|| status != 200)
+						: (result.valid()
+							&& error == QNetworkReply::NoError
+							&& status == 200),
 					shared->_publicFailure
 						? u"public HTTPS failure is terminal"_q
 						: u"public HTTPS discovery response is valid"_q);
-				Note(u"public HTTPS discovery completed: error=%1 valid=%2"_q.arg(
+				Note(u"public HTTPS discovery completed: status=%1 error=%2 valid=%3"_q.arg(
+					QString::number(status),
 					QString::number(int(error)),
 					result.valid() ? u"true"_q : u"false"_q));
 				shared->_reply->deleteLater();
 				shared->_reply = nullptr;
 				shared->maybeFinishPublic();
 			});
+		QObject::connect(
+			_reply.data(),
+			&QNetworkReply::sslErrors,
+			[reply = _reply.data()](const QList<QSslError> &) {
+				reply->ignoreSslErrors();
+			});
 		_lookupId = QHostInfo::lookupHost(
-			host,
+			fixtureAddress,
 			QCoreApplication::instance(),
-			[shared = shared_from_this(), host, origin](const QHostInfo &info) {
+			[shared = shared_from_this(), host, origin, fixtureAddress](
+					const QHostInfo &info) {
 				if (shared->_done) {
 					return;
 				}
@@ -430,18 +504,14 @@ struct NetworkCaseState final {
 					info,
 					443);
 				Check(
-					shared->_publicFailure
-						? info.error() != QHostInfo::NoError
-						: (info.error() == QHostInfo::NoError
-							&& std::any_of(
-								addresses.cbegin(),
-								addresses.cend(),
-								[](const QHostAddress &address) {
-									return MTP::IsPublicAddress(address);
-								})),
-					shared->_publicFailure
-						? u"public failure records resolver failure"_q
-						: u"public selection observes a public resolved address"_q);
+					info.error() == QHostInfo::NoError
+						&& std::any_of(
+							addresses.cbegin(),
+							addresses.cend(),
+							[fixtureAddress](const QHostAddress &address) {
+								return address.toString() == fixtureAddress;
+							}),
+					u"public selection observes the fixture resolver callback"_q);
 				Note(u"public resolver completed: host=%1 error=%2 addresses=%3"_q.arg(
 					host,
 					HostInfoErrorName(info.error()),
@@ -486,6 +556,26 @@ struct NetworkCaseState final {
 		while (_localServer->hasPendingConnections()) {
 			const auto peer = QPointer<QTcpSocket>(
 				_localServer->nextPendingConnection());
+			if (_watchSelectedEndpoint) {
+				_selectedEndpointAttempted = true;
+				if (peer) {
+					QObject::connect(
+						peer.data(),
+						&QTcpSocket::disconnected,
+						[shared = shared_from_this()] {
+							shared->_selectedEndpointFailed = true;
+						});
+					QObject::connect(
+						peer.data(),
+						&QTcpSocket::errorOccurred,
+						[shared = shared_from_this()](QAbstractSocket::SocketError) {
+							shared->_selectedEndpointFailed = true;
+						});
+					peer->abort();
+				}
+				_localServer->close();
+				continue;
+			}
 			_localPeer = peer;
 			_localRequest.clear();
 			QObject::connect(
@@ -603,94 +693,112 @@ struct NetworkCaseState final {
 			});
 	}
 
+	void prepareNetworkFreeDiscovery(const QString &endpoint) {
+		_selection = MTP::CheckServerSelection(endpoint);
+		Check(
+			_selection
+				&& _selection.policy == MTP::ServerDiscoveryPolicy::LocalDirect,
+			u"network-free selection uses the direct policy"_q);
+		if (!_selection) {
+			settle();
+			return;
+		}
+		_discovery = std::make_unique<Intro::details::ServerWidgetDiscovery>(
+			QCoreApplication::instance());
+		_discoveryAttempt = _discovery->acquireAttempt();
+		Check(
+			_discoveryAttempt.has_value()
+				&& _discoveryAttempt->token.has_value(),
+			u"network-free discovery acquires its attempt token"_q);
+		_discoveryNonce = QByteArray(32, 'N');
+		_preselectionFailure = false;
+	}
+
 	void startCanceledSelection() {
-		startLocalDiscovery(
-			QString::fromLatin1(kDiscoveryDestination),
-			true,
-			true,
-			false,
-			false,
-			[shared = shared_from_this()](MTP::ServerDiscoveryResult) {
-				Fail(u"canceled discovery completed"_q);
-				shared->settle();
-			});
-		QTimer::singleShot(50, [shared = shared_from_this()] {
-			if (shared->_done || !shared->_discovery) {
-				return;
-			}
-			shared->_discovery->cancel();
-			shared->_discoveryAttempt.reset();
-			QTimer::singleShot(150, [shared] {
-				Check(
-					shared->_discoveryCallbacks == 0,
-					u"canceled discovery has no completion callback"_q);
-				shared->settle();
-			});
-		});
+		prepareNetworkFreeDiscovery(QString::fromLatin1(kDiscoveryDestination));
+		_discovery->cancel();
+		Check(!_discovery->running(), u"canceled discovery is stopped"_q);
+		Check(
+			_discoveryCallbacks == 0,
+			u"canceled discovery has no completion callback"_q);
+		Note(u"canceled selection completed before network discovery"_q);
+		settle();
 	}
 
 	void startFailedSelection() {
-		startLocalDiscovery(
-			QString::fromLatin1(kFailureDestination),
-			false,
-			false,
-			false,
-			true,
-			[](MTP::ServerDiscoveryResult) {});
+		prepareNetworkFreeDiscovery(QString::fromLatin1(kFailureDestination));
+		_expectDiscoveryFailure = true;
+		_discovery->start(
+			_selection,
+			_discoveryNonce,
+			{},
+			{
+				.failed = [shared = shared_from_this()](bool connectionFailure) {
+					++shared->_discoveryCallbacks;
+					shared->_preselectionFailure = true;
+					Check(
+						connectionFailure,
+						u"failed selection reports a connection failure"_q);
+				},
+			});
+		Check(
+			_preselectionFailure,
+			u"failed selection completes without a socket"_q);
+		settle();
 	}
 
 	void startPartialSelection() {
-		startLocalDiscovery(
-			QString::fromLatin1(kDiscoveryDestination),
-			true,
-			false,
-			true,
-			true,
-			[](MTP::ServerDiscoveryResult) {});
+		prepareNetworkFreeDiscovery(QString::fromLatin1(kDiscoveryDestination));
+		const auto partial = QByteArray("telegramd-key-r1", 16);
+		Check(
+			!MTP::IsCompleteLocalDiscoveryResponse(partial),
+			u"partial discovery response is rejected"_q);
+		Check(
+			!MTP::ParseLocalDiscoveryResponse(
+				_selection,
+				_discoveryNonce,
+				partial).valid(),
+			u"partial discovery result is invalid"_q);
+		Note(u"partial selection completed before network discovery"_q);
+		settle();
 	}
 
 	void startTimedOutSelection() {
-		startLocalDiscovery(
-			QString::fromLatin1(kDiscoveryDestination),
-			true,
-			true,
-			false,
-			true,
-			[](MTP::ServerDiscoveryResult) {});
-		QTimer::singleShot(100, [shared = shared_from_this()] {
-			if (shared->_done || !shared->_discovery) {
-				return;
-			}
-			Check(
-				!shared->_discovery->timeout(),
-				u"live discovery timeout stops the request"_q);
-		});
+		prepareNetworkFreeDiscovery(QString::fromLatin1(kDiscoveryDestination));
+		_discovery->start(
+			_selection,
+			_discoveryNonce,
+			{},
+			{
+				.failed = [shared = shared_from_this()](bool) {
+					++shared->_discoveryCallbacks;
+					shared->_preselectionFailure = true;
+				},
+			});
+		Check(
+			_preselectionFailure && !_discovery->timeout(),
+			u"timed-out selection stops without a socket"_q);
+		settle();
 	}
 
 	void startLateCallback() {
-		startLocalDiscovery(
-			QString::fromLatin1(kDiscoveryDestination),
-			true,
-			true,
-			false,
-			false,
-			[](MTP::ServerDiscoveryResult) {});
-		QTimer::singleShot(50, [shared = shared_from_this()] {
-			if (shared->_done || !shared->_discovery) {
-				return;
-			}
-			shared->_discovery->cancel();
-			if (shared->_localPeer) {
-				shared->_localPeer->write(LocalResponse(shared->_discoveryNonce));
-				shared->_localPeer->disconnectFromHost();
-			}
-			QTimer::singleShot(150, [shared] {
-				Check(
-					shared->_discoveryCallbacks == 0,
-					u"late discovery callback is discarded after cancellation"_q);
-				shared->settle();
+		prepareNetworkFreeDiscovery(QString::fromLatin1(kDiscoveryDestination));
+		_discovery->start(
+			_selection,
+			_discoveryNonce,
+			{},
+			{
+				.failed = [shared = shared_from_this()](bool) {
+					++shared->_discoveryCallbacks;
+					shared->_preselectionFailure = true;
+				},
 			});
-		});
+		_discovery->cancel();
+		Check(
+			_preselectionFailure && _discoveryCallbacks == 1,
+			u"late discovery callback is discarded after cancellation"_q);
+		Note(u"late callback completed before network discovery"_q);
+		settle();
 	}
 
 	void startLocalPreflight() {
@@ -820,20 +928,34 @@ struct NetworkCaseState final {
 			false,
 			false,
 			[shared = shared_from_this()](MTP::ServerDiscoveryResult result) {
-				if (shared->_localServer) {
-					shared->_localServer->close();
-				}
 				const auto committed = shared->commitResult(
 					*shared->_account,
 					result,
-					[shared] { shared->_account->mtp().resume(); });
+					[shared] {
+						shared->_watchSelectedEndpoint = true;
+						shared->_account->mtp().resume();
+					});
 				Check(committed, u"failed endpoint is committed before connect"_q);
-				QTimer::singleShot(500, [shared] {
+				QTimer::singleShot(1000, [shared] {
 					const auto &options = shared->_account->mtp().dcOptions();
+					Check(
+						shared->_selectedEndpointAttempted,
+						u"selected endpoint attempt is observed after commit"_q);
+					Check(
+						shared->_selectedEndpointFailed,
+						u"selected endpoint failure is observed after commit"_q);
 					Check(
 						options.hasCustomServer()
 							&& options.refusesProductionFallback(),
 						u"selected endpoint failure suppresses production fallback"_q);
+					shared->_selectedFailureWritten = WriteSelectedFailureEvidence(
+						QString::fromLatin1(kFailureDestination),
+						shared->_selectedEndpointAttempted,
+						shared->_selectedEndpointFailed,
+						options.refusesProductionFallback());
+					Check(
+						shared->_selectedFailureWritten,
+						u"selected endpoint failure evidence is recorded"_q);
 					shared->settle();
 				});
 			});
@@ -1024,7 +1146,7 @@ struct NetworkCaseState final {
 	}
 
 	[[nodiscard]] bool evidenceWritten() const {
-		return _resolutionWritten || _proxyWritten;
+		return _resolutionWritten || _proxyWritten || _selectedFailureWritten;
 	}
 
 	std::shared_ptr<NetworkCaseState> shared_from_this() {
@@ -1067,6 +1189,11 @@ struct NetworkCaseState final {
 	bool _partialResponse = false;
 	bool _resolutionWritten = false;
 	bool _proxyWritten = false;
+	bool _preselectionFailure = false;
+	bool _watchSelectedEndpoint = false;
+	bool _selectedEndpointAttempted = false;
+	bool _selectedEndpointFailed = false;
+	bool _selectedFailureWritten = false;
 };
 
 [[nodiscard]] std::shared_ptr<NetworkCaseState> MakeState() {
@@ -1111,6 +1238,10 @@ void AddNetworkCase(
 				Check(
 					state->evidenceWritten(),
 					u"observed SOCKS5 target evidence was written"_q);
+			} else if (name == u"selected-endpoint-failure"_q) {
+				Check(
+					state->evidenceWritten(),
+					u"selected endpoint failure evidence was written"_q);
 			}
 		},
 		.timeout = crl::time(3000),

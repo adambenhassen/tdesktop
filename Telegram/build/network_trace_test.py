@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
-import unittest
+import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,6 +42,36 @@ class NetworkTraceTest(unittest.TestCase):
         self.assertTrue(result["passed"], result)
         self.assertEqual(result["events"][0]["kind"], "local")
 
+    def test_allowlisted_listener_bind_keeps_observer_socket_bounded(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
+            'bind(3, {sa_family=AF_INET, sin_port=htons(19081), '
+            'sin_addr=inet_addr("127.0.0.1")}, 16) = 0',
+            'connect(3, {sa_family=AF_INET, sin_port=htons(19081), '
+            'sin_addr=inet_addr("127.0.0.1")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="local-preflight",
+            phase="local-direct",
+            allowed_destinations=["127.0.0.1:19081"],
+            allowed_dns=[],
+            required_destinations=["127.0.0.1:19081"],
+        )
+
+        self.assertTrue(result["passed"], result)
+
+        rejected = check_trace(
+            events,
+            case="local-preflight",
+            phase="local-direct",
+            allowed_destinations=["127.0.0.1:19082"],
+            allowed_dns=[],
+            required_destinations=["127.0.0.1:19082"],
+        )
+        self.assertFalse(rejected["passed"], rejected)
+
     def test_preselection_rejects_official_connect(self):
         events = parse_trace_lines([
             'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
@@ -77,7 +108,7 @@ class NetworkTraceTest(unittest.TestCase):
 
         self.assertFalse(result["passed"], result)
 
-    def test_preselection_can_bind_a_live_case_destination(self):
+    def test_preselection_rejects_case_destination_allowlist(self):
         events = parse_trace_lines([
             'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
             'connect(3, {sa_family=AF_INET, sin_port=htons(19081), '
@@ -93,22 +124,11 @@ class NetworkTraceTest(unittest.TestCase):
             required_destinations=["127.0.0.1:19081"],
         )
 
-        self.assertTrue(result["passed"], result)
-
-        rejected = check_trace(
-            parse_trace_lines([
-                'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, '
-                'IPPROTO_TCP) = 4',
-                'connect(4, {sa_family=AF_INET, sin_port=htons(19082), '
-                'sin_addr=inet_addr("127.0.0.1")}, 16) = 0',
-            ]),
-            case="canceled-selection",
-            phase="preselection",
-            allowed_destinations=["127.0.0.1:19081"],
-            allowed_dns=[],
-            required_destinations=["127.0.0.1:19081"],
+        self.assertFalse(result["passed"], result)
+        self.assertIn(
+            "preselection cannot allow network destinations",
+            " ".join(result["violations"]),
         )
-        self.assertFalse(rejected["passed"], rejected)
 
     def test_public_discovery_allows_only_resolver_and_origin(self):
         events = parse_trace_lines([
@@ -132,6 +152,38 @@ class NetworkTraceTest(unittest.TestCase):
             ],
             required_destinations=["203.0.113.10:443"],
             required_dns=["127.0.0.53:53"],
+            resolution_evidence={
+                "origin": "https://public.example/.well-known/telegramd/client",
+                "host": "public.example",
+                "error": "NoError",
+                "addresses": ["203.0.113.10"],
+                "destinations": ["203.0.113.10:443"],
+            },
+        )
+
+        self.assertTrue(result["passed"], result)
+
+    def test_public_fixture_binds_proxy_target_to_resolution(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3',
+            'connect(3, {sa_family=AF_INET, sin_port=htons(19444), '
+            'sin_addr=inet_addr("127.0.0.1")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="public-selection",
+            phase="public-discovery",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=[],
+            allowed_origins=[
+                "https://public.example/.well-known/telegramd/client",
+            ],
+            allowed_proxies=["127.0.0.1:19444"],
+            required_destinations=["203.0.113.10:443"],
+            required_proxies=["127.0.0.1:19444"],
+            proxy_target="203.0.113.10:443",
+            proxy_target_proven=True,
             resolution_evidence={
                 "origin": "https://public.example/.well-known/telegramd/client",
                 "host": "public.example",
@@ -223,6 +275,37 @@ class NetworkTraceTest(unittest.TestCase):
             self.assertFalse(
                 _proxy_target_proven(str(proof), "192.0.2.10:443"),
             )
+
+    def test_selected_failure_requires_failure_evidence(self):
+        parser = Path(__file__).resolve().parent / "network_trace.py"
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "trace"
+            trace.write_text(
+                'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3\n'
+                'connect(3, {sa_family=AF_INET, sin_port=htons(19083), '
+                'sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(parser),
+                    "--trace",
+                    str(trace),
+                    "--case",
+                    "selected-endpoint-failure",
+                    "--phase",
+                    "pinned-endpoint",
+                    "--allow-destination",
+                    "127.0.0.1:19083",
+                    "--require-destination",
+                    "127.0.0.1:19083",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_public_failure_rejects_direct_fallback(self):
         events = parse_trace_lines([
