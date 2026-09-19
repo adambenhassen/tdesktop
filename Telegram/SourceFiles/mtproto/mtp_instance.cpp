@@ -53,6 +53,19 @@ int GetNextRequestId() {
 
 } // namespace details
 
+bool CanStartSpecialConfigRequest(
+		const QString &delegatedDomain,
+		bool networkAllowed,
+		bool httpTimeValid,
+		bool requestActive,
+		bool refusesProductionFallback) {
+	return !delegatedDomain.isEmpty()
+		&& networkAllowed
+		&& !httpTimeValid
+		&& !requestActive
+		&& !refusesProductionFallback;
+}
+
 class Instance::Private : private Sender {
 public:
 	Private(
@@ -660,11 +673,15 @@ void Instance::Private::badConfigurationError() {
 }
 
 void Instance::Private::syncHttpUnixtime() {
-	if (!networkAllowed() || base::unixtime::http_valid() || _httpUnixtimeLoader) {
-		return;
-	} else if (dcOptions().refusesProductionFallback()) {
+	if (!CanStartSpecialConfigRequest(
+			configValues().txtDomainString,
+			networkAllowed(),
+			base::unixtime::http_valid(),
+			bool(_httpUnixtimeLoader),
+			dcOptions().refusesProductionFallback())) {
 		// This loader takes the same DNS and Firebase route as the
-		// special config request, so a pinned account must not run it.
+		// special config request, so a pinned or unenrolled account must
+		// not run it.
 		return;
 	}
 	_httpUnixtimeLoader = std::make_unique<SpecialConfigRequest>([=] {

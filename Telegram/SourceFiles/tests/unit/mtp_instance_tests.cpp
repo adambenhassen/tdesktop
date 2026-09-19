@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "mtproto/mtp_instance.h"
+#include "mtproto/mtproto_dc_options.h"
 
 namespace {
 
@@ -124,4 +125,25 @@ TEST_CASE(PausingEnrollmentInvalidatesTheCurrentGeneration) {
 	CHECK(gate.resume().resumed);
 	CHECK(!gate.stopTokenIsCurrent(whilePaused));
 	CHECK(gate.networkAllowed());
+}
+
+// An untrusted delegated background value must not reach the special-config
+// loader when production fallback is refused. Count the observable request
+// boundary rather than relying on the loader implementation being a no-op.
+TEST_CASE(RefusedFallbackSkipsHttpTimeSpecialConfigIo) {
+	auto options = DcOptions(Environment::Production);
+	options.constructUnenrolled();
+	const auto unsafeDelegatedUrl = u"https://updates.attacker.test"_q;
+	auto specialConfigIoAttempts = 0;
+
+	if (CanStartSpecialConfigRequest(
+			unsafeDelegatedUrl,
+			true,
+			false,
+			false,
+			options.refusesProductionFallback())) {
+		++specialConfigIoAttempts;
+	}
+
+	CHECK_EQ(specialConfigIoAttempts, 0);
 }
