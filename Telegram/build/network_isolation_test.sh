@@ -18,9 +18,14 @@ COMPLETION_LOG_NAME="test_log.txt"
 COMPLETION_MARKER="TEST_COMPLETE"
 COMPLETION_RESULT="SCENARIO_RESULT: PASS"
 RESOLUTION_FILE=""
+FAILURE_EVIDENCE_FILE=""
+FAILURE_EVIDENCE_ENDPOINT=""
 TEST_EVIDENCE_DIR=""
 PROXY_ASSERTION_FILE=""
 PROXY_TARGET=""
+PUBLIC_FIXTURE_FILE=""
+PUBLIC_FIXTURE_ADDRESS=""
+PUBLIC_FIXTURE_PROXY=""
 INVOCATION_ARGS=()
 INVOCATION_ENV=()
 ORIGINS=()
@@ -33,6 +38,7 @@ REQUIRED_PROXIES=()
 COMMAND=()
 RUN_ROOT=""
 RUNNER_PID=""
+PUBLIC_FIXTURE_PID=""
 
 usage() {
 	cat >&2 <<'EOF'
@@ -61,6 +67,10 @@ require_command() {
 cleanup() {
 	local status=$?
 	set +e
+	if [ -n "$PUBLIC_FIXTURE_PID" ] && kill -0 "$PUBLIC_FIXTURE_PID" 2>/dev/null; then
+		kill -TERM "$PUBLIC_FIXTURE_PID" 2>/dev/null || true
+		wait "$PUBLIC_FIXTURE_PID" 2>/dev/null || true
+	fi
 	if [ -n "$RUNNER_PID" ] && kill -0 "$RUNNER_PID" 2>/dev/null; then
 		kill -TERM "$RUNNER_PID" 2>/dev/null || true
 		wait "$RUNNER_PID" 2>/dev/null || true
@@ -195,6 +205,7 @@ with open(sys.argv[1], encoding="utf-8") as manifest:
             json.dumps(allowlist, sort_keys=True),
             json.dumps(case["required"], sort_keys=True),
             json.dumps(case.get("resolution"), sort_keys=True),
+            json.dumps(case.get("failure_evidence"), sort_keys=True),
             json.dumps(case["completion"], sort_keys=True),
             case["description"],
         )))
@@ -333,6 +344,10 @@ for index, case in enumerate(cases):
         fail(f"{name} has an invalid public discovery origin")
     if phase != "public-discovery" and allowlist["origins"]:
         fail(f"{name} cannot allow a public discovery origin")
+    if phase == "preselection" and any(
+        allowlist[field] for field in ("destinations", "dns", "proxies")
+    ):
+        fail(f"{name} must keep preselection network-free")
 
     required = case.get("required")
     if not isinstance(required, dict) or set(required) != {
@@ -347,6 +362,10 @@ for index, case in enumerate(cases):
             fail(f"{name} has invalid required {field} evidence")
         if any(value not in allowlist[field] for value in values):
             fail(f"{name} requires a value outside its {field} allowlist")
+    if phase == "preselection" and any(
+        required[field] for field in ("destinations", "dns", "proxies")
+    ):
+        fail(f"{name} must not require preselection network evidence")
     proxy_target = required["proxy_target"]
     if proxy_target is not None and (
         not isinstance(proxy_target, str)
@@ -355,7 +374,10 @@ for index, case in enumerate(cases):
     ):
         fail(f"{name} has an invalid proxy target assertion")
     if phase == "public-discovery" and (
-        not required["dns"]
+        (
+            not required["dns"]
+            and not (required["proxies"] and proxy_target is not None)
+        )
         or (
             name != "public-failure"
             and (
@@ -365,12 +387,36 @@ for index, case in enumerate(cases):
         )
     ):
         fail(f"{name} must bind its origin to every resolved destination")
+    if phase == "public-discovery" and invocation["environment"].get(
+        "TDESKTOP_NETWORK_TRACE_PUBLIC_FIXTURE"
+    ) != "public-discovery.json":
+        fail(f"{name} must use the controlled public fixture")
+    if phase == "public-discovery" and (
+        invocation["environment"].get("TDESKTOP_NETWORK_TRACE_PUBLIC_ADDRESS")
+        != "203.0.113.10"
+        or invocation["environment"].get("TDESKTOP_NETWORK_TRACE_PUBLIC_PROXY")
+        != "127.0.0.1:19444"
+    ):
+        fail(f"{name} must bind the controlled public fixture endpoints")
     if phase in {"local-direct", "pinned-endpoint"} and not required["destinations"]:
         fail(f"{name} needs required endpoint evidence")
     if name == "proxy-intermediary" and (
         not required["proxies"] or proxy_target is None
     ):
         fail(f"{name} needs proxy transport and target evidence")
+
+    failure_evidence = case.get("failure_evidence")
+    if name == "selected-endpoint-failure":
+        if failure_evidence != {
+            "file": "network-selected-failure.json",
+            "endpoint": "127.0.0.1:19083",
+            "attempted": True,
+            "failed": True,
+            "fallback_suppressed": True,
+        }:
+            fail(f"{name} needs post-commit failure evidence")
+    elif failure_evidence is not None:
+        fail(f"{name} cannot declare failure evidence")
 
     resolution = case.get("resolution")
     if phase == "public-discovery":
@@ -485,6 +531,24 @@ elif field == "completion_result":
 elif field == "resolution_file":
     if case.get("resolution") is not None:
         print(case["resolution"]["file"])
+elif field == "failure_evidence_file":
+    if case.get("failure_evidence") is not None:
+        print(case["failure_evidence"]["file"])
+elif field == "failure_evidence_endpoint":
+    if case.get("failure_evidence") is not None:
+        print(case["failure_evidence"]["endpoint"])
+elif field == "public_fixture_file":
+    print(case["invocation"]["environment"].get(
+        "TDESKTOP_NETWORK_TRACE_PUBLIC_FIXTURE", ""
+    ))
+elif field == "public_fixture_address":
+    print(case["invocation"]["environment"].get(
+        "TDESKTOP_NETWORK_TRACE_PUBLIC_ADDRESS", ""
+    ))
+elif field == "public_fixture_proxy":
+    print(case["invocation"]["environment"].get(
+        "TDESKTOP_NETWORK_TRACE_PUBLIC_PROXY", ""
+    ))
 elif field == "arguments":
     print("\n".join(case["invocation"]["arguments"]))
 elif field == "environment":
@@ -563,6 +627,11 @@ COMPLETION_LOG_NAME="$(case_contract_values completion_log)"
 COMPLETION_MARKER="$(case_contract_values completion_marker)"
 COMPLETION_RESULT="$(case_contract_values completion_result)"
 RESOLUTION_FILE="$(case_contract_values resolution_file)"
+FAILURE_EVIDENCE_FILE="$(case_contract_values failure_evidence_file)"
+FAILURE_EVIDENCE_ENDPOINT="$(case_contract_values failure_evidence_endpoint)"
+PUBLIC_FIXTURE_FILE="$(case_contract_values public_fixture_file)"
+PUBLIC_FIXTURE_ADDRESS="$(case_contract_values public_fixture_address)"
+PUBLIC_FIXTURE_PROXY="$(case_contract_values public_fixture_proxy)"
 PROXY_TARGET="$(case_contract_values proxy_target)"
 while IFS= read -r argument; do
 	[ -n "$argument" ] && INVOCATION_ARGS+=("$argument")
@@ -619,6 +688,9 @@ rm -f -- "$TEST_EVIDENCE_DIR/$COMPLETION_LOG_NAME" "$PROXY_ASSERTION_FILE"
 if [ -n "$RESOLUTION_FILE" ]; then
 	rm -f -- "$TEST_EVIDENCE_DIR/$RESOLUTION_FILE"
 fi
+if [ -n "$FAILURE_EVIDENCE_FILE" ]; then
+	rm -f -- "$TEST_EVIDENCE_DIR/$FAILURE_EVIDENCE_FILE"
+fi
 TRACE_PREFIX="$RUN_ROOT/strace"
 REPORT="$EVIDENCE_DIR/$REPORT_NAME"
 COMMAND_FILE="$EVIDENCE_DIR/command.txt"
@@ -665,7 +737,50 @@ fi
 printf '%q ' "${COMMAND[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
 
+start_public_fixture() {
+	if [ "$PHASE" != "public-discovery" ]; then
+		return
+	fi
+	require_command openssl
+	[ "$PUBLIC_FIXTURE_FILE" = "public-discovery.json" ] || \
+		fail "public fixture file is not trusted"
+	[ "$PUBLIC_FIXTURE_ADDRESS" = "203.0.113.10" ] || \
+		fail "public fixture address is not trusted"
+	[ "$PUBLIC_FIXTURE_PROXY" = "127.0.0.1:19444" ] || \
+		fail "public fixture proxy is not trusted"
+	local certificate="$RUN_ROOT/public-fixture-cert.pem"
+	local key="$RUN_ROOT/public-fixture-key.pem"
+	local ready="$RUN_ROOT/public-fixture.ready"
+	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+		-subj /CN=public.example \
+		-addext subjectAltName=DNS:public.example \
+		-keyout "$key" -out "$certificate" >/dev/null 2>&1 \
+		|| fail "public fixture certificate generation failed"
+	python3 "$ROOT/network_public_fixture.py" \
+		--certificate "$certificate" \
+		--key "$key" \
+		--response "$ROOT/network_trace_fixtures/$PUBLIC_FIXTURE_FILE" \
+		--proof "$PROXY_ASSERTION_FILE" \
+		--ready "$ready" \
+		--proxy-port "${PUBLIC_FIXTURE_PROXY##*:}" \
+		--https-port 19443 &
+	PUBLIC_FIXTURE_PID=$!
+	for _ in $(seq 1 100); do
+		if [ -f "$ready" ]; then
+			return
+		fi
+		if ! kill -0 "$PUBLIC_FIXTURE_PID" 2>/dev/null; then
+			wait "$PUBLIC_FIXTURE_PID" 2>/dev/null || true
+			fail "public fixture exited before becoming ready"
+		fi
+		sleep 0.05
+	done
+	fail "public fixture did not become ready"
+}
+
 trap cleanup EXIT
+start_public_fixture
+
 set +e
 env \
 	HOME="$RUN_ROOT/home" \
@@ -718,6 +833,12 @@ fi
 if [ -n "$RESOLUTION_FILE" ]; then
 	PARSER_COMMAND+=(--resolution-evidence "$TEST_EVIDENCE_DIR/$RESOLUTION_FILE")
 fi
+if [ -n "$FAILURE_EVIDENCE_FILE" ]; then
+	PARSER_COMMAND+=(
+		--failure-evidence "$TEST_EVIDENCE_DIR/$FAILURE_EVIDENCE_FILE"
+		--failure-endpoint "$FAILURE_EVIDENCE_ENDPOINT"
+	)
+fi
 
 set +e
 "${PARSER_COMMAND[@]}" > "$EVIDENCE_DIR/network-report.stdout.json"
@@ -752,6 +873,33 @@ if ! grep -Fqx "$COMPLETION_RESULT" "$COMPLETION_LOG" 2>/dev/null; then
 	printf 'FAIL: case=%s missing completion result=%s\n' \
 		"$CASE_NAME" "$COMPLETION_RESULT" | tee "$STATUS_FILE" >&2
 	exit 1
+fi
+
+if [ -n "$FAILURE_EVIDENCE_FILE" ]; then
+	python3 - "$TEST_EVIDENCE_DIR/$FAILURE_EVIDENCE_FILE" "$FAILURE_EVIDENCE_ENDPOINT" <<'PY'
+import json
+import sys
+
+path, endpoint = sys.argv[1:]
+try:
+    with open(path, encoding="utf-8") as evidence:
+        observed = json.load(evidence)
+except (OSError, json.JSONDecodeError) as error:
+    print(f"FAIL: selected endpoint failure evidence is invalid: {error}", file=sys.stderr)
+    raise SystemExit(1)
+expected = {
+    "endpoint": endpoint,
+    "attempted": True,
+    "failed": True,
+    "fallback_suppressed": True,
+}
+if observed != expected:
+    print(
+        f"FAIL: selected endpoint failure evidence mismatch: {observed!r}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
 fi
 
 printf 'PASS: case=%s phase=%s process_status=%s\n' \

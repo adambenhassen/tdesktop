@@ -141,6 +141,8 @@ def _sockaddr_texts(syscall: str, args: str) -> list[str]:
     parts = _split_call_args(args)
     if syscall == "connect":
         return [parts[1]] if len(parts) > 1 else [""]
+    if syscall == "bind":
+        return [parts[1]] if len(parts) > 1 else [""]
     if syscall == "sendto":
         return [parts[4]] if len(parts) > 4 else [""]
     if syscall in {"sendmsg", "sendmmsg"}:
@@ -193,7 +195,9 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
                 pid=pid,
             ))
             continue
-        if syscall not in {"connect", "sendto", "sendmsg", "sendmmsg"}:
+        if syscall not in {
+            "bind", "connect", "sendto", "sendmsg", "sendmmsg"
+        }:
             continue
         fd, socket_id = _fd_info(args)
         for sockaddr in _sockaddr_texts(syscall, args):
@@ -208,6 +212,8 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
                 )
             elif not _is_network_family(family):
                 kind = "unknown"
+            elif syscall == "bind":
+                kind = "bind"
             elif syscall == "connect":
                 kind = "dns" if destination and destination.endswith(":53") else "connect"
             elif destination and destination.endswith(":53"):
@@ -374,17 +380,23 @@ def check_trace(
     destinations = list(configured_destinations)
     dns = list(configured_dns)
     proxies = list(configured_proxies)
+    violations = []
     if phase == "preselection":
-        # A preselection case may deliberately exercise a bounded local
-        # discovery request. Its destination must come from the case
-        # allowlist just like the later endpoint phases; proxies remain
-        # disabled until a case explicitly opts into proxy transport.
+        # Selection lifecycle cases must not perform network activity before a
+        # valid endpoint is committed. Keep this policy independent of the
+        # caller's allowlist so a preselection contract cannot authorize a
+        # control socket by mistake.
+        destinations = []
+        dns = []
         proxies = []
+        if configured_destinations or configured_dns or configured_proxies:
+            violations.append("preselection cannot allow network destinations")
     elif phase == "public-discovery":
-        proxies = []
+        # The public fixture uses a bounded SOCKS5 intermediary. Its CONNECT
+        # proof is required before that intermediary becomes policy evidence.
+        proxies = configured_proxies if proxy_target_proven else []
     elif phase == "local-direct":
         proxies = []
-    violations = []
     for label, values, allow_unix in (
         ("destination", configured_destinations, False),
         ("DNS", configured_dns, True),
@@ -418,9 +430,11 @@ def check_trace(
             violations.append("proxy target assertion was not proven")
     if phase == "public-discovery" and (
         (case != "public-failure" and not required_destinations)
-        or not required_dns
+        or (not required_dns and not proxy_target_proven)
     ):
-        violations.append("public discovery requires destination and DNS evidence")
+        violations.append(
+            "public discovery requires destination and resolver or fixture evidence"
+        )
     if phase in {"local-direct", "pinned-endpoint"} and not required_destinations:
         if not (proxy_target and proxy_target_proven):
             violations.append("endpoint phase requires destination evidence")
@@ -544,7 +558,7 @@ def check_trace(
                     f"unallowed DNS destination {event.destination or '<unknown>'}"
                 )
             continue
-        if event.kind in {"connect", "send"}:
+        if event.kind in {"bind", "connect", "send"}:
             if _destination_allowed(event.destination, destinations) \
                     or _destination_allowed(event.destination, proxies):
                 if event.fd is not None and event.fd >= 0:
@@ -586,6 +600,8 @@ def check_trace(
             violations.append(f"required proxy not observed {required}")
     if phase == "public-discovery" and resolution_report:
         for destination in resolution_report["destinations"] or []:
+            if proxy_target_proven and destination == proxy_target:
+                continue
             if not any(
                     event.kind in {"connect", "send"}
                     and _destination_allowed(event.destination, [destination])
@@ -683,6 +699,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--proxy-target")
     parser.add_argument("--proxy-target-proof")
     parser.add_argument("--resolution-evidence")
+    parser.add_argument("--failure-evidence")
+    parser.add_argument("--failure-endpoint")
     parser.add_argument("--target-status", type=int)
     parser.add_argument("--report")
     return parser
@@ -708,6 +726,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             print(f"invalid resolution evidence: {error}", file=sys.stderr)
             return 2
+    failure_evidence = None
+    if args.case == "selected-endpoint-failure" and (
+        not args.failure_evidence or not args.failure_endpoint
+    ):
+        print(
+            "selected endpoint failure evidence is required",
+            file=sys.stderr,
+        )
+        return 2
+    if args.failure_evidence:
+        try:
+            failure_evidence = json.loads(
+                Path(args.failure_evidence).read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            print(f"invalid failure evidence: {error}", file=sys.stderr)
+            return 2
+        if failure_evidence != {
+            "endpoint": args.failure_endpoint,
+            "attempted": True,
+            "failed": True,
+            "fallback_suppressed": True,
+        }:
+            print("invalid selected endpoint failure evidence", file=sys.stderr)
+            return 2
     report = check_trace(
         events,
         case=args.case,
@@ -724,6 +767,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         resolution_evidence=resolution_evidence,
     )
     report["trace_count"] = len(paths)
+    if failure_evidence is not None:
+        report["failure_evidence"] = failure_evidence
     if args.target_status is not None:
         report["target_status"] = args.target_status
     if args.proxy_target:
