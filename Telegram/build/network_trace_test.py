@@ -689,12 +689,17 @@ class NetworkTraceTest(unittest.TestCase):
             '"main/main_account.h"',
             '"main/main_domain.h"',
             '"main/main_app_config.h"',
+            '"lang/lang_cloud_manager.h"',
             '"mtproto/mtproto_server_enrollment.h"',
             "Core::App().domain()",
             "ServerWidgetDiscovery",
             "QNetworkAccessManager",
             "CommitServerEnrollment",
             "appConfig().refresh",
+            "langCloudManager",
+            "requestLangPackDifference",
+            "requestCDNConfig",
+            "requestConfigIfOld",
             "UpdateChecker",
         ):
             self.assertIn(required, source)
