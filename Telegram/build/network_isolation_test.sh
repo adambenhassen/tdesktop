@@ -17,6 +17,7 @@ UPDATE_MODE="disabled"
 COMPLETION_LOG_NAME="test_log.txt"
 COMPLETION_MARKER="TEST_COMPLETE"
 COMPLETION_RESULT="SCENARIO_RESULT: PASS"
+RESOLUTION_FILE=""
 TEST_EVIDENCE_DIR=""
 PROXY_ASSERTION_FILE=""
 PROXY_TARGET=""
@@ -115,6 +116,9 @@ EOF
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
 EOF
+	cat > "$test_root/public-resolution.json" <<'EOF'
+{"origin":"https://public.example/.well-known/telegramd/client","destinations":["203.0.113.10:443"]}
+EOF
 	cat > "$test_root/proxy.trace" <<'EOF'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(1080), sin_addr=inet_addr("198.51.100.9")}, 16) = 0
@@ -135,13 +139,15 @@ EOF
 		--allow-destination 203.0.113.10:443 \
 		--allow-dns 127.0.0.53:53 \
 		--require-destination 203.0.113.10:443 \
-		--require-dns 127.0.0.53:53
+		--require-dns 127.0.0.53:53 \
+		--resolution-evidence "$test_root/public-resolution.json"
 	run_expected_failure public-direct-fallback "${parser[@]}" \
 		--trace "$test_root/public-fallback.trace" \
 		--case public-failure --phase public-discovery \
 		--origin https://public.example/.well-known/telegramd/client \
 		--allow-destination 203.0.113.10:443 \
-		--allow-dns 127.0.0.53:53
+		--allow-dns 127.0.0.53:53 \
+		--resolution-evidence "$test_root/public-resolution.json"
 	run_expected_success proxy-intermediary "${parser[@]}" \
 		--trace "$test_root/proxy.trace" \
 		--case proxy-intermediary --phase pinned-endpoint \
@@ -175,6 +181,7 @@ with open(sys.argv[1], encoding="utf-8") as manifest:
             json.dumps(invocation, sort_keys=True),
             json.dumps(allowlist, sort_keys=True),
             json.dumps(case["required"], sort_keys=True),
+            json.dumps(case.get("resolution"), sort_keys=True),
             json.dumps(case["completion"], sort_keys=True),
             case["description"],
         )))
@@ -247,8 +254,8 @@ try:
 except (OSError, json.JSONDecodeError) as error:
     fail(str(error))
 
-if document.get("version") != 3:
-    fail("version must be 3")
+if document.get("version") != 4:
+    fail("version must be 4")
 cases = document.get("cases")
 if not isinstance(cases, list) or not cases:
     fail("cases must be a non-empty list")
@@ -347,6 +354,41 @@ for index, case in enumerate(cases):
     ):
         fail(f"{name} needs proxy transport and target evidence")
 
+    resolution = case.get("resolution")
+    if phase == "public-discovery":
+        if not isinstance(resolution, dict) or set(resolution) != {
+            "file", "origin", "destinations"
+        }:
+            fail(f"{name} needs observed resolution evidence contract")
+        resolution_file = resolution["file"]
+        if (
+            not isinstance(resolution_file, str)
+            or not resolution_file
+            or PurePath(resolution_file).name != resolution_file
+            or resolution_file in {".", ".."}
+            or "\n" in resolution_file
+            or "\r" in resolution_file
+        ):
+            fail(f"{name} needs a relative resolution evidence file")
+        if (
+            not isinstance(resolution["origin"], str)
+            or not valid_public_origin(resolution["origin"])
+            or resolution["origin"] != allowlist["origins"][0]
+        ):
+            fail(f"{name} resolution origin must match its allowlist")
+        if (
+            not isinstance(resolution["destinations"], list)
+            or any(
+                not isinstance(value, str)
+                or not valid_ip_endpoint(value)
+                for value in resolution["destinations"]
+            )
+            or resolution["destinations"] != required["destinations"]
+        ):
+            fail(f"{name} resolution destinations must match required evidence")
+    elif resolution is not None:
+        fail(f"{name} cannot declare resolution evidence outside public discovery")
+
     completion = case.get("completion")
     if not isinstance(completion, dict) or set(completion) != {
         "log", "marker", "result"
@@ -416,6 +458,9 @@ elif field == "completion_marker":
     print(case["completion"]["marker"])
 elif field == "completion_result":
     print(case["completion"]["result"])
+elif field == "resolution_file":
+    if case.get("resolution") is not None:
+        print(case["resolution"]["file"])
 elif field == "arguments":
     print("\n".join(case["invocation"]["arguments"]))
 elif field == "environment":
@@ -493,6 +538,7 @@ UPDATE_MODE="$(case_contract_values update_mode)"
 COMPLETION_LOG_NAME="$(case_contract_values completion_log)"
 COMPLETION_MARKER="$(case_contract_values completion_marker)"
 COMPLETION_RESULT="$(case_contract_values completion_result)"
+RESOLUTION_FILE="$(case_contract_values resolution_file)"
 PROXY_TARGET="$(case_contract_values proxy_target)"
 while IFS= read -r argument; do
 	[ -n "$argument" ] && INVOCATION_ARGS+=("$argument")
@@ -541,9 +587,14 @@ validate_case || fail "trace case validation failed"
 mkdir -p "$EVIDENCE_DIR"
 RUN_ROOT="$(mktemp -d "$EVIDENCE_DIR/run.XXXXXX")"
 mkdir -p "$RUN_ROOT/home" "$RUN_ROOT/workdir"
+touch "$RUN_ROOT/workdir/testing"
 TEST_EVIDENCE_DIR="$EVIDENCE_DIR/test-evidence"
 PROXY_ASSERTION_FILE="$TEST_EVIDENCE_DIR/proxy-target.txt"
 mkdir -p "$TEST_EVIDENCE_DIR"
+rm -f -- "$TEST_EVIDENCE_DIR/$COMPLETION_LOG_NAME" "$PROXY_ASSERTION_FILE"
+if [ -n "$RESOLUTION_FILE" ]; then
+	rm -f -- "$TEST_EVIDENCE_DIR/$RESOLUTION_FILE"
+fi
 TRACE_PREFIX="$RUN_ROOT/strace"
 REPORT="$EVIDENCE_DIR/$REPORT_NAME"
 COMMAND_FILE="$EVIDENCE_DIR/command.txt"
@@ -639,6 +690,9 @@ for proxy in "${REQUIRED_PROXIES[@]}"; do
 done
 if [ -n "$PROXY_TARGET" ]; then
 	PARSER_COMMAND+=(--proxy-target-proof "$PROXY_ASSERTION_FILE")
+fi
+if [ -n "$RESOLUTION_FILE" ]; then
+	PARSER_COMMAND+=(--resolution-evidence "$TEST_EVIDENCE_DIR/$RESOLUTION_FILE")
 fi
 
 set +e

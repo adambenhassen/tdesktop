@@ -354,7 +354,8 @@ def check_trace(
         required_dns: Sequence[str] = (),
         required_proxies: Sequence[str] = (),
         proxy_target: str | None = None,
-        proxy_target_proven: bool = False) -> dict:
+        proxy_target_proven: bool = False,
+        resolution_evidence: dict | None = None) -> dict:
     configured_destinations = list(allowed_destinations)
     configured_dns = list(allowed_dns)
     configured_proxies = list(allowed_proxies)
@@ -421,6 +422,42 @@ def check_trace(
             )
     elif allowed_origins:
         violations.append("non-public phases cannot allow a discovery origin")
+    resolution_report = None
+    if phase == "public-discovery":
+        if not isinstance(resolution_evidence, dict):
+            violations.append("missing observed resolution evidence")
+        elif set(resolution_evidence) != {"origin", "destinations"}:
+            violations.append("invalid observed resolution evidence shape")
+        else:
+            observed_origin = resolution_evidence.get("origin")
+            observed_destinations = resolution_evidence.get("destinations")
+            resolution_report = {
+                "origin": observed_origin
+                if isinstance(observed_origin, str)
+                else None,
+                "destinations": list(observed_destinations)
+                if isinstance(observed_destinations, list)
+                else None,
+            }
+            if (
+                len(allowed_origins) != 1
+                or observed_origin != allowed_origins[0]
+            ):
+                violations.append(
+                    "observed resolution origin does not match the allowlist"
+                )
+            if observed_destinations != list(required_destinations):
+                violations.append(
+                    "observed resolution destinations do not match required evidence"
+                )
+            elif any(
+                not isinstance(destination, str)
+                or not _valid_ip_destination(destination)
+                for destination in observed_destinations
+            ):
+                violations.append(
+                    "observed resolution contains an invalid destination"
+                )
     allowed_fds = set()
     socket_events = []
     for event in events:
@@ -483,6 +520,15 @@ def check_trace(
                 and _destination_allowed(event.destination, [required])
                 for event in events):
             violations.append(f"required proxy not observed {required}")
+    if phase == "public-discovery" and resolution_report:
+        for destination in resolution_report["destinations"] or []:
+            if not any(
+                    event.kind in {"connect", "send"}
+                    and _destination_allowed(event.destination, [destination])
+                    for event in events):
+                violations.append(
+                    f"observed resolution destination not observed {destination}"
+                )
 
     def event_report(event: NetworkEvent) -> dict:
         report = asdict(event)
@@ -504,6 +550,7 @@ def check_trace(
             "required_dns": list(required_dns),
             "required_proxies": list(required_proxies),
         },
+        "resolution": resolution_report,
     }
 
 
@@ -565,6 +612,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-proxy", action="append", default=[])
     parser.add_argument("--proxy-target")
     parser.add_argument("--proxy-target-proof")
+    parser.add_argument("--resolution-evidence")
     parser.add_argument("--target-status", type=int)
     parser.add_argument("--report")
     return parser
@@ -581,6 +629,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.proxy_target_proof,
         args.proxy_target,
     )
+    resolution_evidence = None
+    if args.resolution_evidence:
+        try:
+            resolution_evidence = json.loads(
+                Path(args.resolution_evidence).read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            print(f"invalid resolution evidence: {error}", file=sys.stderr)
+            return 2
     report = check_trace(
         events,
         case=args.case,
@@ -594,6 +651,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         required_proxies=args.require_proxy,
         proxy_target=args.proxy_target,
         proxy_target_proven=proxy_target_proven,
+        resolution_evidence=resolution_evidence,
     )
     report["trace_count"] = len(paths)
     if args.target_status is not None:

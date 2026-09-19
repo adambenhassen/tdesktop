@@ -94,9 +94,43 @@ class NetworkTraceTest(unittest.TestCase):
             ],
             required_destinations=["203.0.113.10:443"],
             required_dns=["127.0.0.53:53"],
+            resolution_evidence={
+                "origin": "https://public.example/.well-known/telegramd/client",
+                "destinations": ["203.0.113.10:443"],
+            },
         )
 
         self.assertTrue(result["passed"], result)
+
+    def test_public_discovery_requires_observed_resolution_evidence(self):
+        events = parse_trace_lines([
+            'socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3',
+            'sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, '
+            'sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, '
+            '16) = 3',
+            'socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4',
+            'connect(4, {sa_family=AF_INET, sin_port=htons(443), '
+            'sin_addr=inet_addr("203.0.113.10")}, 16) = 0',
+        ])
+
+        result = check_trace(
+            events,
+            case="public-selection",
+            phase="public-discovery",
+            allowed_destinations=["203.0.113.10:443"],
+            allowed_dns=["127.0.0.53:53"],
+            allowed_origins=[
+                "https://public.example/.well-known/telegramd/client",
+            ],
+            required_destinations=["203.0.113.10:443"],
+            required_dns=["127.0.0.53:53"],
+        )
+
+        self.assertFalse(result["passed"], result)
+        self.assertIn(
+            "resolution evidence",
+            " ".join(result["violations"]),
+        )
 
     def test_public_failure_rejects_direct_fallback(self):
         events = parse_trace_lines([
@@ -114,6 +148,10 @@ class NetworkTraceTest(unittest.TestCase):
             allowed_origins=[
                 "https://public.example/.well-known/telegramd/client",
             ],
+            resolution_evidence={
+                "origin": "https://public.example/.well-known/telegramd/client",
+                "destinations": ["203.0.113.10:443"],
+            },
         )
 
         self.assertFalse(result["passed"], result)
@@ -287,6 +325,10 @@ class NetworkTraceTest(unittest.TestCase):
             ],
             required_destinations=["203.0.113.10:443"],
             required_dns=["unix:/run/systemd/resolve/io.systemd.Resolve"],
+            resolution_evidence={
+                "origin": "https://public.example/.well-known/telegramd/client",
+                "destinations": ["203.0.113.10:443"],
+            },
         )
 
         self.assertTrue(result["passed"], result)

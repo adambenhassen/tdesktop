@@ -26,6 +26,11 @@ if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = proxy-intermediary ] \
 	&& [ "${TDESKTOP_SKIP_PROXY_ASSERTION:-0}" != 1 ]; then
 	printf '%s\n' '192.0.2.10:443' > "$TDESKTOP_PROXY_ASSERTION_FILE"
 fi
+if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-selection ] \
+	|| [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-failure ]; then
+	printf '%s\n' '{"origin":"https://public.example/.well-known/telegramd/client","destinations":["203.0.113.10:443"]}' \
+		> "$TDESKTOP_TEST_EVIDENCE_DIR/network-resolution.json"
+fi
 if [ "${TDESKTOP_SKIP_COMPLETION:-0}" != 1 ]; then
 	mkdir -p "$TDESKTOP_TEST_EVIDENCE_DIR"
 	printf '%s\n' 'SCENARIO_RESULT: PASS' 'TEST_COMPLETE' \
