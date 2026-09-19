@@ -58,9 +58,9 @@ private:
 
 };
 
-// Defined by test/test_scenario.cpp. The per-task test overlay replaces that
-// file with a scenario built from the task's test design; the repository
-// copy registers nothing.
+// Defined by test/test_scenario.cpp. The checked-in Debug scenario consumes
+// TDESKTOP_NETWORK_TRACE_CASE and registers the bounded case selected by the
+// clean-process runner.
 void SetupScenario(not_null<Runner*> runner);
 
 } // namespace Test
