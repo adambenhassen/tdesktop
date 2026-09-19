@@ -397,6 +397,8 @@ def check_trace(
             violations.append(f"invalid proxy target {proxy_target}")
         elif proxy_target not in configured_destinations:
             violations.append("proxy target is outside the destination allowlist")
+        elif proxy_target not in required_destinations:
+            violations.append("proxy target is not part of required evidence")
         elif not proxy_target_proven:
             violations.append("proxy target assertion was not proven")
     if phase == "public-discovery" and (
@@ -407,6 +409,10 @@ def check_trace(
         if not (proxy_target and proxy_target_proven):
             violations.append("endpoint phase requires destination evidence")
     if phase == "public-discovery":
+        if set(required_destinations) != set(configured_destinations):
+            violations.append(
+                "public discovery origin is not bound to its destination allowlist"
+            )
         if len(allowed_origins) != 1:
             violations.append("public discovery requires one origin")
         elif not _valid_public_origin(allowed_origins[0]):
