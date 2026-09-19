@@ -116,6 +116,17 @@ TEST_CASE(AuthorizationStateCannotCrossServerPin) {
 	CHECK(SameCustomServerPin(original, original));
 	CHECK(!SameCustomServerPin(CustomServer(), original));
 
+	const auto key = MakeKey();
+	auto changedKey = original;
+	auto n = key->getN();
+	n.back() = bytes::type(
+		gsl::to_integer<unsigned char>(n.back()) ^ 0x01);
+	changedKey.key = std::make_shared<details::RSAPublicKey>(
+		n,
+		key->getE());
+	CHECK(changedKey.key->valid());
+	CHECK(!SameCustomServerPin(changedKey, original));
+
 	auto changed = original;
 	changed.port += 1;
 	CHECK(!SameCustomServerPin(original, changed));
