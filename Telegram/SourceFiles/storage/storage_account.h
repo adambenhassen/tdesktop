@@ -71,7 +71,9 @@ public:
 		bool hasStoredCustomServer,
 		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
-		Fn<bool()> writeMtpAuthorizationOverride = nullptr);
+		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
+		QString tempPath = {},
+		QString databasePath = {});
 #endif
 	~Account();
 

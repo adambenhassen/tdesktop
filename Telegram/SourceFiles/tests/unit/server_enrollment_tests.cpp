@@ -74,7 +74,9 @@ MakeEnrollmentServerKey() {
 		const MTP::AuthKeyPtr &key,
 		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
-		Fn<bool()> writeMtpAuthorizationOverride = nullptr) {
+		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
+		const QString &tempPath = {},
+		const QString &databasePath = {}) {
 	return std::make_unique<Storage::Account>(
 		basePath,
 		key,
@@ -82,7 +84,9 @@ MakeEnrollmentServerKey() {
 		false,
 		std::move(serializeMtpAuthorization),
 		std::move(restoreMtpAuthorization),
-		std::move(writeMtpAuthorizationOverride));
+		std::move(writeMtpAuthorizationOverride),
+		tempPath,
+		databasePath);
 }
 
 [[nodiscard]] bool HasReadableEnrollmentMap(
@@ -417,7 +421,11 @@ TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 		QDir::setCurrent(previousWorkingDir);
 	});
 
-	const auto basePath = directory.path() + u"account/"_q;
+	const auto dataName = u"reenrollment"_q;
+	const auto tdataPath = directory.path() + u"/tdata/"_q;
+	const auto basePath = tdataPath + u"account/"_q;
+	const auto tempPath = tdataPath + u"temp_"_q + dataName + u"/"_q;
+	const auto databasePath = tdataPath + u"user_"_q + dataName + u"/"_q;
 	const auto key = MakeEnrollmentStorageKey();
 	const auto serialized = QByteArray("old-server-auth-key");
 	auto config = MakeEnrollmentConfig();
@@ -427,14 +435,18 @@ TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 		key,
 		std::move(config),
 		false,
-		[serialized] { return serialized; });
+		[serialized] { return serialized; },
+		nullptr,
+		nullptr,
+		tempPath,
+		databasePath);
 	CHECK(account->writeMtpConfig(true));
 	CHECK(account->writeMtpData(true));
 
 	CHECK(QDir().mkpath(basePath + u"future/nested"_q));
-	CHECK(QDir().mkpath(basePath + u"database/future"_q));
-	CHECK(QDir().mkpath(basePath + u"temp/future"_q));
-	CHECK(QDir().mkpath(directory.path() + u"/tdata/tdld/future"_q));
+	CHECK(QDir().mkpath(databasePath + u"future"_q));
+	CHECK(QDir().mkpath(tempPath + u"future"_q));
+	CHECK(QDir().mkpath(tdataPath + u"tdld/future"_q));
 	QFile futureStore(basePath + u"future/nested/messages"_q);
 	CHECK(futureStore.open(QIODevice::WriteOnly));
 	futureStore.write("server-scoped");
@@ -446,16 +458,19 @@ TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 	CHECK(!account->serverReenrollmentPending());
 	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
 	CHECK(!QFile::exists(basePath + u"future/nested/messages"_q));
-	CHECK(!QDir(basePath + u"database"_q).exists());
-	CHECK(!QDir(basePath + u"temp"_q).exists());
-	CHECK(!QDir(directory.path() + u"/tdata/tdld"_q).exists());
+	CHECK(!QDir(databasePath).exists());
+	CHECK(!QDir(tempPath).exists());
+	CHECK(!QDir(tdataPath + u"tdld"_q).exists());
 
 	auto restored = QByteArray();
 	auto restarted = MakeEnrollmentStorageAccount(
 		basePath,
 		key,
 		[] { return QByteArray(); },
-		[&](const QByteArray &value) { restored = value; });
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		tempPath,
+		databasePath);
 	restarted->readMtpDataForTest();
 	CHECK(restored.isEmpty());
 }

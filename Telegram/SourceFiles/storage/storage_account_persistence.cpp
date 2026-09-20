@@ -169,13 +169,19 @@ Account::Account(
 		bool hasStoredCustomServer,
 		Fn<QByteArray()> serializeMtpAuthorization,
 		Fn<void(const QByteArray &)> restoreMtpAuthorization,
-		Fn<bool()> writeMtpAuthorizationOverride)
+		Fn<bool()> writeMtpAuthorizationOverride,
+		QString tempPath,
+		QString databasePath)
 : _owner(nullptr)
 , _basePath(basePath.endsWith(QDir::separator())
 	? basePath
 	: basePath + QDir::separator())
-, _tempPath(_basePath + u"temp/"_q)
-, _databasePath(_basePath + u"database/"_q)
+, _tempPath(tempPath.isEmpty()
+	? _basePath + u"temp/"_q
+	: std::move(tempPath))
+, _databasePath(databasePath.isEmpty()
+	? _basePath + u"database/"_q
+	: std::move(databasePath))
 , _localKey(std::move(localKey))
 , _hasStoredCustomServer(hasStoredCustomServer)
 , _mtpConfig([config = std::move(config)]() -> const MTP::Config & {
