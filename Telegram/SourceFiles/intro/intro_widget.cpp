@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_cloud_manager.h"
 #include "storage/localstorage.h"
 #include "main/main_account.h"
+#include "main/main_account_persistence.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "mainwindow.h"
@@ -647,12 +648,18 @@ void Widget::showServerIdentityChange(
 		presented);
 
 	const auto weak = base::make_weak(this);
+	const auto advancing = std::make_shared<bool>(false);
 	// Use a hand-built box so Enter and Return cannot accept a destructive
 	// account wipe that appeared without the user aiming at its button.
 	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
 		box->setTitle(tr::lng_intro_server_identity_title(tr::now));
 		box->setCloseByEscape(false);
 		box->setCloseByOutsideClick(false);
+		box->boxClosing() | rpl::on_next([=] {
+			if (weak && !*advancing) {
+				weak->_serverIdentityDialogShown = false;
+			}
+		}, box->lifetime());
 		box->addRow(
 			object_ptr<Ui::FlatLabel>(
 				box.get(),
@@ -660,21 +667,62 @@ void Widget::showServerIdentityChange(
 				st::boxLabel),
 			st::boxPadding);
 		box->addButton(
-			tr::lng_intro_server_identity_cancel(),
-			[=] {
-				box->closeBox();
-				if (weak) {
-					weak->_serverIdentityDialogShown = false;
-				}
-			});
-		box->addLeftButton(
-			tr::lng_intro_server_identity_forget(),
+			tr::lng_intro_server_identity_continue(),
 			[=] {
 				if (!weak) {
 					return;
 				}
+				*advancing = true;
+				box->closeBox();
+				weak->showServerIdentityConfirmation();
+			});
+		box->addLeftButton(
+			tr::lng_intro_server_identity_cancel(),
+			[=] {
+				if (weak) {
+					weak->_serverIdentityDialogShown = false;
+				}
+				box->closeBox();
+			});
+	}));
+}
+
+void Widget::showServerIdentityConfirmation() {
+	if (!_serverIdentityDialogShown) {
+		return;
+	}
+
+	const auto weak = base::make_weak(this);
+	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(
+			tr::lng_intro_server_identity_confirm_title(tr::now));
+		box->setCloseByEscape(false);
+		box->setCloseByOutsideClick(false);
+		box->boxClosing() | rpl::on_next([=] {
+			if (weak) {
 				weak->_serverIdentityDialogShown = false;
-				if (weak->_account->beginServerReenrollment()) {
+			}
+		}, box->lifetime());
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				tr::lng_intro_server_identity_confirm(tr::now),
+				st::boxLabel),
+			st::boxPadding);
+		box->addButton(
+			tr::lng_intro_server_identity_cancel(),
+			[=] { box->closeBox(); });
+		box->addLeftButton(
+			tr::lng_intro_server_identity_confirm_forget(),
+			[=] {
+				if (!weak) {
+					return;
+				}
+				const auto started = weak->_account->beginServerReenrollment(
+					Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+					true);
+				box->closeBox();
+				if (started) {
 					Core::Restart();
 				} else {
 					weak->getStep()->showError(

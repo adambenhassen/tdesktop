@@ -689,19 +689,23 @@ void Account::setMtpAuthorization(const QByteArray &serialized) {
 		).arg(_mtpKeysToDestroy.size()));
 }
 
-bool Account::beginServerReenrollment() {
-	if (!_mtp) {
-		return false;
-	}
-	const auto pin = _mtp->dcOptions().customServer();
-	if (!pin.key || !_mtp->dcOptions().isAuthorized(pin.dcId)) {
-		return false;
-	}
-	if (!_local->writeServerReenrollmentTombstone()) {
-		return false;
-	}
-	_mtp->stopForServerEnrollment();
-	return true;
+bool Account::beginServerReenrollment(
+		details::ServerReenrollmentPrompt prompt,
+		bool accepted) {
+	return details::CommitServerReenrollment(prompt, accepted, [=] {
+		if (!_mtp) {
+			return false;
+		}
+		const auto pin = _mtp->dcOptions().customServer();
+		if (!pin.key || !_mtp->dcOptions().isAuthorized(pin.dcId)) {
+			return false;
+		}
+		if (!_local->writeServerReenrollmentTombstone()) {
+			return false;
+		}
+		_mtp->stopForServerEnrollment();
+		return true;
+	});
 }
 
 bool Account::startMtp(

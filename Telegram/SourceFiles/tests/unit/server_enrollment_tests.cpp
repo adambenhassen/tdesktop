@@ -345,6 +345,68 @@ TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
 	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
 }
 
+TEST_CASE(ServerReenrollmentConfirmationLeavesBlockedPinUnchanged) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto account = std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		std::move(config),
+		false,
+		[] { return QByteArray("old-server-auth-key"); });
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+
+	MTP::ServerEnrollmentGate gate;
+	CHECK(gate.start());
+	CHECK(gate.pause());
+	auto wipeCalls = 0;
+	const auto wipe = [&] {
+		++wipeCalls;
+		const auto written = account->writeServerReenrollmentTombstone();
+		if (written) {
+			static_cast<void>(gate.resume());
+		}
+		return written;
+	};
+
+	// Canceling the identity warning and declining the final prompt must not
+	// reach the destructive callback, even though the first prompt was seen.
+	CHECK(!Main::details::CommitServerReenrollment(
+		Main::details::ServerReenrollmentPrompt::IdentityChange,
+		false,
+		wipe));
+	CHECK(!Main::details::CommitServerReenrollment(
+		Main::details::ServerReenrollmentPrompt::IdentityChange,
+		true,
+		wipe));
+	CHECK(!Main::details::CommitServerReenrollment(
+		Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+		false,
+		wipe));
+
+	CHECK_EQ(wipeCalls, 0);
+	CHECK(!account->serverReenrollmentPending());
+	CHECK(!gate.networkAllowed());
+	const auto restored = ReadEnrollmentConfig(basePath, key);
+	CHECK(restored != nullptr);
+	if (restored) {
+		CHECK(restored->hasCustomServer());
+		CHECK(restored->dcOptions().isAuthorized(2));
+	}
+}
+
 TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());

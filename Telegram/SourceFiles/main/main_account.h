@@ -27,6 +27,10 @@ class Config;
 
 namespace Main {
 
+namespace details {
+enum class ServerReenrollmentPrompt;
+} // namespace details
+
 class Domain;
 class Session;
 class SessionSettings;
@@ -111,7 +115,9 @@ public:
 	void setMtpAuthorization(const QByteArray &serialized);
 	// Write the wipe intent before stopping the pinned account. The next
 	// launch owns the destructive cleanup and only then returns to enrollment.
-	[[nodiscard]] bool beginServerReenrollment();
+	[[nodiscard]] bool beginServerReenrollment(
+		details::ServerReenrollmentPrompt prompt,
+		bool accepted);
 
 	void suggestMainDcId(MTP::DcId mainDcId);
 	void destroyStaleAuthorizationKeys();

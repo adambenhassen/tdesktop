@@ -196,6 +196,7 @@ private:
 	void showTerms(Fn<void()> callback);
 	void showServerIdentityChange(
 		const MTP::PinnedServerFailureReport &report);
+	void showServerIdentityConfirmation();
 
 	// FloatDelegate
 	[[nodiscard]] auto floatPlayerDelegate()

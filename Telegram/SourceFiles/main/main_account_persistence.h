@@ -15,6 +15,19 @@ class Account;
 
 namespace Main::details {
 
+enum class ServerReenrollmentPrompt {
+	IdentityChange,
+	DestructiveConfirmation,
+};
+
+// Only an affirmative action on the final confirmation may reach the
+// destructive re-enrollment callback. The first prompt is informational,
+// so accepting it only advances to that final boundary.
+[[nodiscard]] bool CommitServerReenrollment(
+	ServerReenrollmentPrompt prompt,
+	bool accepted,
+	Fn<bool()> commit);
+
 // Keep the durable authorization boundary identical for the two real
 // Main::Account lifecycle callers. The storage object is the mandatory seam,
 // so tests cannot bypass the production write path with a synthetic writer.
