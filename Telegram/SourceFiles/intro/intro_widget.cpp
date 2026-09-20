@@ -161,6 +161,13 @@ Widget::Widget(
 		if (!report) {
 			return;
 		}
+		const auto pin = _account->mtp().dcOptions().customServer();
+		if (report->failure == MTP::PinnedServerFailure::KeyMismatch
+			&& pin.key
+			&& _account->mtp().dcOptions().isAuthorized(pin.dcId)) {
+			showServerIdentityChange(*report);
+			return;
+		}
 		const auto text = (
 			report->failure == MTP::PinnedServerFailure::KeyMismatch
 		)	? tr::lng_intro_server_key_mismatch(tr::now)
@@ -619,6 +626,63 @@ void Widget::showTerms(Fn<void()> callback) {
 			}
 		}, box->lifetime());
 	}, box->lifetime());
+}
+
+void Widget::showServerIdentityChange(
+		const MTP::PinnedServerFailureReport &report) {
+	if (_serverIdentityDialogShown) {
+		return;
+	}
+	_serverIdentityDialogShown = true;
+
+	const auto pinned = QString::number(
+		qint64(report.pinnedFingerprint));
+	const auto presented = QString::number(
+		qint64(report.presentedFingerprint));
+	const auto text = tr::lng_intro_server_identity_changed(
+		tr::now,
+		lt_pinned_fingerprint,
+		pinned,
+		lt_presented_fingerprint,
+		presented);
+
+	const auto weak = base::make_weak(this);
+	// Use a hand-built box so Enter and Return cannot accept a destructive
+	// account wipe that appeared without the user aiming at its button.
+	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(tr::lng_intro_server_identity_title(tr::now));
+		box->setCloseByEscape(false);
+		box->setCloseByOutsideClick(false);
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				text,
+				st::boxLabel),
+			st::boxPadding);
+		box->addButton(
+			tr::lng_intro_server_identity_cancel(),
+			[=] {
+				box->closeBox();
+				if (weak) {
+					weak->_serverIdentityDialogShown = false;
+				}
+			});
+		box->addLeftButton(
+			tr::lng_intro_server_identity_forget(),
+			[=] {
+				if (!weak) {
+					return;
+				}
+				weak->_serverIdentityDialogShown = false;
+				if (weak->_account->beginServerReenrollment()) {
+					Core::Restart();
+				} else {
+					weak->getStep()->showError(
+						tr::lng_intro_server_reenrollment_failed());
+				}
+			},
+			st::attentionBoxButton);
+	}));
 }
 
 void Widget::showControls() {

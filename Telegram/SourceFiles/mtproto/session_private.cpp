@@ -2624,10 +2624,14 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 		return _realDcType;
 	}
 	_permanentKeyCreation = permanent;
+	_presentedServerKeyFingerprint = 0;
 
 	using Result = DcKeyResult;
 	using Error = DcKeyError;
 	auto delegate = BoundKeyCreator::Delegate();
+	delegate.publicKeyMismatch = [=](uint64 fingerprint) {
+		_presentedServerKeyFingerprint = fingerprint;
+	};
 	delegate.unboundReady = [=](base::expected<Result, Error> result) {
 		if (!_instance->isServerEnrollmentNetworkAllowed()) {
 			return;
@@ -2655,7 +2659,8 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 				LOG(("AuthKey Error: public key mismatch, "
 					"stopping until the endpoint is corrected"));
 				_sessionData->queuePinnedServerFailure(
-					PinnedServerFailure::KeyMismatch);
+					PinnedServerFailure::KeyMismatch,
+					_presentedServerKeyFingerprint);
 				stopUntilPinChange();
 				return;
 			}

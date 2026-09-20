@@ -16,8 +16,15 @@ using namespace MTP;
 
 [[nodiscard]] PinnedServerFailureReport Report(
 		ShiftedDcId shiftedDcId,
-		PinnedServerFailure failure) {
-	return { shiftedDcId, failure };
+		PinnedServerFailure failure,
+		uint64 pinnedFingerprint = 0,
+		uint64 presentedFingerprint = 0) {
+	return {
+		shiftedDcId,
+		failure,
+		pinnedFingerprint,
+		presentedFingerprint,
+	};
 }
 
 // Collects every value the channel emits from now on. The initial
@@ -70,6 +77,20 @@ TEST_CASE(LateSubscriberSeesHeldReport) {
 	CHECK_EQ(emissions.count(), 1);
 	CHECK(emissions.at(0) == report);
 	CHECK(channel.current().has_value());
+}
+
+TEST_CASE(PinnedServerFailureKeepsBothFingerprints) {
+	const auto report = Report(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		123,
+		456);
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+
+	CHECK(channel.current().has_value());
+	CHECK_EQ(channel.current()->pinnedFingerprint, uint64(123));
+	CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
 }
 
 // The clear side: only the reporting session's own successful

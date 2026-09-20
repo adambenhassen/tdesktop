@@ -345,6 +345,114 @@ TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
 	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
 }
 
+TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	const auto serialized = QByteArray("old-server-auth-key");
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto account = std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		std::move(config),
+		false,
+		[serialized] { return serialized; });
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+
+	CHECK(QDir().mkpath(basePath + u"future/nested"_q));
+	CHECK(QDir().mkpath(basePath + u"database/future"_q));
+	CHECK(QDir().mkpath(basePath + u"temp/future"_q));
+	CHECK(QDir().mkpath(directory.path() + u"/tdata/tdld/future"_q));
+	QFile futureStore(basePath + u"future/nested/messages"_q);
+	CHECK(futureStore.open(QIODevice::WriteOnly));
+	futureStore.write("server-scoped");
+	futureStore.close();
+
+	CHECK(account->writeServerReenrollmentTombstone());
+	CHECK(account->serverReenrollmentPending());
+	CHECK(account->completeServerReenrollment());
+	CHECK(!account->serverReenrollmentPending());
+	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
+	CHECK(!QFile::exists(basePath + u"future/nested/messages"_q));
+	CHECK(!QDir(basePath + u"database"_q).exists());
+	CHECK(!QDir(basePath + u"temp"_q).exists());
+	CHECK(!QDir(directory.path() + u"/tdata/tdld"_q).exists());
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; });
+	restarted->readMtpDataForTest();
+	CHECK(restored.isEmpty());
+}
+
+TEST_CASE(ServerReenrollmentTombstoneReplaysAfterInterruption) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	const auto prepare = [&] {
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[] { return QByteArray("old-server-auth-key"); });
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(QDir().mkpath(basePath + u"future"_q));
+		QFile futureStore(basePath + u"future/messages"_q);
+		CHECK(futureStore.open(QIODevice::WriteOnly));
+		futureStore.write("server-scoped");
+		futureStore.close();
+		CHECK(account->writeServerReenrollmentTombstone());
+		return account;
+	};
+
+	for (const auto interruption : { 1, 2 }) {
+		auto account = prepare();
+		// The injected stop models a process kill at two different durable
+		// boundaries. The next account instance is the next launch.
+		account->setServerReenrollmentInterruptionForTest(interruption);
+		CHECK(!account->completeServerReenrollment());
+		CHECK(account->serverReenrollmentPending());
+		account.reset();
+
+		auto restored = QByteArray();
+		auto restarted = MakeEnrollmentStorageAccount(
+			basePath,
+			key,
+			[] { return QByteArray(); },
+			[&](const QByteArray &value) { restored = value; });
+		CHECK(restarted->serverReenrollmentPending());
+		CHECK(restarted->completeServerReenrollment());
+		CHECK(!restarted->serverReenrollmentPending());
+		restarted->readMtpDataForTest();
+		CHECK(restored.isEmpty());
+	}
+}
+
 TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());

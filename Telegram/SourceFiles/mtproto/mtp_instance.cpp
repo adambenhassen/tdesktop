@@ -156,7 +156,8 @@ public:
 	void onSessionReset(ShiftedDcId shiftedDcId);
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
-		PinnedServerFailure failure);
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint = 0);
 	[[nodiscard]] auto pinnedServerFailureValue() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
@@ -1433,7 +1434,8 @@ void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 
 void Instance::Private::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
-		PinnedServerFailure failure) {
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint) {
 	LOG(("MTP Error: pinned server failure on dc %1: %2"
 		).arg(shiftedDcId
 		).arg(failure == PinnedServerFailure::KeyMismatch
@@ -1442,7 +1444,16 @@ void Instance::Private::onPinnedServerFailure(
 	// Emits unconditionally: a repeated identical failure is a second
 	// occurrence and has to reach the UI again, which a compare-then-
 	// assign would silently swallow.
-	_pinnedServerFailure.report({ shiftedDcId, failure });
+	const auto customServer = dcOptions().customServer();
+	const auto pinnedFingerprint = customServer.key
+		? customServer.key->fingerprint()
+		: uint64(0);
+	_pinnedServerFailure.report({
+		shiftedDcId,
+		failure,
+		pinnedFingerprint,
+		presentedFingerprint,
+	});
 	if (failure == PinnedServerFailure::DcIdMismatch) {
 		// Gate reconnection exactly like the key mismatch: neither
 		// class may re-enter the requestConfig / restart cycle. A
@@ -2218,8 +2229,12 @@ void Instance::stopForServerEnrollment() {
 
 void Instance::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
-		PinnedServerFailure failure) {
-	_private->onPinnedServerFailure(shiftedDcId, failure);
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint) {
+	_private->onPinnedServerFailure(
+		shiftedDcId,
+		failure,
+		presentedFingerprint);
 }
 
 rpl::producer<std::optional<PinnedServerFailureReport>>

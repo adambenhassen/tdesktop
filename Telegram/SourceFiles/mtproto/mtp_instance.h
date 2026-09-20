@@ -40,12 +40,18 @@ enum class Environment : uchar;
 struct PinnedServerFailureReport {
 	ShiftedDcId shiftedDcId = 0;
 	PinnedServerFailure failure = PinnedServerFailure::KeyMismatch;
+	// The first is the account's pinned RSA fingerprint; the second is the
+	// fingerprint advertised by the endpoint during the failed exchange.
+	uint64 pinnedFingerprint = 0;
+	uint64 presentedFingerprint = 0;
 
 	friend inline bool operator==(
 			const PinnedServerFailureReport &a,
 			const PinnedServerFailureReport &b) {
 		return (a.shiftedDcId == b.shiftedDcId)
-			&& (a.failure == b.failure);
+			&& (a.failure == b.failure)
+			&& (a.pinnedFingerprint == b.pinnedFingerprint)
+			&& (a.presentedFingerprint == b.presentedFingerprint);
 	}
 };
 
@@ -222,7 +228,8 @@ public:
 	// subscribers, so UI attached after the failure still sees it.
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
-		PinnedServerFailure failure);
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint = 0);
 	[[nodiscard]] auto pinnedServerFailure() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 

@@ -109,6 +109,9 @@ public:
 	// Serialization.
 	[[nodiscard]] QByteArray serializeMtpAuthorization() const;
 	void setMtpAuthorization(const QByteArray &serialized);
+	// Write the wipe intent before stopping the pinned account. The next
+	// launch owns the destructive cleanup and only then returns to enrollment.
+	[[nodiscard]] bool beginServerReenrollment();
 
 	void suggestMainDcId(MTP::DcId mainDcId);
 	void destroyStaleAuthorizationKeys();

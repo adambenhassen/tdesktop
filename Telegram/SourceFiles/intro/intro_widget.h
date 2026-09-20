@@ -17,6 +17,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <optional>
 
+namespace MTP {
+struct PinnedServerFailureReport;
+} // namespace MTP
+
 namespace Main {
 class Account;
 } // namespace Main
@@ -190,6 +194,8 @@ private:
 	void appendStep(details::Step *step);
 
 	void showTerms(Fn<void()> callback);
+	void showServerIdentityChange(
+		const MTP::PinnedServerFailureReport &report);
 
 	// FloatDelegate
 	[[nodiscard]] auto floatPlayerDelegate()
@@ -241,6 +247,7 @@ private:
 
 	bool _backAvailable = false;
 	bool _nextShown = true;
+	bool _serverIdentityDialogShown = false;
 	Ui::Animations::Simple _nextShownAnimation;
 
 };

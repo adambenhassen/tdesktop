@@ -250,6 +250,22 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	Expects(localKey != nullptr);
 
 	_localKey = std::move(localKey);
+	if (serverReenrollmentPending()) {
+		// Do not read even the map or authorization file while the durable
+		// wipe is pending. If the previous launch stopped during cleanup,
+		// complete it before this account can become usable again.
+		if (!completeServerReenrollment()) {
+			LOG(("MTP Error: server re-enrollment cleanup is still pending."));
+			auto blocked = std::make_unique<MTP::Config>(
+				MTP::Environment::Production);
+			blocked->dcOptions().constructBlocked();
+			return blocked;
+		}
+		auto unenrolled = std::make_unique<MTP::Config>(
+				MTP::Environment::Production);
+		unenrolled->dcOptions().constructUnenrolled();
+		return unenrolled;
+	}
 	readMapWith(_localKey);
 	clearLegacyFiles();
 	readStoredCustomServerPin();

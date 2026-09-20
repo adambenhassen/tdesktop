@@ -40,6 +40,7 @@ class DcKeyCreator final {
 public:
 	struct Delegate {
 		Fn<void(base::expected<DcKeyResult, DcKeyError>)> done;
+		Fn<void(uint64)> publicKeyMismatch;
 		Fn<void(uint64)> sentSome;
 		Fn<void()> receivedSome;
 	};
