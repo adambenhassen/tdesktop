@@ -93,6 +93,16 @@ TEST_CASE(PinnedServerFailureKeepsBothFingerprints) {
 	CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
 }
 
+TEST_CASE(AuthorizedKeyMismatchUsesTheIdentityChangeFlow) {
+	const auto mismatch = Report(2, PinnedServerFailure::KeyMismatch);
+	const auto dcMismatch = Report(2, PinnedServerFailure::DcIdMismatch);
+
+	CHECK(MTP::ShouldShowPinnedServerIdentityChange(mismatch, true, true));
+	CHECK(!MTP::ShouldShowPinnedServerIdentityChange(mismatch, false, true));
+	CHECK(!MTP::ShouldShowPinnedServerIdentityChange(mismatch, true, false));
+	CHECK(!MTP::ShouldShowPinnedServerIdentityChange(dcMismatch, true, true));
+}
+
 // The clear side: only the reporting session's own successful
 // connection retires the report. Another session of the same DC -
 // same bare id, different shift - retires nothing.

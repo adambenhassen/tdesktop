@@ -55,6 +55,15 @@ struct PinnedServerFailureReport {
 	}
 };
 
+[[nodiscard]] inline bool ShouldShowPinnedServerIdentityChange(
+		const PinnedServerFailureReport &report,
+		bool hasPinnedKey,
+		bool pinAuthorized) {
+	return report.failure == PinnedServerFailure::KeyMismatch
+		&& hasPinnedKey
+		&& pinAuthorized;
+}
+
 // Channel state for the pinned-server failure: holds the last report
 // for late subscribers and answers the two policy questions with
 // rules instead of judgement calls at call sites.

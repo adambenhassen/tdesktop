@@ -163,9 +163,10 @@ Widget::Widget(
 			return;
 		}
 		const auto pin = _account->mtp().dcOptions().customServer();
-		if (report->failure == MTP::PinnedServerFailure::KeyMismatch
-			&& pin.key
-			&& _account->mtp().dcOptions().isAuthorized(pin.dcId)) {
+		if (MTP::ShouldShowPinnedServerIdentityChange(
+			*report,
+			pin.key != nullptr,
+			_account->mtp().dcOptions().isAuthorized(pin.dcId))) {
 			showServerIdentityChange(*report);
 			return;
 		}
@@ -629,12 +630,16 @@ void Widget::showTerms(Fn<void()> callback) {
 	}, box->lifetime());
 }
 
-void Widget::showServerIdentityChange(
-		const MTP::PinnedServerFailureReport &report) {
-	if (_serverIdentityDialogShown) {
+void ShowServerIdentityChange(
+		not_null<Main::Account*> account,
+		const MTP::PinnedServerFailureReport &report,
+		std::shared_ptr<Ui::Show> show,
+		Fn<void()> resetDialog,
+		Fn<void()> failed) {
+	if (!show) {
+		resetDialog();
 		return;
 	}
-	_serverIdentityDialogShown = true;
 
 	const auto pinned = QString::number(
 		qint64(report.pinnedFingerprint));
@@ -647,17 +652,60 @@ void Widget::showServerIdentityChange(
 		lt_presented_fingerprint,
 		presented);
 
-	const auto weak = base::make_weak(this);
+	const auto weakAccount = base::make_weak(account);
 	const auto advancing = std::make_shared<bool>(false);
-	// Use a hand-built box so Enter and Return cannot accept a destructive
+	const auto showConfirmation = [=] {
+		if (!weakAccount) {
+			resetDialog();
+			return;
+		}
+		show->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(
+				tr::lng_intro_server_identity_confirm_title(tr::now));
+			box->setCloseByEscape(false);
+			box->setCloseByOutsideClick(false);
+			box->boxClosing() | rpl::on_next([=] {
+				resetDialog();
+			}, box->lifetime());
+			box->addRow(
+				object_ptr<Ui::FlatLabel>(
+					box.get(),
+					tr::lng_intro_server_identity_confirm(tr::now),
+					st::boxLabel),
+				st::boxPadding);
+			box->addButton(
+				tr::lng_intro_server_identity_cancel(),
+				[=] { box->closeBox(); });
+			box->addLeftButton(
+				tr::lng_intro_server_identity_confirm_forget(),
+				[=] {
+					const auto strong = weakAccount.get();
+					if (!strong) {
+						box->closeBox();
+						return;
+					}
+					const auto started = strong->beginServerReenrollment(
+						Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+						true);
+					box->closeBox();
+					if (started) {
+						Core::Restart();
+					} else if (failed) {
+						failed();
+					}
+				},
+				st::attentionBoxButton);
+		}));
+	};
+	// Use hand-built boxes so Enter and Return cannot accept the destructive
 	// account wipe that appeared without the user aiming at its button.
-	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
+	show->show(Box([=](not_null<Ui::GenericBox*> box) {
 		box->setTitle(tr::lng_intro_server_identity_title(tr::now));
 		box->setCloseByEscape(false);
 		box->setCloseByOutsideClick(false);
 		box->boxClosing() | rpl::on_next([=] {
-			if (weak && !*advancing) {
-				weak->_serverIdentityDialogShown = false;
+			if (!*advancing) {
+				resetDialog();
 			}
 		}, box->lifetime());
 		box->addRow(
@@ -669,68 +717,46 @@ void Widget::showServerIdentityChange(
 		box->addButton(
 			tr::lng_intro_server_identity_continue(),
 			[=] {
-				if (!weak) {
+				if (!weakAccount) {
+					box->closeBox();
 					return;
 				}
 				*advancing = true;
 				box->closeBox();
-				weak->showServerIdentityConfirmation();
+				showConfirmation();
 			});
 		box->addLeftButton(
 			tr::lng_intro_server_identity_cancel(),
 			[=] {
-				if (weak) {
-					weak->_serverIdentityDialogShown = false;
-				}
+				resetDialog();
 				box->closeBox();
 			});
 	}));
 }
 
-void Widget::showServerIdentityConfirmation() {
-	if (!_serverIdentityDialogShown) {
+void Widget::showServerIdentityChange(
+		const MTP::PinnedServerFailureReport &report) {
+	if (_serverIdentityDialogShown) {
 		return;
 	}
+	_serverIdentityDialogShown = true;
 
 	const auto weak = base::make_weak(this);
-	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(
-			tr::lng_intro_server_identity_confirm_title(tr::now));
-		box->setCloseByEscape(false);
-		box->setCloseByOutsideClick(false);
-		box->boxClosing() | rpl::on_next([=] {
+	ShowServerIdentityChange(
+		_account,
+		report,
+		_data.controller->uiShow(),
+		[weak] {
 			if (weak) {
 				weak->_serverIdentityDialogShown = false;
 			}
-		}, box->lifetime());
-		box->addRow(
-			object_ptr<Ui::FlatLabel>(
-				box.get(),
-				tr::lng_intro_server_identity_confirm(tr::now),
-				st::boxLabel),
-			st::boxPadding);
-		box->addButton(
-			tr::lng_intro_server_identity_cancel(),
-			[=] { box->closeBox(); });
-		box->addLeftButton(
-			tr::lng_intro_server_identity_confirm_forget(),
-			[=] {
-				if (!weak) {
-					return;
-				}
-				const auto started = weak->_account->beginServerReenrollment(
-					Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
-					true);
-				box->closeBox();
-				if (started) {
-					Core::Restart();
-				} else {
-					weak->getStep()->showError(
-						tr::lng_intro_server_reenrollment_failed());
-				}
-			},
-			st::attentionBoxButton);
-	}));
+		},
+		[weak] {
+			if (weak) {
+				weak->getStep()->showError(
+					tr::lng_intro_server_reenrollment_failed());
+			}
+		});
 }
 
 void Widget::showControls() {
