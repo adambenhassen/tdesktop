@@ -16,13 +16,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "base/random.h"
 
+#include <QtCore/QDir>
+
 namespace Storage {
 namespace {
 
 using namespace details;
 
 [[nodiscard]] QString BaseGlobalPath() {
+#ifdef TDESKTOP_UNIT_TESTS
+	return QDir::currentPath() + u"/tdata/"_q;
+#else
 	return cWorkingDir() + u"tdata/"_q;
+#endif
 }
 
 [[nodiscard]] QString ComputeKeyName(const QString &dataName) {
