@@ -717,7 +717,7 @@ TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
 	}
 	CHECK(restored->hasActive);
 	CHECK_EQ(restored->active, 0);
-	CHECK_EQ(restored->entries.size(), 2);
+	CHECK_EQ(int(restored->entries.size()), 2);
 
 	auto selector = Storage::details::AccountStartupSelector();
 	auto restoredIndices = base::flat_set<int>();
@@ -737,7 +737,7 @@ TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
 
 	CHECK(restoredIndices.contains(0));
 	CHECK(restoredIndices.contains(1));
-	CHECK_EQ(restoredIndices.size(), 2);
+	CHECK_EQ(int(restoredIndices.size()), 2);
 
 	const auto enrollment = pending->startServerReenrollmentForTest(key);
 	CHECK(enrollment != nullptr);
