@@ -14,6 +14,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QDir>
 
+namespace MTP {
+
+Instance::Fields::Fields() = default;
+Instance::Fields::Fields(Fields &&other) = default;
+auto Instance::Fields::operator=(Fields &&other) -> Fields & = default;
+Instance::Fields::~Fields() = default;
+
+} // namespace MTP
+
 namespace Main {
 namespace {
 
