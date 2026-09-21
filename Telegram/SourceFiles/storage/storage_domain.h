@@ -26,6 +26,20 @@ enum class StartResult : uchar {
 	IncorrectPasscodeLegacy,
 };
 
+namespace details {
+
+[[nodiscard]] inline bool ShouldKeepAccountOnStartup(
+		uint64 sessionId,
+		bool pendingServerReenrollment,
+		bool noSessionRestored,
+		bool isLastAccount) {
+	return sessionId != 0
+		|| pendingServerReenrollment
+		|| (noSessionRestored && isLastAccount);
+}
+
+} // namespace details
+
 class Domain final {
 public:
 	Domain(not_null<Main::Domain*> owner, const QString &dataName);

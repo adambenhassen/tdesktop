@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/version.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/serialize_common.h"
+#include "storage/storage_account.h"
 #include "mtproto/mtproto_config.h"
 #include "main/main_domain.h"
 #include "main/main_account.h"
@@ -181,11 +182,20 @@ Domain::StartModernResult Domain::startModern(
 				_owner,
 				_dataName,
 				index);
+			const auto pendingServerReenrollment
+				= account->local().serverReenrollmentPending();
 			auto config = account->prepareToStart(_localKey);
 			const auto sessionId = account->willHaveSessionUniqueId(
 				config.get());
-			if (!sessions.contains(sessionId)
-				&& (sessionId != 0 || (sessions.empty() && i + 1 == count))) {
+			// A pending wipe deliberately has no session id. Keep it even if
+			// another unenrolled slot already contributed the zero sentinel.
+			if (details::ShouldKeepAccountOnStartup(
+					sessionId,
+					pendingServerReenrollment,
+					sessions.empty(),
+					i + 1 == count)
+				&& (pendingServerReenrollment
+					|| !sessions.contains(sessionId))) {
 				if (sessions.empty()) {
 					active = index;
 				}

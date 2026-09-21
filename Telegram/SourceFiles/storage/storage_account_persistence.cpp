@@ -366,9 +366,11 @@ bool Account::completeServerReenrollment() {
 			BaseGlobalPath())) {
 		return false;
 	}
+	// The legacy tdata/tdld directory predates per-account storage and is
+	// shared by every account. It has no ownership marker, so leave it
+	// intact rather than deleting another account's data.
 	if (!RemovePath(_databasePath)
 		|| !RemovePath(_tempPath)
-		|| !RemovePath(BaseGlobalPath() + u"tdld/"_q)
 		|| !RemovePath(webviewBots)
 		|| !RemovePath(webviewOther)
 		|| !RemoveFileVariants(

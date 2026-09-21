@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/session.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/storage_account.h"
+#include "storage/storage_domain.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -446,7 +447,6 @@ TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 	CHECK(QDir().mkpath(basePath + u"future/nested"_q));
 	CHECK(QDir().mkpath(databasePath + u"future"_q));
 	CHECK(QDir().mkpath(tempPath + u"future"_q));
-	CHECK(QDir().mkpath(tdataPath + u"tdld/future"_q));
 	QFile futureStore(basePath + u"future/nested/messages"_q);
 	CHECK(futureStore.open(QIODevice::WriteOnly));
 	futureStore.write("server-scoped");
@@ -460,7 +460,6 @@ TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 	CHECK(!QFile::exists(basePath + u"future/nested/messages"_q));
 	CHECK(!QDir(databasePath).exists());
 	CHECK(!QDir(tempPath).exists());
-	CHECK(!QDir(tdataPath + u"tdld"_q).exists());
 
 	auto restored = QByteArray();
 	auto restarted = MakeEnrollmentStorageAccount(
@@ -473,6 +472,132 @@ TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
 		databasePath);
 	restarted->readMtpDataForTest();
 	CHECK(restored.isEmpty());
+}
+
+TEST_CASE(ServerReenrollmentWipePreservesOtherAccountsLegacyStore) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto tdataPath = directory.path() + u"/tdata/"_q;
+	const auto accountAPath = tdataPath + u"account_a/"_q;
+	const auto tempAPath = tdataPath + u"temp_account_a/"_q;
+	const auto databaseAPath = tdataPath + u"user_account_a/"_q;
+	const auto accountBPath = tdataPath + u"account_b/"_q;
+	const auto tempBPath = tdataPath + u"temp_account_b/"_q;
+	const auto databaseBPath = tdataPath + u"user_account_b/"_q;
+	const auto legacyStorePath = tdataPath
+		+ u"tdld/account_b/future/messages"_q;
+	CHECK(QDir().mkpath(tdataPath + u"tdld/account_b/future"_q));
+	QFile legacyStore(legacyStorePath);
+	CHECK(legacyStore.open(QIODevice::WriteOnly));
+	legacyStore.write("account-b-server-scoped");
+	legacyStore.close();
+
+	const auto key = MakeEnrollmentStorageKey();
+	auto accountB = MakeEnrollmentStorageAccount(
+		accountBPath,
+		key,
+		nullptr,
+		nullptr,
+		nullptr,
+		tempBPath,
+		databaseBPath);
+	CHECK(accountB != nullptr);
+	CHECK(QDir().mkpath(databaseBPath + u"future"_q));
+
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto accountA = std::make_unique<Storage::Account>(
+		accountAPath,
+		key,
+		std::move(config),
+		false,
+		[] { return QByteArray("account-a-server-auth-key"); },
+		nullptr,
+		nullptr,
+		tempAPath,
+		databaseAPath);
+	CHECK(accountA->writeMtpConfig(true));
+	CHECK(accountA->writeMtpData(true));
+	CHECK(accountA->writeServerReenrollmentTombstone());
+	CHECK(accountA->completeServerReenrollment());
+
+	CHECK(QFile::exists(legacyStorePath));
+	QFile preservedLegacyStore(legacyStorePath);
+	CHECK(preservedLegacyStore.open(QIODevice::ReadOnly));
+	CHECK_EQ(
+		preservedLegacyStore.readAll(),
+		QByteArray("account-b-server-scoped"));
+	CHECK(QDir(databaseBPath).exists());
+}
+
+TEST_CASE(ServerReenrollmentStartupEntersEnrollment) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"/account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	{
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[] { return QByteArray("old-server-auth-key"); });
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(account->writeServerReenrollmentTombstone());
+		CHECK(account->serverReenrollmentPending());
+	}
+
+	auto restarted = MakeEnrollmentStorageAccount(basePath, nullptr);
+	const auto enrollment = restarted->start(key);
+	CHECK(enrollment != nullptr);
+	if (enrollment) {
+		CHECK(enrollment->dcOptions().unenrolled());
+		CHECK(!enrollment->hasCustomServer());
+	}
+}
+
+TEST_CASE(ServerReenrollmentMultiAccountStartupKeepsEnrollmentSlot) {
+	auto restoredSessionIds = base::flat_set<uint64>();
+	auto restoredIndices = base::flat_set<int>();
+	const auto otherSessionId = uint64(42);
+
+	if (Storage::details::ShouldKeepAccountOnStartup(
+			otherSessionId,
+			false,
+			restoredSessionIds.empty(),
+			false)) {
+		restoredIndices.emplace(0);
+		restoredSessionIds.emplace(otherSessionId);
+	}
+	if (Storage::details::ShouldKeepAccountOnStartup(
+			0,
+			true,
+			restoredSessionIds.empty(),
+			true)) {
+		restoredIndices.emplace(1);
+		restoredSessionIds.emplace(0);
+	}
+
+	CHECK(restoredIndices.contains(0));
+	CHECK(restoredIndices.contains(1));
+	CHECK_EQ(restoredIndices.size(), 2);
 }
 
 TEST_CASE(ServerReenrollmentTombstoneReplaysAfterInterruption) {
