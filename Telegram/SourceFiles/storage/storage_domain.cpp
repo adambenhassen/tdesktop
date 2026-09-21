@@ -160,65 +160,55 @@ Domain::StartModernResult Domain::startModern(
 		return StartModernResult::Failed;
 	}
 	LOG(("App Info: reading encrypted info..."));
-	auto count = qint32();
-	info.stream >> count;
-	if (count <= 0 || count > Main::Domain::kPremiumMaxAccounts) {
-		LOG(("App Error: bad accounts count: %1").arg(count));
+	const auto accounts = details::ReadAccountList(
+		info.stream,
+		Main::Domain::kPremiumMaxAccounts);
+	if (!accounts) {
+		LOG(("App Error: bad accounts list."));
 		return StartModernResult::Failed;
 	}
 
 	_oldVersion = keyData.version;
 
-	auto tried = base::flat_set<int>();
-	auto sessions = base::flat_set<uint64>();
+	auto selector = details::AccountStartupSelector();
 	auto active = 0;
-	for (auto i = 0; i != count; ++i) {
-		auto index = qint32();
-		info.stream >> index;
-		if (index >= 0
-			&& index < Main::Domain::kPremiumMaxAccounts
-			&& tried.emplace(index).second) {
-			auto account = std::make_unique<Main::Account>(
-				_owner,
-				_dataName,
-				index);
-			const auto pendingServerReenrollment
-				= account->local().serverReenrollmentPending();
-			auto config = account->prepareToStart(_localKey);
-			const auto sessionId = account->willHaveSessionUniqueId(
-				config.get());
-			// A pending wipe deliberately has no session id. Keep it even if
-			// another unenrolled slot already contributed the zero sentinel.
-			if (details::ShouldKeepAccountOnStartup(
-					sessionId,
-					pendingServerReenrollment,
-					sessions.empty(),
-					i + 1 == count)
-				&& (pendingServerReenrollment
-					|| !sessions.contains(sessionId))) {
-				if (sessions.empty()) {
-					active = index;
-				}
-				account->start(std::move(config));
-				_owner->accountAddedInStorage({
-					.index = index,
-					.account = std::move(account)
-				});
-				sessions.emplace(sessionId);
+	for (const auto &entry : accounts->entries) {
+		auto account = std::make_unique<Main::Account>(
+			_owner,
+			_dataName,
+			entry.index);
+		const auto pendingServerReenrollment
+			= account->local().serverReenrollmentPending();
+		auto config = account->prepareToStart(_localKey);
+		const auto sessionId = account->willHaveSessionUniqueId(
+			config.get());
+		// A pending wipe deliberately has no session id. Keep it even if
+		// another unenrolled slot already contributed the zero sentinel.
+		const auto wasEmpty = selector.empty();
+		if (selector.keep(
+				sessionId,
+				pendingServerReenrollment,
+				entry.isLast)) {
+			if (wasEmpty) {
+				active = entry.index;
 			}
+			account->start(std::move(config));
+			_owner->accountAddedInStorage({
+				.index = entry.index,
+				.account = std::move(account)
+			});
 		}
 	}
-	if (sessions.empty()) {
+	if (selector.empty()) {
 		LOG(("App Error: no accounts read."));
 		return StartModernResult::Failed;
 	}
-
-	if (!info.stream.atEnd()) {
-		info.stream >> active;
+	if (accounts->hasActive) {
+		active = accounts->active;
 	}
 	_owner->activateFromStorage(active);
 
-	Ensures(!sessions.empty());
+	Ensures(!selector.empty());
 	return StartModernResult::Success;
 }
 

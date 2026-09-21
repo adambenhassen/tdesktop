@@ -319,6 +319,24 @@ bool Account::serverReenrollmentPending() const {
 		|| QFileInfo::exists(base + '1');
 }
 
+std::unique_ptr<MTP::Config> Account::startServerReenrollment() {
+	Expects(_localKey != nullptr);
+	// Do not read even the map or authorization file while the durable wipe
+	// is pending. If the previous launch stopped during cleanup, complete it
+	// before this account can become usable again.
+	if (!completeServerReenrollment()) {
+		LOG(("MTP Error: server re-enrollment cleanup is still pending."));
+		auto blocked = std::make_unique<MTP::Config>(
+			MTP::Environment::Production);
+		blocked->dcOptions().constructBlocked();
+		return blocked;
+	}
+	auto unenrolled = std::make_unique<MTP::Config>(
+			MTP::Environment::Production);
+	unenrolled->dcOptions().constructUnenrolled();
+	return unenrolled;
+}
+
 bool Account::completeServerReenrollment() {
 	Expects(_localKey != nullptr);
 	if (!serverReenrollmentPending()) {
@@ -465,6 +483,12 @@ bool Account::completeServerReenrollment() {
 }
 
 #ifdef TDESKTOP_UNIT_TESTS
+
+std::unique_ptr<MTP::Config> Account::startServerReenrollmentForTest(
+		MTP::AuthKeyPtr localKey) {
+	_localKey = std::move(localKey);
+	return startServerReenrollment();
+}
 
 void Account::setServerReenrollmentInterruptionForTest(int point) {
 	_serverReenrollmentInterruptionForTest = point;

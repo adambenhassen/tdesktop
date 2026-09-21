@@ -7,7 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "config.h"
 #include "main/main_account_persistence.h"
+#include "main/main_domain.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_config.h"
@@ -15,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_server_enrollment.h"
 #include "mtproto/session.h"
 #include "storage/details/storage_file_utilities.h"
+#include "storage/serialize_common.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 
@@ -68,6 +71,84 @@ MakeEnrollmentServerKey() {
 [[nodiscard]] MTP::AuthKeyPtr MakeEnrollmentStorageKey() {
 	return std::make_shared<MTP::AuthKey>(
 		MTP::AuthKey::Data{ { gsl::byte{} } });
+}
+
+[[nodiscard]] bool WriteEnrollmentAccountList(
+		const QString &dataName,
+		const QString &basePath,
+		const MTP::AuthKeyPtr &localKey,
+		const std::vector<int> &indices,
+		int active) {
+	const auto salt = QByteArray(LocalEncryptSaltSize, '\x42');
+	const auto passcodeKey = Storage::details::CreateLocalKey(
+		QByteArray(),
+		salt);
+	Storage::details::EncryptedDescriptor localKeyData(MTP::AuthKey::kSize);
+	localKey->write(localKeyData.stream);
+	const auto localKeyEncrypted = Storage::details::PrepareEncrypted(
+		localKeyData,
+		passcodeKey);
+
+	Storage::details::EncryptedDescriptor info(
+		sizeof(qint32) * (2 + indices.size()));
+	info.stream << qint32(indices.size());
+	for (const auto index : indices) {
+		info.stream << qint32(index);
+	}
+	info.stream << qint32(active);
+
+	Storage::details::FileWriteDescriptor file(
+		u"key_"_q + dataName,
+		basePath,
+		true);
+	file.writeData(salt);
+	file.writeData(localKeyEncrypted);
+	file.writeEncrypted(info, localKey);
+	return file.finish();
+}
+
+[[nodiscard]] std::optional<Storage::details::AccountList>
+ReadEnrollmentAccountList(
+		const QString &dataName,
+		const QString &basePath) {
+	Storage::details::FileReadDescriptor file;
+	if (!Storage::details::ReadFile(
+			file,
+			u"key_"_q + dataName,
+			basePath)) {
+		return std::nullopt;
+	}
+
+	QByteArray salt, keyEncrypted, infoEncrypted;
+	file.stream >> salt >> keyEncrypted >> infoEncrypted;
+	if (!Storage::details::CheckStreamStatus(file.stream)) {
+		return std::nullopt;
+	}
+	const auto passcodeKey = Storage::details::CreateLocalKey(
+		QByteArray(),
+		salt);
+	Storage::details::EncryptedDescriptor localKeyData;
+	if (!Storage::details::DecryptLocal(
+			localKeyData,
+			keyEncrypted,
+			passcodeKey)) {
+		return std::nullopt;
+	}
+	const auto key = Serialize::read<MTP::AuthKey::Data>(
+		localKeyData.stream);
+	if (localKeyData.stream.status() != QDataStream::Ok
+		|| !localKeyData.stream.atEnd()) {
+		return std::nullopt;
+	}
+	const auto localKey = std::make_shared<MTP::AuthKey>(key);
+
+	Storage::details::EncryptedDescriptor info;
+	if (!Storage::details::DecryptLocal(info, infoEncrypted, localKey)) {
+		return std::nullopt;
+	}
+	return Storage::details::ReadAccountList(
+		info.stream,
+		Main::Domain::kPremiumMaxAccounts);
 }
 
 [[nodiscard]] std::unique_ptr<Storage::Account> MakeEnrollmentStorageAccount(
@@ -565,7 +646,7 @@ TEST_CASE(ServerReenrollmentStartupEntersEnrollment) {
 	}
 
 	auto restarted = MakeEnrollmentStorageAccount(basePath, nullptr);
-	const auto enrollment = restarted->start(key);
+	const auto enrollment = restarted->startServerReenrollmentForTest(key);
 	CHECK(enrollment != nullptr);
 	if (enrollment) {
 		CHECK(enrollment->dcOptions().unenrolled());
@@ -573,31 +654,99 @@ TEST_CASE(ServerReenrollmentStartupEntersEnrollment) {
 	}
 }
 
-TEST_CASE(ServerReenrollmentMultiAccountStartupKeepsEnrollmentSlot) {
-	auto restoredSessionIds = base::flat_set<uint64>();
-	auto restoredIndices = base::flat_set<int>();
-	const auto otherSessionId = uint64(42);
+TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
 
-	if (Storage::details::ShouldKeepAccountOnStartup(
-			otherSessionId,
-			false,
-			restoredSessionIds.empty(),
-			false)) {
-		restoredIndices.emplace(0);
-		restoredSessionIds.emplace(otherSessionId);
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto dataName = u"reenrollment"_q;
+	const auto tdataPath = directory.path() + u"/tdata/"_q;
+	const auto activeBasePath = tdataPath + u"account_active/"_q;
+	const auto activeTempPath = tdataPath + u"temp_reenrollment/"_q;
+	const auto activeDatabasePath = tdataPath + u"user_reenrollment/"_q;
+	const auto pendingBasePath = tdataPath + u"account_pending/"_q;
+	const auto pendingTempPath = tdataPath + u"temp_reenrollment#2/"_q;
+	const auto pendingDatabasePath = tdataPath + u"user_reenrollment#2/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+
+	auto active = MakeEnrollmentStorageAccount(
+		activeBasePath,
+		key,
+		nullptr,
+		nullptr,
+		nullptr,
+		activeTempPath,
+		activeDatabasePath);
+	CHECK(active != nullptr);
+	CHECK(QDir().mkpath(activeDatabasePath + u"future"_q));
+
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto pending = std::make_unique<Storage::Account>(
+		pendingBasePath,
+		key,
+		std::move(config),
+		false,
+		[] { return QByteArray("pending-server-auth-key"); },
+		nullptr,
+		nullptr,
+		pendingTempPath,
+		pendingDatabasePath);
+	CHECK(pending->writeMtpConfig(true));
+	CHECK(pending->writeMtpData(true));
+	CHECK(pending->writeServerReenrollmentTombstone());
+	CHECK(pending->serverReenrollmentPending());
+
+	const auto indices = std::vector<int>{ 0, 1 };
+	CHECK(WriteEnrollmentAccountList(
+		dataName,
+		tdataPath,
+		key,
+		indices,
+		0));
+
+	const auto restored = ReadEnrollmentAccountList(dataName, tdataPath);
+	CHECK(restored.has_value());
+	if (!restored) {
+		return;
 	}
-	if (Storage::details::ShouldKeepAccountOnStartup(
-			0,
-			true,
-			restoredSessionIds.empty(),
-			true)) {
-		restoredIndices.emplace(1);
-		restoredSessionIds.emplace(0);
+	CHECK(restored->hasActive);
+	CHECK_EQ(restored->active, 0);
+	CHECK_EQ(restored->entries.size(), 2);
+
+	auto selector = Storage::details::AccountStartupSelector();
+	auto restoredIndices = base::flat_set<int>();
+	for (const auto &entry : restored->entries) {
+		const auto pendingServerReenrollment = (entry.index == 1)
+			&& pending->serverReenrollmentPending();
+		const auto sessionId = pendingServerReenrollment
+			? uint64(0)
+			: uint64(42);
+		if (selector.keep(
+				sessionId,
+				pendingServerReenrollment,
+				entry.isLast)) {
+			restoredIndices.emplace(entry.index);
+		}
 	}
 
 	CHECK(restoredIndices.contains(0));
 	CHECK(restoredIndices.contains(1));
 	CHECK_EQ(restoredIndices.size(), 2);
+
+	const auto enrollment = pending->startServerReenrollmentForTest(key);
+	CHECK(enrollment != nullptr);
+	if (enrollment) {
+		CHECK(enrollment->dcOptions().unenrolled());
+		CHECK(!enrollment->hasCustomServer());
+	}
+	CHECK(!pending->serverReenrollmentPending());
+	CHECK(QDir(activeDatabasePath).exists());
 }
 
 TEST_CASE(ServerReenrollmentTombstoneReplaysAfterInterruption) {

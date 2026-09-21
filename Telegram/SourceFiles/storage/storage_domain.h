@@ -7,6 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/flat_map.h"
+
+#include <QtCore/QDataStream>
+
+#include <optional>
+#include <vector>
+
 namespace MTP {
 class Config;
 class AuthKey;
@@ -28,6 +35,56 @@ enum class StartResult : uchar {
 
 namespace details {
 
+struct AccountListEntry final {
+	int index = 0;
+	bool isLast = false;
+};
+
+struct AccountList final {
+	std::vector<AccountListEntry> entries;
+	int active = 0;
+	bool hasActive = false;
+};
+
+[[nodiscard]] inline std::optional<AccountList> ReadAccountList(
+		QDataStream &stream,
+		int maxAccounts) {
+	auto result = AccountList();
+	auto count = qint32();
+	stream >> count;
+	if (stream.status() != QDataStream::Ok
+		|| count <= 0
+		|| count > maxAccounts) {
+		return std::nullopt;
+	}
+
+	auto tried = base::flat_set<int>();
+	result.entries.reserve(count);
+	for (auto i = 0; i != count; ++i) {
+		auto index = qint32();
+		stream >> index;
+		if (stream.status() != QDataStream::Ok) {
+			return std::nullopt;
+		}
+		if (index >= 0
+			&& index < maxAccounts
+			&& tried.emplace(index).second) {
+			result.entries.push_back({
+				.index = index,
+				.isLast = (i + 1 == count),
+			});
+		}
+	}
+	if (!stream.atEnd()) {
+		stream >> result.active;
+		if (stream.status() != QDataStream::Ok) {
+			return std::nullopt;
+		}
+		result.hasActive = true;
+	}
+	return result;
+}
+
 [[nodiscard]] inline bool ShouldKeepAccountOnStartup(
 		uint64 sessionId,
 		bool pendingServerReenrollment,
@@ -37,6 +94,35 @@ namespace details {
 		|| pendingServerReenrollment
 		|| (noSessionRestored && isLastAccount);
 }
+
+class AccountStartupSelector final {
+public:
+	[[nodiscard]] bool keep(
+			uint64 sessionId,
+			bool pendingServerReenrollment,
+			bool isLastAccount) {
+		if (!ShouldKeepAccountOnStartup(
+				sessionId,
+				pendingServerReenrollment,
+				_sessions.empty(),
+				isLastAccount)) {
+			return false;
+		}
+		if (pendingServerReenrollment) {
+			_sessions.emplace(sessionId);
+		} else if (!_sessions.emplace(sessionId).second) {
+			return false;
+		}
+		return true;
+	}
+
+	[[nodiscard]] bool empty() const {
+		return _sessions.empty();
+	}
+
+private:
+	base::flat_set<uint64> _sessions;
+};
 
 } // namespace details
 

@@ -137,6 +137,8 @@ public:
 #ifdef TDESKTOP_UNIT_TESTS
 	void readMtpDataForTest();
 	void readMtpAuthorizationFailureMarkerForTest();
+	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollmentForTest(
+		MTP::AuthKeyPtr localKey);
 	void setServerReenrollmentInterruptionForTest(int point);
 #endif
 
@@ -314,6 +316,7 @@ private:
 	std::unique_ptr<MTP::Config> readMtpConfig();
 	void readMtpData();
 	void readMtpAuthorizationFailureMarker();
+	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollment();
 	bool clearMtpAuthorizationFailureMarker();
 	// Read the persisted pin marker before readMtpConfig(), so that a
 	// corrupted or truncated config blob on a pinned account still
