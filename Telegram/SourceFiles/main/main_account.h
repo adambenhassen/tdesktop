@@ -149,6 +149,19 @@ private:
 		LoggedOut,
 	};
 
+#ifdef TDESKTOP_UNIT_TESTS
+	template <typename Type>
+	struct UnitTestNoopDeleter {
+		void operator()(Type *) const noexcept {
+		}
+	};
+	template <typename Type>
+	using Owned = std::unique_ptr<Type, UnitTestNoopDeleter<Type>>;
+#else
+	template <typename Type>
+	using Owned = std::unique_ptr<Type>;
+#endif
+
 	bool startMtp(
 		std::unique_ptr<MTP::Config> config,
 		bool startPaused = false);
@@ -180,9 +193,9 @@ private:
 	rpl::event_stream<MTPUpdates> _mtpUpdates;
 	rpl::event_stream<> _mtpNewSessionCreated;
 
-	std::unique_ptr<AppConfig> _appConfig;
+	Owned<AppConfig> _appConfig;
 
-	std::unique_ptr<Session> _session;
+	Owned<Session> _session;
 	rpl::variable<Session*> _sessionValue;
 
 	Fn<void(QString)> _handleLoginCode = nullptr;
@@ -190,7 +203,7 @@ private:
 	UserId _sessionUserId = 0;
 	QByteArray _sessionUserSerialized;
 	int32 _sessionUserStreamVersion = 0;
-	std::unique_ptr<SessionSettings> _storedSessionSettings;
+	Owned<SessionSettings> _storedSessionSettings;
 	MTP::Instance::Fields _mtpFields;
 	MTP::AuthKeysList _mtpKeysToDestroy;
 	std::optional<MTP::CustomServer> _mtpKeysToDestroyPin;

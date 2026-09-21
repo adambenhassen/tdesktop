@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "config.h"
+#include "main/main_account.h"
 #include "main/main_account_persistence.h"
 #include "main/main_domain.h"
 #include "mtproto/mtp_instance.h"

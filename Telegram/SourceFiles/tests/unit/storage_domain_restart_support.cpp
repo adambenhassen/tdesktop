@@ -72,7 +72,6 @@ Account::Account(not_null<Domain*> domain, const QString &dataName, int index)
 }
 
 Account::~Account() {
-	_local.reset();
 	_mtp.release();
 	_mtpForKeysDestroy.release();
 	_appConfig.release();
