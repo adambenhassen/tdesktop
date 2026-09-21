@@ -17,7 +17,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_server_enrollment.h"
 #include "mtproto/session.h"
 #include "storage/details/storage_file_utilities.h"
-#include "storage/serialize_common.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 
@@ -105,50 +104,6 @@ MakeEnrollmentServerKey() {
 	file.writeData(localKeyEncrypted);
 	file.writeEncrypted(info, localKey);
 	return file.finish();
-}
-
-[[nodiscard]] std::optional<Storage::details::AccountList>
-ReadEnrollmentAccountList(
-		const QString &dataName,
-		const QString &basePath) {
-	Storage::details::FileReadDescriptor file;
-	if (!Storage::details::ReadFile(
-			file,
-			u"key_"_q + dataName,
-			basePath)) {
-		return std::nullopt;
-	}
-
-	QByteArray salt, keyEncrypted, infoEncrypted;
-	file.stream >> salt >> keyEncrypted >> infoEncrypted;
-	if (!Storage::details::CheckStreamStatus(file.stream)) {
-		return std::nullopt;
-	}
-	const auto passcodeKey = Storage::details::CreateLocalKey(
-		QByteArray(),
-		salt);
-	Storage::details::EncryptedDescriptor localKeyData;
-	if (!Storage::details::DecryptLocal(
-			localKeyData,
-			keyEncrypted,
-			passcodeKey)) {
-		return std::nullopt;
-	}
-	const auto key = Serialize::read<MTP::AuthKey::Data>(
-		localKeyData.stream);
-	if (localKeyData.stream.status() != QDataStream::Ok
-		|| !localKeyData.stream.atEnd()) {
-		return std::nullopt;
-	}
-	const auto localKey = std::make_shared<MTP::AuthKey>(key);
-
-	Storage::details::EncryptedDescriptor info;
-	if (!Storage::details::DecryptLocal(info, infoEncrypted, localKey)) {
-		return std::nullopt;
-	}
-	return Storage::details::ReadAccountList(
-		info.stream,
-		Main::Domain::kPremiumMaxAccounts);
 }
 
 [[nodiscard]] std::unique_ptr<Storage::Account> MakeEnrollmentStorageAccount(
@@ -666,23 +621,19 @@ TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
 
 	const auto dataName = u"reenrollment"_q;
 	const auto tdataPath = directory.path() + u"/tdata/"_q;
-	const auto activeBasePath = tdataPath + u"account_active/"_q;
-	const auto activeTempPath = tdataPath + u"temp_reenrollment/"_q;
-	const auto activeDatabasePath = tdataPath + u"user_reenrollment/"_q;
-	const auto pendingBasePath = tdataPath + u"account_pending/"_q;
-	const auto pendingTempPath = tdataPath + u"temp_reenrollment#2/"_q;
-	const auto pendingDatabasePath = tdataPath + u"user_reenrollment#2/"_q;
+	const auto activeDatabasePath = Main::Account::storageDatabasePathForTest(
+		dataName,
+		0);
+	const auto pendingBasePath = Main::Account::storageBasePathForTest(
+		dataName,
+		1);
+	const auto pendingTempPath = Main::Account::storageTempPathForTest(
+		dataName,
+		1);
+	const auto pendingDatabasePath
+		= Main::Account::storageDatabasePathForTest(dataName, 1);
 	const auto key = MakeEnrollmentStorageKey();
 
-	auto active = MakeEnrollmentStorageAccount(
-		activeBasePath,
-		key,
-		nullptr,
-		nullptr,
-		nullptr,
-		activeTempPath,
-		activeDatabasePath);
-	CHECK(active != nullptr);
 	CHECK(QDir().mkpath(activeDatabasePath + u"future"_q));
 
 	auto config = MakeEnrollmentConfig();
@@ -696,7 +647,8 @@ TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
 		nullptr,
 		nullptr,
 		pendingTempPath,
-		pendingDatabasePath);
+		pendingDatabasePath,
+		Storage::FileKey(2));
 	CHECK(pending->writeMtpConfig(true));
 	CHECK(pending->writeMtpData(true));
 	CHECK(pending->writeServerReenrollmentTombstone());
@@ -710,42 +662,24 @@ TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
 		indices,
 		0));
 
-	const auto restored = ReadEnrollmentAccountList(dataName, tdataPath);
-	CHECK(restored.has_value());
-	if (!restored) {
-		return;
-	}
-	CHECK(restored->hasActive);
-	CHECK_EQ(restored->active, 0);
-	CHECK_EQ(int(restored->entries.size()), 2);
-
-	auto selector = Storage::details::AccountStartupSelector();
+	auto restarted = Main::Domain(dataName);
+	CHECK(restarted.local().start(QByteArray())
+		== Storage::StartResult::Success);
+	const auto &restored = restarted.accounts();
+	CHECK_EQ(int(restored.size()), 2);
 	auto restoredIndices = base::flat_set<int>();
-	for (const auto &entry : restored->entries) {
-		const auto pendingServerReenrollment = (entry.index == 1)
-			&& pending->serverReenrollmentPending();
-		const auto sessionId = pendingServerReenrollment
-			? uint64(0)
-			: uint64(42);
-		if (selector.keep(
-				sessionId,
-				pendingServerReenrollment,
-				entry.isLast)) {
-			restoredIndices.emplace(entry.index);
+	for (const auto &[index, account] : restored) {
+		CHECK(account != nullptr);
+		restoredIndices.emplace(index);
+		if (index == 1) {
+			CHECK(account->startedUnenrolledForTest());
+			CHECK(!account->local().serverReenrollmentPending());
 		}
 	}
 
 	CHECK(restoredIndices.contains(0));
 	CHECK(restoredIndices.contains(1));
 	CHECK_EQ(int(restoredIndices.size()), 2);
-
-	const auto enrollment = pending->startServerReenrollmentForTest(key);
-	CHECK(enrollment != nullptr);
-	if (enrollment) {
-		CHECK(enrollment->dcOptions().unenrolled());
-		CHECK(!enrollment->hasCustomServer());
-	}
-	CHECK(!pending->serverReenrollmentPending());
 	CHECK(QDir(activeDatabasePath).exists());
 }
 

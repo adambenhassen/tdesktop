@@ -171,8 +171,10 @@ Account::Account(
 		Fn<void(const QByteArray &)> restoreMtpAuthorization,
 		Fn<bool()> writeMtpAuthorizationOverride,
 		QString tempPath,
-		QString databasePath)
+		QString databasePath,
+		FileKey dataNameKey)
 : _owner(nullptr)
+, _dataNameKey(dataNameKey)
 , _basePath(basePath.endsWith(QDir::separator())
 	? basePath
 	: basePath + QDir::separator())

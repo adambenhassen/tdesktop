@@ -73,7 +73,8 @@ public:
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
 		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
 		QString tempPath = {},
-		QString databasePath = {});
+		QString databasePath = {},
+		FileKey dataNameKey = 0);
 #endif
 	~Account();
 

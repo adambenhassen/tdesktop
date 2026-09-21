@@ -63,6 +63,7 @@ PRIVATE
     main/main_account_persistence.cpp
     storage/details/storage_file_utilities.cpp
     storage/storage_account_persistence.cpp
+    storage/storage_domain.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
@@ -70,6 +71,7 @@ PRIVATE
     tests/unit/passport_credentials_secret_tests.cpp
     tests/unit/server_discovery_tests.cpp
     tests/unit/server_enrollment_tests.cpp
+    tests/unit/storage_domain_restart_support.cpp
     tests/unit/update_policy_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h

@@ -125,6 +125,19 @@ public:
 	void setHandleLoginCode(Fn<void(QString)> callback);
 	void handleLoginCode(const QString &code) const;
 
+#ifdef TDESKTOP_UNIT_TESTS
+	[[nodiscard]] static QString storageBasePathForTest(
+		const QString &dataName,
+		int index);
+	[[nodiscard]] static QString storageTempPathForTest(
+		const QString &dataName,
+		int index);
+	[[nodiscard]] static QString storageDatabasePathForTest(
+		const QString &dataName,
+		int index);
+	[[nodiscard]] bool startedUnenrolledForTest() const;
+#endif
+
 	[[nodiscard]] rpl::lifetime &lifetime() {
 		return _lifetime;
 	}
@@ -183,6 +196,11 @@ private:
 	std::optional<MTP::CustomServer> _mtpKeysToDestroyPin;
 	std::optional<MTP::CustomServer> _mtpForKeysDestroyPin;
 	bool _loggingOut = false;
+
+#ifdef TDESKTOP_UNIT_TESTS
+	int _testIndex = 0;
+	bool _testStartedUnenrolled = false;
+#endif
 
 	rpl::lifetime _lifetime;
 
