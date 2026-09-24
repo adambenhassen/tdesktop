@@ -22,19 +22,6 @@ class QSocketNotifier;
 namespace Intro {
 namespace details {
 
-namespace internal {
-
-[[nodiscard]] bool ConfigureNativeSocketForSend(
-	qintptr descriptor,
-	int &error);
-[[nodiscard]] qint64 SendNativeSocket(
-	qintptr descriptor,
-	const char *data,
-	int size,
-	int &error);
-
-}
-
 class ServerWidgetDiscovery final : public QObject {
 public:
 	struct Attempt {
@@ -47,6 +34,7 @@ public:
 		std::function<void(MTP::ServerDiscoveryResult)> finished;
 		std::function<void(bool)> failed;
 		std::function<void()> candidateStarted;
+		std::function<void()> beforeRequestSend;
 	};
 
 	explicit ServerWidgetDiscovery(QObject *parent);
@@ -83,6 +71,7 @@ private:
 	QList<QHostAddress> _addresses;
 	int _nextAddress = 0;
 	int _writeOffset = 0;
+	bool _beforeRequestSendNotified = false;
 	bool _writeClosed = false;
 	QHostAddress _resolvedAddress;
 	qintptr _nativeReadDescriptor = -1;
