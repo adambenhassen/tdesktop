@@ -131,6 +131,26 @@ constexpr auto kNonGlobalIpv6 = {
 		&& !IsInAnySubnet(address, kNonGlobalIpv6);
 }
 
+[[nodiscard]] bool IsMagicDnsSelection(
+		const ServerSelectionCheck &selection) {
+	return selection.valid()
+		&& selection.policy == ServerDiscoveryPolicy::PublicHttps
+		&& selection.host.size() > u".ts.net"_q.size()
+		&& selection.host.endsWith(u".ts.net"_q);
+}
+
+[[nodiscard]] bool IsTailscaleAddress(const QHostAddress &address) {
+	if (address.protocol() == QAbstractSocket::IPv6Protocol
+		&& IsInSubnet(address, "::ffff:0:0", 96)) {
+		return IsTailscaleAddress(QHostAddress(address.toIPv4Address()));
+	}
+	if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+		return IsInSubnet(address, "100.64.0.0", 10);
+	}
+	return address.protocol() == QAbstractSocket::IPv6Protocol
+		&& IsInSubnet(address, "fd7a:115c:a1e0::", 48);
+}
+
 [[nodiscard]] bool IsRejectedLiteral(const QHostAddress &address) {
 	if (address.protocol() == QAbstractSocket::IPv6Protocol
 		&& IsInSubnet(address, "::ffff:0:0", 96)) {
@@ -711,16 +731,42 @@ bool IsPublicAddress(const QHostAddress &address) {
 	return IsGloballyRoutableUnicast(address);
 }
 
+bool IsPublicDiscoveryAddress(
+		const ServerSelectionCheck &origin,
+		const QHostAddress &address) {
+	if (!origin.valid()
+		|| origin.policy != ServerDiscoveryPolicy::PublicHttps) {
+		return false;
+	}
+	return IsPublicAddress(address)
+		|| (IsMagicDnsSelection(origin) && IsTailscaleAddress(address));
+}
+
+std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
+		const ServerSelectionCheck &origin,
+		const QList<QHostAddress> &addresses) {
+	for (const auto &address : addresses) {
+		if (IsPublicDiscoveryAddress(origin, address)) {
+			return address;
+		}
+	}
+	return std::nullopt;
+}
+
 bool IsPublicDiscoveryEndpoint(
-		const ServerSelectionCheck &selection) {
-	if (!selection.valid() || !selection.explicitPort) {
+		const ServerSelectionCheck &endpoint,
+		const ServerSelectionCheck &origin) {
+	if (!endpoint.valid()
+		|| !endpoint.explicitPort
+		|| !origin.valid()
+		|| origin.policy != ServerDiscoveryPolicy::PublicHttps) {
 		return false;
 	}
 	auto address = QHostAddress();
-	if (address.setAddress(selection.host)) {
-		return IsPublicAddress(address);
+	if (address.setAddress(endpoint.host)) {
+		return IsPublicDiscoveryAddress(origin, address);
 	}
-	return selection.policy == ServerDiscoveryPolicy::PublicHttps;
+	return endpoint.policy == ServerDiscoveryPolicy::PublicHttps;
 }
 
 QString PublicDiscoveryUrl(const ServerSelectionCheck &selection) {
@@ -793,7 +839,7 @@ ServerDiscoveryResult ParsePublicDiscoveryResponse(
 
 	const auto endpoint = mtproto.value(u"endpoint"_q).toString();
 	const auto endpointCheck = CheckServerSelection(endpoint);
-	if (!IsPublicDiscoveryEndpoint(endpointCheck)) {
+	if (!IsPublicDiscoveryEndpoint(endpointCheck, selection)) {
 		return Invalid(ServerDiscoveryResponseStatus::UnsafeEndpoint);
 	}
 	if (selection.explicitPort

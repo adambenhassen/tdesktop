@@ -211,6 +211,7 @@ private:
 	// not a retry: only a corrected pin (dcOptionsChanged or the explicit
 	// enrollment resume) clears it.
 	bool _gaveUpOnPinnedFailure = false;
+	uint64 _presentedServerKeyFingerprint = 0;
 
 	base::Timer _oldConnectionTimer;
 	bool _oldConnection = true;

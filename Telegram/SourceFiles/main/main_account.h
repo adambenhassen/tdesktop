@@ -27,6 +27,10 @@ class Config;
 
 namespace Main {
 
+namespace details {
+enum class ServerReenrollmentPrompt;
+} // namespace details
+
 class Domain;
 class Session;
 class SessionSettings;
@@ -109,12 +113,30 @@ public:
 	// Serialization.
 	[[nodiscard]] QByteArray serializeMtpAuthorization() const;
 	void setMtpAuthorization(const QByteArray &serialized);
+	// Write the wipe intent before stopping the pinned account. The next
+	// launch owns the destructive cleanup and only then returns to enrollment.
+	[[nodiscard]] bool beginServerReenrollment(
+		details::ServerReenrollmentPrompt prompt,
+		bool accepted);
 
 	void suggestMainDcId(MTP::DcId mainDcId);
 	void destroyStaleAuthorizationKeys();
 
 	void setHandleLoginCode(Fn<void(QString)> callback);
 	void handleLoginCode(const QString &code) const;
+
+#ifdef TDESKTOP_UNIT_TESTS
+	[[nodiscard]] static QString storageBasePathForTest(
+		const QString &dataName,
+		int index);
+	[[nodiscard]] static QString storageTempPathForTest(
+		const QString &dataName,
+		int index);
+	[[nodiscard]] static QString storageDatabasePathForTest(
+		const QString &dataName,
+		int index);
+	[[nodiscard]] bool startedUnenrolledForTest() const;
+#endif
 
 	[[nodiscard]] rpl::lifetime &lifetime() {
 		return _lifetime;
@@ -126,6 +148,19 @@ private:
 		Quitting,
 		LoggedOut,
 	};
+
+#ifdef TDESKTOP_UNIT_TESTS
+	template <typename Type>
+	struct UnitTestNoopDeleter {
+		void operator()(Type *) const noexcept {
+		}
+	};
+	template <typename Type>
+	using Owned = std::unique_ptr<Type, UnitTestNoopDeleter<Type>>;
+#else
+	template <typename Type>
+	using Owned = std::unique_ptr<Type>;
+#endif
 
 	bool startMtp(
 		std::unique_ptr<MTP::Config> config,
@@ -158,9 +193,9 @@ private:
 	rpl::event_stream<MTPUpdates> _mtpUpdates;
 	rpl::event_stream<> _mtpNewSessionCreated;
 
-	std::unique_ptr<AppConfig> _appConfig;
+	Owned<AppConfig> _appConfig;
 
-	std::unique_ptr<Session> _session;
+	Owned<Session> _session;
 	rpl::variable<Session*> _sessionValue;
 
 	Fn<void(QString)> _handleLoginCode = nullptr;
@@ -168,12 +203,17 @@ private:
 	UserId _sessionUserId = 0;
 	QByteArray _sessionUserSerialized;
 	int32 _sessionUserStreamVersion = 0;
-	std::unique_ptr<SessionSettings> _storedSessionSettings;
+	Owned<SessionSettings> _storedSessionSettings;
 	MTP::Instance::Fields _mtpFields;
 	MTP::AuthKeysList _mtpKeysToDestroy;
 	std::optional<MTP::CustomServer> _mtpKeysToDestroyPin;
 	std::optional<MTP::CustomServer> _mtpForKeysDestroyPin;
 	bool _loggingOut = false;
+
+#ifdef TDESKTOP_UNIT_TESTS
+	int _testIndex = 0;
+	bool _testStartedUnenrolled = false;
+#endif
 
 	rpl::lifetime _lifetime;
 

@@ -159,6 +159,7 @@ void Controller::showAccount(
 	_accountLifetime.destroy();
 	_id.account = account;
 	Core::App().checkWindowId(this);
+	_serverIdentityDialogShown = false;
 
 	const auto updateOnlineOfPrevSesssion = crl::guard(account, [=] {
 		if (!prevSessionUniqueId) {
@@ -229,6 +230,47 @@ void Controller::showAccount(
 		}
 
 		crl::on_main(updateOnlineOfPrevSesssion);
+	}, _accountLifetime);
+
+	account->mtp().pinnedServerFailure(
+	) | rpl::on_next([=](
+			std::optional<MTP::PinnedServerFailureReport> report) {
+		if (!report || !account->sessionExists()) {
+			return;
+		}
+		const auto pin = account->mtp().dcOptions().customServer();
+		if (MTP::ShouldShowPinnedServerIdentityChange(
+			*report,
+			pin.key != nullptr,
+			account->mtp().dcOptions().isAuthorized(pin.dcId))) {
+			if (_serverIdentityDialogShown) {
+				return;
+			}
+			_serverIdentityDialogShown = true;
+			const auto weak = base::make_weak(this);
+			Intro::ShowServerIdentityChange(
+				account,
+				*report,
+				uiShow(),
+				[weak] {
+					if (weak) {
+						weak->_serverIdentityDialogShown = false;
+					}
+				},
+				[weak] {
+					if (weak) {
+						weak->showToast(
+							tr::lng_intro_server_reenrollment_failed(
+								tr::now));
+					}
+				});
+			return;
+		}
+		const auto text = (report->failure
+			== MTP::PinnedServerFailure::KeyMismatch)
+			? tr::lng_intro_server_key_mismatch(tr::now)
+			: tr::lng_intro_server_dc_mismatch(tr::now);
+		showToast(text);
 	}, _accountLifetime);
 }
 

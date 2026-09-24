@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_cloud_manager.h"
 #include "storage/localstorage.h"
 #include "main/main_account.h"
+#include "main/main_account_persistence.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "mainwindow.h"
@@ -159,6 +160,14 @@ Widget::Widget(
 	) | rpl::on_next([=](
 			std::optional<MTP::PinnedServerFailureReport> report) {
 		if (!report) {
+			return;
+		}
+		const auto pin = _account->mtp().dcOptions().customServer();
+		if (MTP::ShouldShowPinnedServerIdentityChange(
+			*report,
+			pin.key != nullptr,
+			_account->mtp().dcOptions().isAuthorized(pin.dcId))) {
+			showServerIdentityChange(*report);
 			return;
 		}
 		const auto text = (
@@ -619,6 +628,135 @@ void Widget::showTerms(Fn<void()> callback) {
 			}
 		}, box->lifetime());
 	}, box->lifetime());
+}
+
+void ShowServerIdentityChange(
+		not_null<Main::Account*> account,
+		const MTP::PinnedServerFailureReport &report,
+		std::shared_ptr<Ui::Show> show,
+		Fn<void()> resetDialog,
+		Fn<void()> failed) {
+	if (!show) {
+		resetDialog();
+		return;
+	}
+
+	const auto pinned = QString::number(
+		qint64(report.pinnedFingerprint));
+	const auto presented = QString::number(
+		qint64(report.presentedFingerprint));
+	const auto text = tr::lng_intro_server_identity_changed(
+		tr::now,
+		lt_pinned_fingerprint,
+		pinned,
+		lt_presented_fingerprint,
+		presented);
+
+	const auto weakAccount = base::make_weak(account);
+	const auto advancing = std::make_shared<bool>(false);
+	const auto showConfirmation = [=] {
+		if (!weakAccount) {
+			resetDialog();
+			return;
+		}
+		show->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(
+				tr::lng_intro_server_identity_confirm_title(tr::now));
+			box->setCloseByEscape(false);
+			box->setCloseByOutsideClick(false);
+			box->boxClosing() | rpl::on_next([=] {
+				resetDialog();
+			}, box->lifetime());
+			box->addRow(
+				object_ptr<Ui::FlatLabel>(
+					box.get(),
+					tr::lng_intro_server_identity_confirm(tr::now),
+					st::boxLabel),
+				st::boxPadding);
+			box->addButton(
+				tr::lng_intro_server_identity_cancel(),
+				[=] { box->closeBox(); });
+			box->addLeftButton(
+				tr::lng_intro_server_identity_confirm_forget(),
+				[=] {
+					const auto strong = weakAccount.get();
+					if (!strong) {
+						box->closeBox();
+						return;
+					}
+					const auto started = strong->beginServerReenrollment(
+						Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+						true);
+					box->closeBox();
+					if (started) {
+						Core::Restart();
+					} else if (failed) {
+						failed();
+					}
+				},
+				st::attentionBoxButton);
+		}));
+	};
+	// Use hand-built boxes so Enter and Return cannot accept the destructive
+	// account wipe that appeared without the user aiming at its button.
+	show->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(tr::lng_intro_server_identity_title(tr::now));
+		box->setCloseByEscape(false);
+		box->setCloseByOutsideClick(false);
+		box->boxClosing() | rpl::on_next([=] {
+			if (!*advancing) {
+				resetDialog();
+			}
+		}, box->lifetime());
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				text,
+				st::boxLabel),
+			st::boxPadding);
+		box->addButton(
+			tr::lng_intro_server_identity_continue(),
+			[=] {
+				if (!weakAccount) {
+					box->closeBox();
+					return;
+				}
+				*advancing = true;
+				box->closeBox();
+				showConfirmation();
+			});
+		box->addLeftButton(
+			tr::lng_intro_server_identity_cancel(),
+			[=] {
+				resetDialog();
+				box->closeBox();
+			});
+	}));
+}
+
+void Widget::showServerIdentityChange(
+		const MTP::PinnedServerFailureReport &report) {
+	if (_serverIdentityDialogShown) {
+		return;
+	}
+	_serverIdentityDialogShown = true;
+
+	const auto weak = base::make_weak(this);
+	ShowServerIdentityChange(
+		_account,
+		report,
+		_data.controller->uiShow(),
+		[weak] {
+			if (weak) {
+				weak->_serverIdentityDialogShown = false;
+			}
+		},
+		[weak] {
+			if (weak) {
+				weak->getStep()->showError(
+					tr::lng_intro_server_reenrollment_failed());
+			}
+		});
 }
 
 void Widget::showControls() {

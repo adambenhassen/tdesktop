@@ -25,6 +25,7 @@ void BoundKeyCreator::start(
 
 	auto delegate = DcKeyCreator::Delegate();
 	delegate.done = _delegate.unboundReady;
+	delegate.publicKeyMismatch = _delegate.publicKeyMismatch;
 	delegate.sentSome = _delegate.sentSome;
 	delegate.receivedSome = _delegate.receivedSome;
 

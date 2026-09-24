@@ -119,7 +119,9 @@ public:
 	void queueTryToReceive();
 	void queueNeedToResumeAndSend();
 	void queueConnectionStateChange(int newState);
-	void queuePinnedServerFailure(PinnedServerFailure failure);
+	void queuePinnedServerFailure(
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint = 0);
 	void queueResetDone();
 	void queueSendAnything(crl::time msCanWait = 0);
 
@@ -219,7 +221,9 @@ public:
 	void tryToReceive();
 	void needToResumeAndSend();
 	void connectionStateChange(int newState);
-	void pinnedServerFailure(PinnedServerFailure failure);
+	void pinnedServerFailure(
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint = 0);
 	void stopUntilPinChange();
 	void resetDone();
 	void sendAnything(crl::time msCanWait = 0);

@@ -526,6 +526,11 @@ void DcKeyCreator::pqAnswered(
 			_dcId,
 			data.vserver_public_key_fingerprints().v);
 		if (!rsaKey.valid()) {
+			if (_delegate.publicKeyMismatch
+				&& !data.vserver_public_key_fingerprints().v.isEmpty()) {
+				_delegate.publicKeyMismatch(uint64(
+					data.vserver_public_key_fingerprints().v.front().v));
+			}
 			DEBUG_LOG(("AuthKey Error: unknown public key."));
 			return failed(DcKeyError::UnknownPublicKey);
 		}
