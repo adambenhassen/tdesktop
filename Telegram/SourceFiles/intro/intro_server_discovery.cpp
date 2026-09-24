@@ -24,6 +24,60 @@ ServerWidgetDiscovery::ServerWidgetDiscovery(QObject *parent)
 : QObject(parent) {
 }
 
+bool ServerDiscoveryFlow::start(
+		const MTP::ServerSelectionCheck &selection,
+		Callbacks callbacks) {
+	cancel();
+	_callbacks = std::move(callbacks);
+	if (!selection.valid()) {
+		const auto failed = std::move(_callbacks.failed);
+		_callbacks = {};
+		if (failed) {
+			failed(false);
+		}
+		return false;
+	}
+	auto *start = (selection.policy == MTP::ServerDiscoveryPolicy::PublicHttps)
+		? &_callbacks.publicHttps
+		: (selection.policy == MTP::ServerDiscoveryPolicy::LocalDirect)
+		? &_callbacks.localDirect
+		: nullptr;
+	if (!start || !*start) {
+		const auto failed = std::move(_callbacks.failed);
+		_callbacks = {};
+		if (failed) {
+			failed(false);
+		}
+		return false;
+	}
+	_active = true;
+	const auto callback = *start;
+	callback();
+	return true;
+}
+
+bool ServerDiscoveryFlow::discoveryFailed(bool connectionFailure) {
+	if (!_active) {
+		return false;
+	}
+	_active = false;
+	auto failed = std::move(_callbacks.failed);
+	_callbacks = {};
+	if (failed) {
+		failed(connectionFailure);
+	}
+	return true;
+}
+
+void ServerDiscoveryFlow::finish() {
+	_active = false;
+	_callbacks = {};
+}
+
+void ServerDiscoveryFlow::cancel() {
+	finish();
+}
+
 ServerWidgetDiscovery::~ServerWidgetDiscovery() {
 	cancel();
 }

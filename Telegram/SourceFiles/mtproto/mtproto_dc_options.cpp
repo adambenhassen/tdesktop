@@ -108,7 +108,7 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 		return address.setAddress(host)
 			&& server.ipv6
 				== (address.protocol() == QAbstractSocket::IPv6Protocol)
-			&& IsPublicAddress(address);
+			&& IsPublicDiscoveryAddress(selection, address);
 	}
 	const auto endpoint = CheckServerSelection(
 		address.setAddress(host)

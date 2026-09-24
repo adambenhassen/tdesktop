@@ -22,6 +22,30 @@ class QTcpSocket;
 namespace Intro {
 namespace details {
 
+class ServerDiscoveryFlow final {
+public:
+	struct Callbacks {
+		std::function<void()> publicHttps;
+		std::function<void()> localDirect;
+		std::function<void(bool)> failed;
+	};
+
+	[[nodiscard]] bool start(
+		const MTP::ServerSelectionCheck &selection,
+		Callbacks callbacks);
+	[[nodiscard]] bool discoveryFailed(bool connectionFailure);
+	void finish();
+	void cancel();
+
+	[[nodiscard]] bool active() const {
+		return _active;
+	}
+
+private:
+	Callbacks _callbacks;
+	bool _active = false;
+};
+
 class ServerWidgetDiscovery final : public QObject {
 public:
 	struct Attempt {
