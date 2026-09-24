@@ -866,39 +866,6 @@ bool StartNextLocalDiscoverySocket(
 	return false;
 }
 
-bool SendLocalDiscoveryRequest(
-		QTcpSocket &socket,
-		const QByteArray &request,
-		int &writeOffset) {
-	if (socket.state() != QAbstractSocket::ConnectedState
-		|| request.isEmpty()
-		|| writeOffset < 0
-		|| writeOffset > request.size()) {
-		return false;
-	}
-	while (writeOffset < request.size()) {
-		const auto written = socket.write(
-			request.constData() + writeOffset,
-			request.size() - writeOffset);
-		if (written < 0) {
-			return false;
-		}
-		if (written == 0) {
-			return true;
-		}
-		writeOffset += int(written);
-	}
-	if (socket.bytesToWrite() > 0) {
-		if (!socket.flush()) {
-			return false;
-		}
-		if (socket.bytesToWrite() > 0) {
-			return true;
-		}
-	}
-	return true;
-}
-
 bool IsCompleteLocalDiscoveryResponse(const QByteArray &response) {
 	constexpr auto kLocalResponsePrefix = 52;
 	if (response.size() < kLocalResponsePrefix) {

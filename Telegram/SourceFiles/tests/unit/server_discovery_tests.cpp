@@ -496,38 +496,48 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	auto accepted = 0;
 	auto finished = false;
 	auto failed = false;
-	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
 #if defined Q_OS_WIN
-		const auto invalidPeer = INVALID_SOCKET;
+	const auto invalidPeer = INVALID_SOCKET;
 #else
-		const auto invalidPeer = -1;
+	const auto invalidPeer = -1;
 #endif
-		const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-		if (peer == invalidPeer) {
+	NativeTestSocket responsePeer = invalidPeer;
+	QByteArray receivedRequest;
+	auto peerSawEof = false;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (responsePeer == invalidPeer && accepted < 3) {
+			const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (peer == invalidPeer) {
+				return;
+			}
+			++accepted;
+			if (accepted == 1) {
+				CloseNativeTestSocket(peer);
+				return;
+			}
+			if (accepted == 2) {
+				CHECK(discovery.timeout());
+				CloseNativeTestSocket(peer);
+				return;
+			}
+			responsePeer = peer;
+			const auto nonBlocking = SetNativeTestNonBlocking(
+				qintptr(responsePeer));
+			CHECK(nonBlocking);
+			if (!nonBlocking) {
+				CloseNativeTestSocket(responsePeer);
+				responsePeer = invalidPeer;
+				loop.quit();
+				return;
+			}
+		}
+		if (responsePeer == invalidPeer || peerSawEof) {
 			return;
 		}
-		++accepted;
-		if (accepted == 1) {
-			CloseNativeTestSocket(peer);
-			return;
-		}
-		if (accepted == 2) {
-			CHECK(discovery.timeout());
-			CloseNativeTestSocket(peer);
-			return;
-		}
-		if (accepted != 3) {
-			CloseNativeTestSocket(peer);
-			return;
-		}
-
-		CHECK(SetNativeTestReceiveTimeout(peer));
-		QByteArray receivedRequest;
-		auto peerSawEof = false;
-		while (receivedRequest.size() <= request.size()) {
+		while (true) {
 			char buffer[256];
 			const auto read = ReceiveNativeTestSocket(
-				peer,
+				responsePeer,
 				buffer,
 				int(sizeof(buffer)));
 			if (read > 0) {
@@ -539,12 +549,15 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			}
 			break;
 		}
+		if (!peerSawEof) {
+			return;
+		}
 		CHECK(peerSawEof);
 		CHECK_EQ(receivedRequest, request);
 		auto responseOffset = 0;
 		while (responseOffset < response.size()) {
 			const auto written = SendNativeTestSocket(
-				peer,
+				responsePeer,
 				response.constData() + responseOffset,
 				response.size() - responseOffset);
 			CHECK(written > 0);
@@ -554,7 +567,8 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			responseOffset += int(written);
 		}
 		CHECK_EQ(responseOffset, response.size());
-		CloseNativeTestSocket(peer);
+		CloseNativeTestSocket(responsePeer);
+		responsePeer = invalidPeer;
 	});
 	poll.start(1);
 
@@ -581,9 +595,13 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 		});
 	loop.exec();
 	poll.stop();
+	if (responsePeer != invalidPeer) {
+		CloseNativeTestSocket(responsePeer);
+	}
 
 	CHECK_EQ(started, 4);
 	CHECK_EQ(accepted, 3);
+	CHECK(peerSawEof);
 	CHECK(finished);
 	CHECK(!failed);
 }
@@ -627,9 +645,7 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	auto responseSent = false;
 	auto finished = false;
 	auto failed = false;
-	auto earlySocketSignals = QByteArray();
-	auto earlySignalAbortedDiscovery = false;
-	auto qtSocketReleasedBeforeResponse = false;
+	auto waitedForResponse = false;
 	QTimer poll;
 	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
 		if (peer == invalidPeer) {
@@ -666,7 +682,7 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 		}
 		responseScheduled = true;
 		CHECK_EQ(receivedRequest, request);
-		CHECK(qtSocketReleasedBeforeResponse);
+		waitedForResponse = discovery.running();
 
 		const auto responsePeer = peer;
 		QTimer::singleShot(100, &owner, [&, responsePeer] {
@@ -706,30 +722,6 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 				loop.quit();
 		},
 	});
-	const auto sockets = discovery.findChildren<QTcpSocket*>();
-	CHECK_EQ(sockets.size(), 1);
-	if (!sockets.isEmpty()) {
-		const auto socket = sockets.front();
-		QObject::connect(
-			socket,
-			&QTcpSocket::errorOccurred,
-			&owner,
-			[&](QAbstractSocket::SocketError error) {
-				if (!responseSent) {
-					earlySocketSignals += "errorOccurred(";
-					earlySocketSignals += QByteArray::number(int(error));
-					earlySocketSignals += ") ";
-					earlySignalAbortedDiscovery |= !discovery.running();
-				}
-			});
-		QObject::connect(socket, &QTcpSocket::disconnected, &owner, [&] {
-			if (!responseSent) {
-				qtSocketReleasedBeforeResponse = true;
-				earlySocketSignals += "disconnected ";
-				earlySignalAbortedDiscovery |= !discovery.running();
-			}
-		});
-	}
 	loop.exec();
 	poll.stop();
 	if (peer != invalidPeer) {
@@ -741,10 +733,7 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	CHECK(responseSent);
 	CHECK(finished);
 	CHECK(!failed);
-	CHECK(qtSocketReleasedBeforeResponse);
-	CHECK_EQ(
-		earlySignalAbortedDiscovery ? earlySocketSignals : QByteArray(),
-		QByteArray());
+	CHECK(waitedForResponse);
 }
 
 TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {

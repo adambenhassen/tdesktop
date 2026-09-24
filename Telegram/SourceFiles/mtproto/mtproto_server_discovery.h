@@ -160,12 +160,6 @@ struct ServerDiscoveryResult {
 	const QList<QHostAddress> &addresses,
 	int &nextAddress);
 
-// Continue writing the asynchronous local/direct request.
-[[nodiscard]] bool SendLocalDiscoveryRequest(
-	QTcpSocket &socket,
-	const QByteArray &request,
-	int &writeOffset);
-
 [[nodiscard]] bool IsCompleteLocalDiscoveryResponse(
 	const QByteArray &response);
 
