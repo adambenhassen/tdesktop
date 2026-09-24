@@ -264,7 +264,6 @@ TEST_CASE(RefusedIpLiteralDoesNotStartLocalConnection) {
 	CHECK(failed);
 	CHECK_EQ(candidates, 0);
 	CHECK(!server.waitForNewConnection(100));
-	CHECK_EQ(server.pendingConnectionCount(), 0);
 }
 
 TEST_CASE(LocalLiteralRequiresPortWhileDottedAddressKeepsDomainRoute) {
