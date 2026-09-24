@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #if defined Q_OS_WIN
 #include <winsock2.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -433,6 +434,42 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	client.waitForDisconnected(1000);
 }
 
+#if !defined Q_OS_WIN
+TEST_CASE(NativeDiscoverySendAfterPeerClosureReturnsEpipe) {
+	int sockets[2] = { -1, -1 };
+	const auto pairOpened = (::socketpair(
+		AF_UNIX,
+		SOCK_STREAM,
+		0,
+		sockets) == 0);
+	CHECK(pairOpened);
+	if (!pairOpened) {
+		return;
+	}
+	auto error = 0;
+	const auto configured = Intro::details::internal::ConfigureNativeSocketForSend(
+		qintptr(sockets[0]),
+		error);
+	CHECK(configured);
+	if (!configured) {
+		CloseNativeTestSocket(sockets[0]);
+		CloseNativeTestSocket(sockets[1]);
+		return;
+	}
+	CloseNativeTestSocket(sockets[1]);
+
+	const auto byte = 'x';
+	const auto sent = Intro::details::internal::SendNativeSocket(
+		qintptr(sockets[0]),
+		&byte,
+		1,
+		error);
+	CHECK_EQ(sent, -1);
+	CHECK_EQ(error, EPIPE);
+	CloseNativeTestSocket(sockets[0]);
+}
+#endif
+
 TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	using Intro::details::ServerWidgetDiscovery;
 
@@ -470,6 +507,7 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	QEventLoop loop;
 	QTimer poll;
 	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+	constexpr auto kPendingConnectDeadline = 1000;
 
 	auto started = 0;
 	auto accepted = 0;
@@ -571,9 +609,7 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			.candidateStarted = [&] {
 				++started;
 				if (started == 1) {
-					// A connect can remain pending without a socket signal.
-					// Model the widget's per-candidate deadline.
-					QTimer::singleShot(1000, &owner, [&] {
+					QTimer::singleShot(kPendingConnectDeadline, &owner, [&] {
 						if (discovery.running() && started == 1) {
 							CHECK(discovery.timeout());
 						}
@@ -621,7 +657,6 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	QEventLoop loop;
 	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
 
-	// telegramd waits for request EOF, then replies on the same connection.
 #if defined Q_OS_WIN
 	const auto invalidPeer = INVALID_SOCKET;
 #else
@@ -633,7 +668,7 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	auto responseSent = false;
 	auto finished = false;
 	auto failed = false;
-	auto waitedForResponse = false;
+	auto discoveryWaitingAfterRequestEof = false;
 	QTimer poll;
 	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
 		if (peer == invalidPeer) {
@@ -670,7 +705,7 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 		}
 		responseScheduled = true;
 		CHECK_EQ(receivedRequest, request);
-		waitedForResponse = discovery.running();
+		discoveryWaitingAfterRequestEof = discovery.running();
 
 		const auto responsePeer = peer;
 		QTimer::singleShot(100, &owner, [&, responsePeer] {
@@ -721,7 +756,7 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	CHECK(responseSent);
 	CHECK(finished);
 	CHECK(!failed);
-	CHECK(waitedForResponse);
+	CHECK(discoveryWaitingAfterRequestEof);
 }
 
 TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
