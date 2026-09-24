@@ -26,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #else
 #include <fcntl.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -111,26 +110,6 @@ void CloseNativeTestSocket(NativeTestSocket socket) {
 	::closesocket(socket);
 #else
 	::close(socket);
-#endif
-}
-
-[[nodiscard]] bool SetNativeTestReceiveTimeout(NativeTestSocket socket) {
-#if defined Q_OS_WIN
-	DWORD timeout = 1000;
-	return ::setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		reinterpret_cast<const char *>(&timeout),
-		int(sizeof(timeout))) == 0;
-#else
-	const timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
-	return ::setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		&timeout,
-		socklen_t(sizeof(timeout))) == 0;
 #endif
 }
 
