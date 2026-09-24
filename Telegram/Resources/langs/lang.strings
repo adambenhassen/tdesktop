@@ -416,6 +416,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_address_bad_port"  = "The port must be a number from 1 to 65535.";
 "lng_intro_server_address_empty_host" = "Enter a server name or IP address before the port.";
 "lng_intro_server_address_invalid"   = "This is not a valid address. Use host:port, for example server.example.com:443.";
+"lng_intro_server_use_domain"        = "Use the server's domain name.";
 "lng_intro_server_address_too_long"  = "This server name is too long. Enter a shorter server name or IP address.";
 "lng_intro_server_address_ipv6"      = "Put the IPv6 address in brackets, for example [2001:db8::1]:443.";
 "lng_intro_server_connecting"        = "Connecting…";

@@ -151,6 +151,28 @@ constexpr auto kNonGlobalIpv6 = {
 		|| IsInSubnet(address, "ff00::", 8);
 }
 
+[[nodiscard]] bool IsFirstUseTrustedLocalLiteral(
+		const QHostAddress &address) {
+	if (address.protocol() == QAbstractSocket::IPv6Protocol
+		&& IsInSubnet(address, "::ffff:0:0", 96)) {
+		return IsFirstUseTrustedLocalLiteral(
+			QHostAddress(address.toIPv4Address()));
+	}
+	if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+		return IsInAnySubnet(address, {
+			{ "10.0.0.0", 8 },
+			{ "172.16.0.0", 12 },
+			{ "192.168.0.0", 16 },
+			{ "100.64.0.0", 10 },
+			{ "127.0.0.0", 8 },
+		});
+	}
+	return address.protocol() == QAbstractSocket::IPv6Protocol
+		&& (IsInSubnet(address, "::1", 128)
+			|| IsInSubnet(address, "fc00::", 7)
+			|| IsInSubnet(address, "fe80::", 10));
+}
+
 [[nodiscard]] bool IsLocalName(const QString &host) {
 	return !host.contains(QChar::fromLatin1('.'))
 		|| host == u"localhost"_q
@@ -598,6 +620,7 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	auto hostText = QString();
 	auto portText = QString();
 	auto explicitPort = false;
+	auto bracketedWithoutPort = false;
 	if (bracketed) {
 		const auto close = trimmed.indexOf(QChar::fromLatin1(']'));
 		if (close <= 1) {
@@ -609,12 +632,13 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 		hostText = trimmed.mid(1, close - 1);
 		const auto rest = trimmed.mid(close + 1);
 		if (rest.isEmpty()) {
-			return SelectionFailure(ServerSelectionStatus::NoPort);
+			bracketedWithoutPort = true;
 		} else if (!rest.startsWith(QChar::fromLatin1(':'))) {
 			return SelectionFailure(ServerSelectionStatus::BadPort);
+		} else {
+			portText = rest.mid(1);
+			explicitPort = true;
 		}
-		portText = rest.mid(1);
-		explicitPort = true;
 	} else {
 		const auto firstColon = trimmed.indexOf(QChar::fromLatin1(':'));
 		const auto lastColon = trimmed.lastIndexOf(QChar::fromLatin1(':'));
@@ -649,13 +673,17 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	auto literal = QHostAddress();
 	const auto isLiteral = literal.setAddress(hostText);
 	if (bracketed && !isLiteral) {
-		return SelectionFailure(ServerSelectionStatus::BadHost);
+		return SelectionFailure(bracketedWithoutPort
+			? ServerSelectionStatus::NoPort
+			: ServerSelectionStatus::BadHost);
 	}
 
 	const auto ipv6 = isLiteral
 		&& literal.protocol() == QAbstractSocket::IPv6Protocol;
 	if (bracketed && isLiteral && !ipv6) {
-		return SelectionFailure(ServerSelectionStatus::BadHost);
+		return SelectionFailure(bracketedWithoutPort
+			? ServerSelectionStatus::NoPort
+			: ServerSelectionStatus::BadHost);
 	}
 	if (isLiteral) {
 		if (IsRejectedLiteral(literal)) {
@@ -667,9 +695,15 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 		if (hostText != literal.toString().toLower()) {
 			return SelectionFailure(ServerSelectionStatus::BadHost);
 		}
+		if (!IsFirstUseTrustedLocalLiteral(literal)) {
+			return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
+		}
 	}
 	if (!isLiteral && HostExceedsNameLimit(hostText)) {
 		return SelectionFailure(ServerSelectionStatus::HostTooLong);
+	}
+	if (bracketedWithoutPort) {
+		return SelectionFailure(ServerSelectionStatus::NoPort);
 	}
 
 	auto host = QString();
@@ -684,11 +718,6 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	}
 
 	const auto localName = !isLiteral && IsLocalName(host);
-	// Every IP literal is local-direct: a literal has no WebPKI hostname to
-	// authenticate, so it must use the explicit-port preflight even when it
-	// is globally routable. Unspecified, multicast, and broadcast literals
-	// were rejected above; other special-use literals remain eligible when
-	// selected directly.
 	const auto localLiteral = isLiteral;
 	const auto local = localName || localLiteral;
 	if (local && !explicitPort) {

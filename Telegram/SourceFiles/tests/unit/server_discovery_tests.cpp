@@ -195,17 +195,111 @@ TEST_CASE(LocalSelectionRequiresExplicitPort) {
 	CHECK_EQ(withPort.normalizedSelection, u"localhost:443"_q);
 }
 
-TEST_CASE(EveryIpLiteralUsesLocalPreflight) {
-	const auto result = CheckServerSelection(u"203.0.113.10:443"_q);
-	CHECK(result.valid());
-	CHECK(result.policy == ServerDiscoveryPolicy::LocalDirect);
+TEST_CASE(LocalLiteralAllowListCoversNetworkBoundaries) {
+	const auto allowed = {
+		std::pair{ u"10.0.0.1:2443"_q, true },
+		std::pair{ u"172.16.0.1:2443"_q, true },
+		std::pair{ u"192.168.0.1:2443"_q, true },
+		std::pair{ u"100.64.0.1:2443"_q, true },
+		std::pair{ u"127.0.0.1:2443"_q, true },
+		std::pair{ u"[::1]:2443"_q, true },
+		std::pair{ u"[fc00::1]:2443"_q, true },
+		std::pair{ u"[fe80::1]:2443"_q, true },
+		std::pair{ u"11.0.0.1:2443"_q, false },
+		std::pair{ u"172.32.0.1:2443"_q, false },
+		std::pair{ u"192.169.0.1:2443"_q, false },
+		std::pair{ u"100.128.0.1:2443"_q, false },
+		std::pair{ u"128.0.0.1:2443"_q, false },
+		std::pair{ u"[::2]:2443"_q, false },
+		std::pair{ u"[fe00::1]:2443"_q, false },
+		std::pair{ u"[fec0::1]:2443"_q, false },
+		std::pair{ u"8.8.8.8:2443"_q, false },
+		std::pair{ u"169.254.1.1:2443"_q, false },
+		std::pair{ u"198.18.0.1:2443"_q, false },
+		std::pair{ u"203.0.113.1:2443"_q, false },
+		std::pair{ u"[64:ff9b::1]:2443"_q, false },
+	};
+	for (const auto &[value, shouldBeAllowed] : allowed) {
+		const auto selection = CheckServerSelection(value);
+		CHECK_EQ(selection.valid(), shouldBeAllowed);
+		if (shouldBeAllowed) {
+			CHECK(selection.policy == ServerDiscoveryPolicy::LocalDirect);
+		} else {
+			CHECK(selection.status == ServerSelectionStatus::PublicIpLiteral);
+		}
+	}
+}
 
-	const auto global = CheckServerSelection(u"8.8.8.8:443"_q);
-	CHECK(global.valid());
-	CHECK(global.policy == ServerDiscoveryPolicy::LocalDirect);
-	CHECK(IsPublicAddress(QHostAddress(u"8.8.8.8"_q)));
-	CHECK(!IsPublicAddress(QHostAddress(u"203.0.113.10"_q)));
-	CHECK(!IsPublicAddress(QHostAddress(u"10.0.0.1"_q)));
+TEST_CASE(MappedIpv6LiteralUsesEmbeddedIpv4Policy) {
+	const auto privateAddress = CheckServerSelection(
+		u"[::ffff:192.168.1.5]:2443"_q);
+	CHECK(privateAddress.valid());
+	CHECK(privateAddress.policy == ServerDiscoveryPolicy::LocalDirect);
+
+	const auto publicAddress = CheckServerSelection(
+		u"[::ffff:8.8.8.8]:2443"_q);
+	CHECK(publicAddress.status == ServerSelectionStatus::PublicIpLiteral);
+}
+
+TEST_CASE(RefusedIpLiteralDoesNotStartLocalConnection) {
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	const auto selection = CheckServerSelection(
+		u"8.8.8.8:"_q + QString::number(server.serverPort()));
+	Intro::details::ServerWidgetDiscovery discovery(nullptr);
+	auto candidates = 0;
+	auto failed = false;
+	discovery.start(
+		selection,
+		QByteArray(32, '\0'),
+		{ QHostAddress(QHostAddress::LocalHost) },
+		{
+			.failed = [&](bool) { failed = true; },
+			.candidateStarted = [&] { ++candidates; },
+		});
+	CHECK(!discovery.running());
+	CHECK(failed);
+	CHECK_EQ(candidates, 0);
+	CHECK(!server.waitForNewConnection(100));
+	CHECK_EQ(server.pendingConnectionCount(), 0);
+}
+
+TEST_CASE(LocalLiteralRequiresPortWhileDottedAddressKeepsDomainRoute) {
+	CHECK(CheckServerSelection(u"10.0.0.1"_q).status
+		== ServerSelectionStatus::NoPort);
+	CHECK(CheckServerSelection(u"8.8.8.8"_q).status
+		== ServerSelectionStatus::PublicIpLiteral);
+	CHECK(CheckServerSelection(u"[::1]"_q).status
+		== ServerSelectionStatus::NoPort);
+	CHECK(CheckServerSelection(u"[2001:4860::8888]"_q).status
+		== ServerSelectionStatus::PublicIpLiteral);
+	const auto dotted = CheckServerSelection(u"8.8.8.8.:2443"_q);
+	CHECK(dotted.valid());
+	CHECK(dotted.policy == ServerDiscoveryPolicy::PublicHttps);
+}
+
+TEST_CASE(DomainAndLocalNameRoutesRemainUnchanged) {
+	for (const auto &domain : {
+		u"telegram-server.tailaa4918.ts.net"_q,
+		u"example.com"_q,
+	}) {
+		const auto selection = CheckServerSelection(domain);
+		CHECK(selection.valid());
+		CHECK(selection.policy == ServerDiscoveryPolicy::PublicHttps);
+	}
+	for (const auto &local : {
+		u"localhost:2443"_q,
+		u"server.local:2443"_q,
+		u"server.home.arpa:2443"_q,
+		u"intranet:2443"_q,
+	}) {
+		const auto selection = CheckServerSelection(local);
+		CHECK(selection.valid());
+		CHECK(selection.policy == ServerDiscoveryPolicy::LocalDirect);
+	}
 }
 
 TEST_CASE(PublicDiscoveryRejectsSpecialPurposeIpv6Addresses) {

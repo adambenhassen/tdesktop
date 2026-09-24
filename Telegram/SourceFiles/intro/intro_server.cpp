@@ -469,6 +469,8 @@ QString ServerWidget::selectionError(MTP::ServerSelectionStatus status) const {
 		return tr::lng_intro_server_address_ipv6(tr::now);
 	case MTP::ServerSelectionStatus::InvalidSpecialAddress:
 		return tr::lng_intro_server_address_invalid(tr::now);
+	case MTP::ServerSelectionStatus::PublicIpLiteral:
+		return tr::lng_intro_server_use_domain(tr::now);
 	}
 	Unexpected("Unhandled server selection status.");
 }

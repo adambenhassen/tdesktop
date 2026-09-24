@@ -59,6 +59,7 @@ enum class ServerSelectionStatus {
 	HostTooLong,
 	UnbracketedIPv6,
 	InvalidSpecialAddress,
+	PublicIpLiteral,
 };
 
 struct ServerSelectionCheck {
