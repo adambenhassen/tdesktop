@@ -187,7 +187,7 @@ void CloseNativeSocket(qintptr descriptor) {
 		error = LastSocketError();
 		return kInvalidNativeSocket;
 	}
-#if defined Q_OS_DARWIN
+#if defined(SO_NOSIGPIPE) && !defined(MSG_NOSIGNAL)
 	const auto noSigpipe = 1;
 	if (::setsockopt(
 			socket,
@@ -255,7 +255,7 @@ void CloseNativeSocket(qintptr descriptor) {
 		static_cast<int>(descriptor),
 		data,
 		size,
-#if defined Q_OS_LINUX
+#if defined(MSG_NOSIGNAL)
 		MSG_NOSIGNAL
 #else
 		0
