@@ -570,6 +570,15 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			},
 			.candidateStarted = [&] {
 				++started;
+				if (started == 1) {
+					// A connect can remain pending without a socket signal.
+					// Model the widget's per-candidate deadline.
+					QTimer::singleShot(1000, &owner, [&] {
+						if (discovery.running() && started == 1) {
+							CHECK(discovery.timeout());
+						}
+					});
+				}
 			},
 		});
 	loop.exec();
