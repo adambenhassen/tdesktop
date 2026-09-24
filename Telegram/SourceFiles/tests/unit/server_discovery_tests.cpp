@@ -241,6 +241,37 @@ TEST_CASE(MappedIpv6LiteralUsesEmbeddedIpv4Policy) {
 	CHECK(publicAddress.status == ServerSelectionStatus::PublicIpLiteral);
 }
 
+TEST_CASE(InetAtonNumericHostsAreRefusedBeforeLocalDiscovery) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
+	for (const auto &host : {
+		u"0x8080808"_q,
+		u"0X8080808"_q,
+		u"134744072"_q,
+		u"01002004010"_q,
+	}) {
+		const auto selection = CheckServerSelection(
+			host + u":"_q + QString::number(listener.serverPort()));
+		CHECK(selection.status == ServerSelectionStatus::PublicIpLiteral);
+		CHECK(!selection.valid());
+		auto candidates = 0;
+		Intro::details::ServerWidgetDiscovery discovery(nullptr);
+		discovery.start(
+			selection,
+			QByteArray(32, '\0'),
+			{ QHostAddress(QHostAddress::LocalHost) },
+			{
+				.candidateStarted = [&] { ++candidates; },
+			});
+		CHECK(!discovery.running());
+		CHECK_EQ(candidates, 0);
+		CHECK(!listener.waitForNewConnection(100));
+	}
+}
+
 TEST_CASE(RefusedIpLiteralDoesNotStartLocalConnection) {
 	QTcpServer server;
 	CHECK(server.listen(QHostAddress::LocalHost));
@@ -1146,7 +1177,7 @@ TEST_CASE(DiscoveryJsonRejectsConstrainedPortConflict) {
 	CHECK(result.status == ServerDiscoveryResponseStatus::EndpointMismatch);
 }
 
-TEST_CASE(DiscoveryJsonRejectsPublicIpEndpointWithoutFallback) {
+TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpointWithoutFirstUseTrust) {
 	QTcpServer listener;
 	CHECK(listener.listen(QHostAddress::LocalHost));
 	if (!listener.isListening()) {
@@ -1159,7 +1190,9 @@ TEST_CASE(DiscoveryJsonRejectsPublicIpEndpointWithoutFallback) {
 		+ QString::number(listener.serverPort());
 	const auto endpoint = CheckServerSelection(endpointText);
 	CHECK(endpoint.status == ServerSelectionStatus::PublicIpLiteral);
-	CHECK(!IsPublicDiscoveryEndpoint(endpoint));
+	CHECK(!endpoint.valid());
+	CHECK(IsPublicDiscoveryEndpoint(endpoint));
+	CHECK(PublicDiscoveryUrl(endpoint).isEmpty());
 	auto candidates = 0;
 	Intro::details::ServerWidgetDiscovery fallback(nullptr);
 	fallback.start(
@@ -1185,10 +1218,10 @@ TEST_CASE(DiscoveryJsonRejectsPublicIpEndpointWithoutFallback) {
 		} }
 	}).toJson(QJsonDocument::Compact);
 	const auto result = ParsePublicDiscoveryResponse(selection, json);
-	CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
-	CHECK(!result.valid());
-	CHECK(result.endpoint.isEmpty());
+	CHECK(result.valid());
+	CHECK_EQ(result.endpoint, endpointText);
 	CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
+	CHECK(result.key.valid());
 }
 
 TEST_CASE(DiscoveryJsonRequiresAnExplicitEndpointPort) {

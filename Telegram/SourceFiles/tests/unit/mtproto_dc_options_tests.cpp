@@ -153,6 +153,60 @@ TEST_CASE(DiscoveredCustomServerMetadataSurvivesSerialization) {
 	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
 }
 
+TEST_CASE(StoredPublicLocalDirectPinLoadsButNewOneIsRefused) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.serverSelection = "10.4.1.7:8443";
+	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+	server.discoveryOrigin = "local:10.4.1.7:8443";
+	CHECK(options.setCustomServer(server));
+
+	auto serialized = options.serialize();
+	CHECK(serialized.contains("10.4.1.7"));
+	serialized.replace("10.4.1.7", "8.8.8.88");
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(serialized));
+	CHECK(restored.hasCustomServer());
+	CHECK(restored.refusesProductionFallback());
+	const auto got = restored.customServer();
+	CHECK_EQ(got.ip, "8.8.8.88");
+	CHECK_EQ(got.serverSelection, "8.8.8.88:8443");
+	CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+	CHECK_EQ(got.discoveryOrigin, "local:8.8.8.88:8443");
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(qint64(got.key->fingerprint()),
+			qint64(kProductionKeyFingerprint));
+	}
+
+	auto fresh = DcOptions(Environment::Production);
+	server.ip = "8.8.8.88";
+	server.serverSelection = "8.8.8.88:8443";
+	server.discoveryOrigin = "local:8.8.8.88:8443";
+	CHECK(!fresh.setCustomServer(server));
+}
+
+TEST_CASE(PublicHttpsDiscoveryCanPersistPublicIpEndpoint) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "8.8.8.88";
+	server.port = 8443;
+	server.serverSelection = "server.example.com";
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://server.example.com/.well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	const auto got = restored.customServer();
+	CHECK_EQ(got.ip, "8.8.8.88");
+	CHECK_EQ(got.port, 8443);
+	CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps);
+	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
+}
+
 // An unpinned config must round-trip as unpinned rather than picking up
 // a half-written pin, and must keep its production fallback.
 TEST_CASE(UnpinnedConfigSurvivesSerialization) {

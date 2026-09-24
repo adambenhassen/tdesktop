@@ -52,6 +52,26 @@ std::atomic<int> ServerDiscoveryAttempts = 0;
 	return code >= '0' && code <= '9';
 }
 
+[[nodiscard]] bool IsAsciiHexDigit(QChar ch) {
+	const auto code = ch.unicode();
+	return (code >= '0' && code <= '9')
+		|| (code >= 'a' && code <= 'f')
+		|| (code >= 'A' && code <= 'F');
+}
+
+[[nodiscard]] bool HasInetAtonNumericFinalLabel(const QString &host) {
+	const auto label = host.mid(host.lastIndexOf('.') + 1);
+	if (!label.isEmpty()
+		&& std::all_of(label.begin(), label.end(), IsAsciiDigit)) {
+		return true;
+	}
+	return label.size() >= 2
+		&& label[0] == QChar::fromLatin1('0')
+		&& (label[1] == QChar::fromLatin1('x')
+			|| label[1] == QChar::fromLatin1('X'))
+		&& std::all_of(label.begin() + 2, label.end(), IsAsciiHexDigit);
+}
+
 [[nodiscard]] bool IsInSubnet(
 		const QHostAddress &address,
 		const char *subnet,
@@ -696,7 +716,20 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 			return SelectionFailure(ServerSelectionStatus::BadHost);
 		}
 		if (!IsFirstUseTrustedLocalLiteral(literal)) {
-			return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
+			const auto host = literal.toString().toLower();
+			const auto port = explicitPort ? portText.toInt() : 443;
+			return {
+				.status = ServerSelectionStatus::PublicIpLiteral,
+				.host = host,
+				.normalizedSelection = explicitPort
+					? EndpointFor(host, ipv6, port)
+					: host,
+				.requestedPort = explicitPort ? port : 0,
+				.operationalPort = port,
+				.ipv6 = ipv6,
+				.explicitPort = explicitPort,
+				.policy = ServerDiscoveryPolicy::PublicHttps,
+			};
 		}
 	}
 	if (!isLiteral && HostExceedsNameLimit(hostText)) {
@@ -718,6 +751,9 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	}
 
 	const auto localName = !isLiteral && IsLocalName(host);
+	if (localName && HasInetAtonNumericFinalLabel(host)) {
+		return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
+	}
 	const auto localLiteral = isLiteral;
 	const auto local = localName || localLiteral;
 	if (local && !explicitPort) {
@@ -748,14 +784,15 @@ bool IsPublicAddress(const QHostAddress &address) {
 
 bool IsPublicDiscoveryEndpoint(
 		const ServerSelectionCheck &selection) {
-	if (!selection.valid() || !selection.explicitPort) {
+	if (!selection.explicitPort) {
 		return false;
 	}
 	auto address = QHostAddress();
 	if (address.setAddress(selection.host)) {
 		return IsPublicAddress(address);
 	}
-	return selection.policy == ServerDiscoveryPolicy::PublicHttps;
+	return selection.valid()
+		&& selection.policy == ServerDiscoveryPolicy::PublicHttps;
 }
 
 QString PublicDiscoveryUrl(const ServerSelectionCheck &selection) {

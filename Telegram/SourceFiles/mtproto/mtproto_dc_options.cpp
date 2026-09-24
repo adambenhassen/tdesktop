@@ -78,7 +78,9 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
-[[nodiscard]] bool ValidDiscoveryMetadata(const CustomServer &server) {
+[[nodiscard]] bool ValidDiscoveryMetadata(
+		const CustomServer &server,
+		bool allowRestoredPublicLocalLiteral = false) {
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::Legacy) {
 		return server.serverSelection.empty()
 			&& server.discoveryOrigin.empty();
@@ -88,7 +90,15 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	}
 	const auto selection = CheckServerSelection(
 		QString::fromStdString(server.serverSelection));
-	if (!selection || selection.policy != server.discoveryPolicy) {
+	const auto restoredPublicLocalLiteral = allowRestoredPublicLocalLiteral
+		&& server.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect
+		&& selection.status == ServerSelectionStatus::PublicIpLiteral
+		&& selection.explicitPort
+		&& selection.requestedPort == server.port
+		&& selection.normalizedSelection
+			== QString::fromStdString(server.serverSelection);
+	if ((!selection || selection.policy != server.discoveryPolicy)
+		&& !restoredPublicLocalLiteral) {
 		return false;
 	}
 	if (selection.requestedPort
@@ -104,6 +114,13 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	}
 	const auto host = QString::fromStdString(server.ip);
 	auto address = QHostAddress();
+	if (restoredPublicLocalLiteral) {
+		return address.setAddress(host)
+			&& host == selection.host
+			&& server.ipv6
+				== (address.protocol() == QAbstractSocket::IPv6Protocol)
+			&& IsPublicAddress(address);
+	}
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps) {
 		return address.setAddress(host)
 			&& server.ipv6
@@ -934,7 +951,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		_customServer.discoveryPolicy = ServerDiscoveryPolicy(policy);
 		_customServer.serverSelection = std::move(selection);
 		_customServer.discoveryOrigin = std::move(origin);
-		if (!ValidDiscoveryMetadata(_customServer)) {
+		if (!ValidDiscoveryMetadata(_customServer, true)) {
 			LOG(("MTP Error: Discovery metadata does not match the stored custom server."));
 			return false;
 		}

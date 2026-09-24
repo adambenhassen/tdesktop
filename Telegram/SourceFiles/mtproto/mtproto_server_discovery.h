@@ -84,14 +84,13 @@ struct ServerSelectionCheck {
 	const QString &value);
 
 // A resolved address is safe for the public HTTPS delegation route only when
-// it is a globally routable IPv4 or IPv6 address. This deliberately remains
-// separate from CheckServerSelection(), where every IP literal is local-direct
-// because it has no DNS name that WebPKI can authenticate.
+// it is globally routable. User-typed IP literals use the local first-use
+// allow list in CheckServerSelection(); other literals are refused.
 [[nodiscard]] bool IsPublicAddress(const QHostAddress &address);
 
-// A delegated public endpoint must be an explicit-port public DNS name or a
-// globally routable IP literal. IP literals remain local-direct when they
-// are user selections, but a verified document may delegate to a public one.
+// An authenticated HTTPS discovery response may delegate to a public DNS name
+// or a globally routable IP literal. A public literal typed by the user is
+// still invalid for first-use enrollment.
 [[nodiscard]] bool IsPublicDiscoveryEndpoint(
 	const ServerSelectionCheck &selection);
 
