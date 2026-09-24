@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <atomic>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
@@ -190,16 +191,23 @@ TEST_CASE(StoredPublicLocalDirectPinLoadsButNewOneIsRefused) {
 }
 
 TEST_CASE(StoredSpecialUseLocalDirectPinsRemainLoadableButNewOnesAreRefused) {
-	auto source = DcOptions(Environment::Production);
-	auto server = MakeCustomServer();
-	server.serverSelection = "10.4.1.7:8443";
-	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
-	server.discoveryOrigin = "local:10.4.1.7:8443";
-	CHECK(source.setCustomServer(server));
+	const auto cases = {
+		std::pair{ "192.168.1.1", "169.254.1.1" },
+		std::pair{ "192.168.1.10", "203.0.113.10" },
+	};
+	for (const auto &[sourceAddress, address] : cases) {
+		auto source = DcOptions(Environment::Production);
+		auto server = MakeCustomServer();
+		server.ip = sourceAddress;
+		server.serverSelection = std::string(sourceAddress) + ":8443";
+		server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+		server.discoveryOrigin = std::string("local:") + sourceAddress + ":8443";
+		CHECK(source.setCustomServer(server));
 
-	for (const auto address : { "169.254.1.1", "203.0.113.10" }) {
 		auto serialized = source.serialize();
-		serialized.replace("10.4.1.7", address);
+		const auto serializedSize = serialized.size();
+		serialized.replace(sourceAddress, address);
+		CHECK_EQ(serialized.size(), serializedSize);
 
 		auto restored = DcOptions(Environment::Production);
 		CHECK(restored.constructFromSerialized(serialized));
