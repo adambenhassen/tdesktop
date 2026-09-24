@@ -795,6 +795,9 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	}
 
 	const auto localName = !isLiteral && IsLocalName(host);
+	if (localName && HasInetAtonNumericFinalLabel(host)) {
+		return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
+	}
 	const auto localLiteral = isLiteral;
 	const auto local = localName || localLiteral;
 	if (local && !explicitPort) {

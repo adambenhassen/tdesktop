@@ -290,6 +290,8 @@ TEST_CASE(InetAtonNumericHostsAreRefusedBeforeLocalDiscovery) {
 		u"0X8080808"_q,
 		u"134744072"_q,
 		u"01002004010"_q,
+		u"１３４７４４０７２"_q,
+		u"０ｘ８０８０８０８"_q,
 	}) {
 		const auto selection = CheckServerSelection(
 			host + u":"_q + QString::number(listener.serverPort()));

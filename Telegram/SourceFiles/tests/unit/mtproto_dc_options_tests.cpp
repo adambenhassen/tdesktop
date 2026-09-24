@@ -189,6 +189,43 @@ TEST_CASE(StoredPublicLocalDirectPinLoadsButNewOneIsRefused) {
 	CHECK(!fresh.setCustomServer(server));
 }
 
+TEST_CASE(StoredSpecialUseLocalDirectPinsRemainLoadableButNewOnesAreRefused) {
+	auto source = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.serverSelection = "10.4.1.7:8443";
+	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+	server.discoveryOrigin = "local:10.4.1.7:8443";
+	CHECK(source.setCustomServer(server));
+
+	for (const auto address : { "169.254.1.1", "203.0.113.10" }) {
+		auto serialized = source.serialize();
+		serialized.replace("10.4.1.7", address);
+
+		auto restored = DcOptions(Environment::Production);
+		CHECK(restored.constructFromSerialized(serialized));
+		CHECK(restored.hasCustomServer());
+		CHECK(restored.refusesProductionFallback());
+		const auto got = restored.customServer();
+		CHECK_EQ(got.ip, address);
+		CHECK_EQ(got.serverSelection, std::string(address) + ":8443");
+		CHECK_EQ(
+			got.discoveryOrigin,
+			std::string("local:") + address + ":8443");
+		CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+		CHECK(got.key != nullptr);
+		if (got.key) {
+			CHECK_EQ(qint64(got.key->fingerprint()),
+				qint64(kProductionKeyFingerprint));
+		}
+
+		auto fresh = DcOptions(Environment::Production);
+		server.ip = address;
+		server.serverSelection = std::string(address) + ":8443";
+		server.discoveryOrigin = std::string("local:") + address + ":8443";
+		CHECK(!fresh.setCustomServer(server));
+	}
+}
+
 TEST_CASE(PublicHttpsDiscoveryEnrollsWithPublicResolvedAddress) {
 	const auto selection = CheckServerSelection(u"server.example.com"_q);
 	const auto key = MakeKey();

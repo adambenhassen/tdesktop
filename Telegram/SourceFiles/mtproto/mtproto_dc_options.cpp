@@ -80,7 +80,7 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 
 [[nodiscard]] bool ValidDiscoveryMetadata(
 		const CustomServer &server,
-		bool allowRestoredPublicLocalLiteral = false) {
+		bool allowRestoredPreviouslyAllowedLiteral = false) {
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::Legacy) {
 		return server.serverSelection.empty()
 			&& server.discoveryOrigin.empty();
@@ -90,7 +90,8 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	}
 	const auto selection = CheckServerSelection(
 		QString::fromStdString(server.serverSelection));
-	const auto restoredPublicLocalLiteral = allowRestoredPublicLocalLiteral
+	const auto restoredPreviouslyAllowedLiteral =
+		allowRestoredPreviouslyAllowedLiteral
 		&& server.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect
 		&& selection.status == ServerSelectionStatus::PublicIpLiteral
 		&& selection.explicitPort
@@ -98,7 +99,7 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 		&& selection.normalizedSelection
 			== QString::fromStdString(server.serverSelection);
 	if ((!selection || selection.policy != server.discoveryPolicy)
-		&& !restoredPublicLocalLiteral) {
+		&& !restoredPreviouslyAllowedLiteral) {
 		return false;
 	}
 	if (selection.requestedPort
@@ -114,12 +115,11 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	}
 	const auto host = QString::fromStdString(server.ip);
 	auto address = QHostAddress();
-	if (restoredPublicLocalLiteral) {
+	if (restoredPreviouslyAllowedLiteral) {
 		return address.setAddress(host)
 			&& host == selection.host
 			&& server.ipv6
-				== (address.protocol() == QAbstractSocket::IPv6Protocol)
-			&& IsPublicAddress(address);
+				== (address.protocol() == QAbstractSocket::IPv6Protocol);
 	}
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps) {
 		return address.setAddress(host)
