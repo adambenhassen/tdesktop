@@ -187,20 +187,11 @@ void CloseNativeSocket(qintptr descriptor) {
 		error = LastSocketError();
 		return kInvalidNativeSocket;
 	}
-#if defined(SO_NOSIGPIPE) && !defined(MSG_NOSIGNAL)
-	const auto noSigpipe = 1;
-	if (::setsockopt(
-			socket,
-			SOL_SOCKET,
-			SO_NOSIGPIPE,
-			&noSigpipe,
-			sizeof(noSigpipe)) != 0) {
-		error = LastSocketError();
-		CloseNativeSocket(socket);
+#endif
+	if (!internal::ConfigureNativeSocketForSend(qintptr(socket), error)) {
+		CloseNativeSocket(qintptr(socket));
 		return kInvalidNativeSocket;
 	}
-#endif
-#endif
 	if (!SetNativeSocketNonBlocking(qintptr(socket))) {
 		error = LastSocketError();
 		CloseNativeSocket(qintptr(socket));
@@ -242,33 +233,6 @@ void CloseNativeSocket(qintptr descriptor) {
 	return result == 0;
 }
 
-[[nodiscard]] qint64 SendNativeSocket(
-		qintptr descriptor,
-		const char *data,
-		int size,
-		int &error) {
-#if defined Q_OS_WIN
-	const auto result = ::send(static_cast<SOCKET>(descriptor), data, size, 0);
-	if (result == SOCKET_ERROR) {
-#else
-	const auto result = ::send(
-		static_cast<int>(descriptor),
-		data,
-		size,
-#if defined(MSG_NOSIGNAL)
-		MSG_NOSIGNAL
-#else
-		0
-#endif
-	);
-	if (result < 0) {
-#endif
-		error = LastSocketError();
-		return -1;
-	}
-	return result;
-}
-
 [[nodiscard]] bool ShutdownNativeSocketWrite(qintptr descriptor, int &error) {
 #if defined Q_OS_WIN
 	const auto result = ::shutdown(static_cast<SOCKET>(descriptor), SD_SEND);
@@ -301,6 +265,56 @@ void CloseNativeSocket(qintptr descriptor) {
 }
 
 } // namespace
+
+namespace internal {
+
+bool ConfigureNativeSocketForSend(qintptr descriptor, int &error) {
+#if !defined Q_OS_WIN && defined(SO_NOSIGPIPE) && !defined(MSG_NOSIGNAL)
+	const auto noSigpipe = 1;
+	if (::setsockopt(
+			static_cast<int>(descriptor),
+			SOL_SOCKET,
+			SO_NOSIGPIPE,
+			&noSigpipe,
+			sizeof(noSigpipe)) != 0) {
+		error = LastSocketError();
+		return false;
+	}
+#else
+	Q_UNUSED(descriptor);
+	Q_UNUSED(error);
+#endif
+	return true;
+}
+
+qint64 SendNativeSocket(
+		qintptr descriptor,
+		const char *data,
+		int size,
+		int &error) {
+#if defined Q_OS_WIN
+	const auto result = ::send(static_cast<SOCKET>(descriptor), data, size, 0);
+	if (result == SOCKET_ERROR) {
+#else
+	const auto result = ::send(
+		static_cast<int>(descriptor),
+		data,
+		size,
+#if defined(MSG_NOSIGNAL)
+		MSG_NOSIGNAL
+#else
+		0
+#endif
+	);
+	if (result < 0) {
+#endif
+		error = LastSocketError();
+		return -1;
+	}
+	return result;
+}
+
+} // namespace internal
 
 ServerWidgetDiscovery::ServerWidgetDiscovery(QObject *parent)
 : QObject(parent) {
@@ -475,7 +489,7 @@ void ServerWidgetDiscovery::sendRequest() {
 	}
 	while (_writeOffset < _request.size()) {
 		auto error = 0;
-		const auto sent = SendNativeSocket(
+		const auto sent = internal::SendNativeSocket(
 			_nativeReadDescriptor,
 			_request.constData() + _writeOffset,
 			_request.size() - _writeOffset,

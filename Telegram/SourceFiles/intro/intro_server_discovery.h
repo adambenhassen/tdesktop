@@ -22,6 +22,19 @@ class QSocketNotifier;
 namespace Intro {
 namespace details {
 
+namespace internal {
+
+[[nodiscard]] bool ConfigureNativeSocketForSend(
+	qintptr descriptor,
+	int &error);
+[[nodiscard]] qint64 SendNativeSocket(
+	qintptr descriptor,
+	const char *data,
+	int size,
+	int &error);
+
+}
+
 class ServerWidgetDiscovery final : public QObject {
 public:
 	struct Attempt {

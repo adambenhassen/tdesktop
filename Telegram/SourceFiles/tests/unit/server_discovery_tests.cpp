@@ -28,7 +28,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <cerrno>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -437,6 +439,74 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 }
 
 #if !defined Q_OS_WIN
+TEST_CASE(NativeDiscoverySenderSurvivesEpipe) {
+	int sockets[2] = { -1, -1 };
+	const auto pairOpened = (::socketpair(
+		AF_UNIX,
+		SOCK_STREAM,
+		0,
+		sockets) == 0);
+	CHECK(pairOpened);
+	if (!pairOpened) {
+		return;
+	}
+	auto error = 0;
+	const auto configured =
+		Intro::details::internal::ConfigureNativeSocketForSend(
+			qintptr(sockets[0]),
+			error);
+	CHECK(configured);
+	if (!configured) {
+		CloseNativeTestSocket(sockets[0]);
+		CloseNativeTestSocket(sockets[1]);
+		return;
+	}
+	CloseNativeTestSocket(sockets[1]);
+
+	const auto child = ::fork();
+	CHECK(child >= 0);
+	if (child == 0) {
+		struct sigaction action = {};
+		action.sa_handler = SIG_DFL;
+		::sigemptyset(&action.sa_mask);
+		if (::sigaction(SIGPIPE, &action, nullptr) != 0) {
+			::_exit(2);
+		}
+		auto unblockedSignals = sigset_t();
+		if (::sigemptyset(&unblockedSignals) != 0
+			|| ::sigaddset(&unblockedSignals, SIGPIPE) != 0
+			|| ::sigprocmask(SIG_UNBLOCK, &unblockedSignals, nullptr) != 0) {
+			::_exit(2);
+		}
+		auto sendError = 0;
+		const auto byte = 'x';
+		const auto sent = Intro::details::internal::SendNativeSocket(
+			qintptr(sockets[0]),
+			&byte,
+			1,
+			sendError);
+		::_exit((sent == -1 && sendError == EPIPE) ? 0 : 1);
+	}
+	if (child < 0) {
+		CloseNativeTestSocket(sockets[0]);
+		return;
+	}
+	auto status = 0;
+	auto waited = pid_t(-1);
+	do {
+		waited = ::waitpid(child, &status, 0);
+	} while (waited < 0 && errno == EINTR);
+	CHECK_EQ(waited, child);
+	if (waited == child) {
+		const auto exited = WIFEXITED(status);
+		CHECK(exited);
+		if (exited) {
+			CHECK_EQ(WEXITSTATUS(status), 0);
+		}
+	}
+	CloseNativeTestSocket(sockets[0]);
+}
+
 TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 	using Intro::details::ServerWidgetDiscovery;
 
