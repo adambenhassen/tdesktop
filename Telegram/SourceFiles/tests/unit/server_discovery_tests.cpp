@@ -468,13 +468,13 @@ TEST_CASE(NativeDiscoverySenderSurvivesEpipe) {
 	if (child == 0) {
 		struct sigaction action = {};
 		action.sa_handler = SIG_DFL;
-		::sigemptyset(&action.sa_mask);
+		sigemptyset(&action.sa_mask);
 		if (::sigaction(SIGPIPE, &action, nullptr) != 0) {
 			::_exit(2);
 		}
 		auto unblockedSignals = sigset_t();
-		if (::sigemptyset(&unblockedSignals) != 0
-			|| ::sigaddset(&unblockedSignals, SIGPIPE) != 0
+		if (sigemptyset(&unblockedSignals) != 0
+			|| sigaddset(&unblockedSignals, SIGPIPE) != 0
 			|| ::sigprocmask(SIG_UNBLOCK, &unblockedSignals, nullptr) != 0) {
 			::_exit(2);
 		}
