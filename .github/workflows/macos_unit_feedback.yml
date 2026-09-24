@@ -1,0 +1,152 @@
+name: MacOS unit feedback.
+
+on:
+  push:
+    branches:
+      - verify/main-847-macos-unit-3ae
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch name or commit SHA to test.
+        required: true
+        default: dev
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+
+  unit:
+    name: macOS arm64 unit-only feedback
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    env:
+      PREPARE_PATH: Telegram/build/prepare/prepare.py
+
+    steps:
+      - name: Get repository name.
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_ENV"
+
+      - name: Report runner architecture.
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "cpu: $(sysctl -n machdep.cpu.brand_string)"
+          test "$(uname -m)" = "arm64" || {
+            echo "::error::Runner is $(uname -m), not arm64."
+            exit 1
+          }
+
+      - name: Clone.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || '3ae59bf65b5215d9b21ea7ffd86f7103175c66b5' }}
+          submodules: recursive
+          path: ${{ env.REPO_NAME }}
+
+      - name: First set up.
+        run: |
+          sudo chown -R `whoami`:admin /usr/local/share
+
+          brew update
+          brew upgrade || true
+          brew install automake libtool meson nasm ninja pkg-config
+
+          sudo mdutil -a -i off
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
+
+      - name: Libraries cache.
+        id: cache-libs
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
+          restore-keys: ${{ runner.OS }}-libs-
+
+      - name: Use dav1d GitHub mirror.
+        run: git config --global 'url.https://github.com/videolan/dav1d.git.insteadOf' 'https://code.videolan.org/videolan/dav1d.git'
+
+      - name: Libraries.
+        id: libraries
+        run: ./$REPO_NAME/Telegram/build/prepare/mac.sh skip-release silent
+
+      - name: Free up some disk space.
+        run: find Libraries '(' '(' ! '(' -name '*.a' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -perm +111 ')' -type f ')' -o -empty ')' -delete
+
+      - name: Save libraries cache.
+        if: ${{ !cancelled() && steps.libraries.outcome == 'success' && steps.cache-libs.outputs.cache-hit != 'true' && github.ref == 'refs/heads/dev' && inputs.ref == 'dev' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
+
+      - name: Record tested revision.
+        run: echo "TESTED_SHA=$(git -C "$REPO_NAME" rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build unit tests.
+        run: |
+          cd "$REPO_NAME/Telegram"
+
+          ./configure.sh \
+            -D CMAKE_OSX_ARCHITECTURES=arm64 \
+            -D CMAKE_CONFIGURATION_TYPES=Debug \
+            -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -D TDESKTOP_API_TEST=ON \
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
+
+          cmake --build ../out --config Debug --target test_unit --parallel
+
+      - name: Unit tests.
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/test_unit.log"
+
+          set +e
+          "$REPO_NAME/out/Debug/test_unit" 2>&1 | tee "$log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          summary="$(sed -nE \
+            's/^([0-9]+) case\(s\), ([0-9]+) failed, ([0-9]+) failed check\(s\)\.$/\1 \2 \3/p' \
+            "$log" | tail -n 1)"
+          if [ -z "$summary" ]; then
+            echo "::error::test_unit did not report a case summary."
+            {
+              echo "## macOS unit feedback"
+              echo
+              echo "- Revision: \`$TESTED_SHA\`"
+              echo "- Result: no case summary (failure)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          read -r cases failed failed_checks <<< "$summary"
+          {
+            echo "## macOS unit feedback"
+            echo
+            echo "- Revision: \`$TESTED_SHA\`"
+            echo "- Cases: $cases"
+            echo "- Failed cases: $failed"
+            echo "- Failed checks: $failed_checks"
+            if [ "$failed" -gt 0 ]; then
+              echo
+              echo "Failed case names:"
+              sed -n 's/^FAIL /- /p' "$log"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$test_status" -eq 0 ] \
+            && [ "$cases" -gt 0 ] \
+            && [ "$failed" -eq 0 ] \
+            && [ "$failed_checks" -eq 0 ]; then
+            exit 0
+          fi
+          exit 1
