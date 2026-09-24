@@ -83,16 +83,26 @@ struct ServerSelectionCheck {
 [[nodiscard]] ServerSelectionCheck CheckServerSelection(
 	const QString &value);
 
-// A resolved address is safe for the public HTTPS delegation route only when
-// it is globally routable. User-typed IP literals use the local first-use
-// allow list in CheckServerSelection(); other literals are refused.
+// Whether an address is globally routable unicast. This deliberately remains
+// separate from typed literal selection: private local ranges use local-direct,
+// while public literals are refused before discovery starts.
 [[nodiscard]] bool IsPublicAddress(const QHostAddress &address);
+// Whether an address is safe for public discovery from the typed HTTPS origin.
+// MagicDNS origins also allow addresses in the two Tailscale ranges.
+[[nodiscard]] bool IsPublicDiscoveryAddress(
+	const ServerSelectionCheck &origin,
+	const QHostAddress &address);
+[[nodiscard]] std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
+	const ServerSelectionCheck &origin,
+	const QList<QHostAddress> &addresses);
 
-// An authenticated HTTPS discovery response may delegate to a public DNS name
-// or a globally routable IP literal. A public literal typed by the user is
-// still invalid for first-use enrollment.
+// A delegated public endpoint must be an explicit-port public DNS name or a
+// safe IP literal for the selected HTTPS origin. Local IP selections retain
+// local-direct routing; public IP selections are refused, but a verified
+// document may delegate to a public or permitted Tailscale address.
 [[nodiscard]] bool IsPublicDiscoveryEndpoint(
-	const ServerSelectionCheck &selection);
+	const ServerSelectionCheck &endpoint,
+	const ServerSelectionCheck &origin);
 
 // This URL is derived only from a valid public selection. It never carries a
 // query, fragment, credentials, or a user-supplied path.

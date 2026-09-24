@@ -243,6 +243,32 @@ TEST_CASE(PublicHttpsDiscoveryEnrollsWithPublicResolvedAddress) {
 	}
 }
 
+TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "100.124.236.66";
+	server.port = 2443;
+	server.serverSelection = "telegram-server.tailaa4918.ts.net";
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://telegram-server.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.hasCustomServer());
+	const auto got = restored.customServer();
+	CHECK_EQ(got.ip, server.ip);
+	CHECK_EQ(got.port, server.port);
+	CHECK_EQ(got.serverSelection, server.serverSelection);
+	CHECK(got.discoveryPolicy == server.discoveryPolicy);
+	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
+	CHECK_EQ(got.dcId, server.dcId);
+	CHECK(got.key != nullptr);
+	CHECK(got.key->valid());
+}
+
 // An unpinned config must round-trip as unpinned rather than picking up
 // a half-written pin, and must keep its production fallback.
 TEST_CASE(UnpinnedConfigSurvivesSerialization) {

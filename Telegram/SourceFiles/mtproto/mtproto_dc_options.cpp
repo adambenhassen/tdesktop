@@ -125,7 +125,7 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 		return address.setAddress(host)
 			&& server.ipv6
 				== (address.protocol() == QAbstractSocket::IPv6Protocol)
-			&& IsPublicAddress(address);
+			&& IsPublicDiscoveryAddress(selection, address);
 	}
 	const auto endpoint = CheckServerSelection(
 		address.setAddress(host)
@@ -204,7 +204,7 @@ std::optional<CustomServer> BuildCustomServerFromDiscovery(
 	const auto endpoint = CheckServerSelection(result.endpoint);
 	const auto endpointAllowed = (result.policy
 		== ServerDiscoveryPolicy::PublicHttps)
-		? IsPublicDiscoveryEndpoint(endpoint)
+		? IsPublicDiscoveryEndpoint(endpoint, selection)
 		: (endpoint && endpoint.policy == result.policy);
 	if (!endpointAllowed || !result.key.valid()) {
 		return std::nullopt;
@@ -226,7 +226,8 @@ std::optional<CustomServer> BuildCustomServerFromDiscovery(
 			+ QString::number(endpoint.operationalPort));
 	const auto connectionSafe = (result.policy
 		== ServerDiscoveryPolicy::PublicHttps)
-		? (connectionIsLiteral && IsPublicAddress(connectionAddress))
+		? (connectionIsLiteral
+			&& IsPublicDiscoveryAddress(selection, connectionAddress))
 		: (connectionEndpoint
 			&& connectionEndpoint.policy
 				== ServerDiscoveryPolicy::LocalDirect);

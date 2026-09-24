@@ -185,6 +185,44 @@ TEST_CASE(PublicSelectionDefaultsToHttps) {
 	CHECK_EQ(result.operationalPort, 443);
 }
 
+TEST_CASE(PublicDiscoveryFailureDoesNotStartLocalDirect) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	auto publicAttempts = 0;
+	auto localAttempts = 0;
+	auto failures = 0;
+	auto flow = Intro::details::ServerDiscoveryFlow();
+	CHECK(flow.start(
+		selection,
+		{
+			.publicHttps = [&] { ++publicAttempts; },
+			.localDirect = [&] { ++localAttempts; },
+			.failed = [&](bool) { ++failures; },
+		}));
+	CHECK_EQ(publicAttempts, 1);
+	CHECK(flow.discoveryFailed(true));
+	CHECK(!flow.active());
+	CHECK_EQ(failures, 1);
+	CHECK_EQ(localAttempts, 0);
+	CHECK(!flow.discoveryFailed(false));
+	CHECK_EQ(failures, 1);
+}
+
+TEST_CASE(LocalSelectionStartsOnlyLocalDirect) {
+	const auto selection = CheckServerSelection(u"localhost:443"_q);
+	auto publicAttempts = 0;
+	auto localAttempts = 0;
+	auto flow = Intro::details::ServerDiscoveryFlow();
+	CHECK(flow.start(
+		selection,
+		{
+			.publicHttps = [&] { ++publicAttempts; },
+			.localDirect = [&] { ++localAttempts; },
+		}));
+	CHECK_EQ(publicAttempts, 0);
+	CHECK_EQ(localAttempts, 1);
+}
+
 TEST_CASE(LocalSelectionRequiresExplicitPort) {
 	const auto result = CheckServerSelection(u"localhost"_q);
 	CHECK(result.status == ServerSelectionStatus::NoPort);
@@ -391,6 +429,67 @@ TEST_CASE(PublicDiscoveryRejectsSpecialPurposeIpv6Addresses) {
 TEST_CASE(PublicDiscoveryNormalizesIpv4MappedAddresses) {
 	CHECK(IsPublicAddress(QHostAddress(u"::ffff:8.8.8.8"_q)));
 	CHECK(!IsPublicAddress(QHostAddress(u"::ffff:10.0.0.1"_q)));
+}
+
+TEST_CASE(PublicDiscoveryAllowsOnlyMagicDnsTailscaleAddresses) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	CHECK(IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"100.124.236.66"_q)));
+	CHECK(IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"fd7a:115c:a1e0::1234"_q)));
+	CHECK(IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"::ffff:100.124.236.66"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"::ffff:10.0.0.5"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"10.0.0.5"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"127.0.0.1"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"fd12:3456::5"_q)));
+	CHECK(!IsPublicAddress(QHostAddress(u"100.124.236.66"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		CheckServerSelection(u"100.124.236.66:2443"_q),
+		QHostAddress(u"100.124.236.66"_q)));
+}
+
+TEST_CASE(PublicDiscoveryUsesMagicDnsPolicyForDnsAnswers) {
+	const auto magicDns = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	const auto answers = QList<QHostAddress>{
+		QHostAddress(u"10.0.0.5"_q),
+		QHostAddress(u"100.124.236.66"_q),
+	};
+	const auto accepted = FirstSafePublicDiscoveryAddress(
+		magicDns,
+		answers);
+	CHECK(accepted.has_value());
+	if (accepted) {
+		CHECK_EQ(accepted->toString(), u"100.124.236.66"_q);
+	}
+
+	const auto privateAnswers = QList<QHostAddress>{
+		QHostAddress(u"10.0.0.5"_q),
+		QHostAddress(u"127.0.0.1"_q),
+		QHostAddress(u"fd12:3456::5"_q),
+	};
+	CHECK(!FirstSafePublicDiscoveryAddress(
+		magicDns,
+		privateAnswers).has_value());
+	CHECK(!FirstSafePublicDiscoveryAddress(
+		CheckServerSelection(u"example.com"_q),
+		{ QHostAddress(u"100.124.236.66"_q) }).has_value());
+	CHECK(!FirstSafePublicDiscoveryAddress(
+		magicDns,
+		{ QHostAddress(u"::ffff:10.0.0.5"_q) }).has_value());
 }
 
 TEST_CASE(SelectionRejectsNonRoutableIpLiterals) {
@@ -1222,7 +1321,7 @@ TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpointWithoutFirstUseTrust) {
 	const auto endpoint = CheckServerSelection(endpointText);
 	CHECK(endpoint.status == ServerSelectionStatus::PublicIpLiteral);
 	CHECK(!endpoint.valid());
-	CHECK(IsPublicDiscoveryEndpoint(endpoint));
+	CHECK(IsPublicDiscoveryEndpoint(endpoint, selection));
 	CHECK(PublicDiscoveryUrl(endpoint).isEmpty());
 	auto candidates = 0;
 	Intro::details::ServerWidgetDiscovery fallback(nullptr);
@@ -1253,6 +1352,60 @@ TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpointWithoutFirstUseTrust) {
 	CHECK_EQ(result.endpoint, endpointText);
 	CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
 	CHECK(result.key.valid());
+}
+
+TEST_CASE(DiscoveryJsonAcceptsTailnetIpForMagicDnsOrigin) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	const auto result = ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"100.124.236.66:2443"_q));
+	CHECK(result.valid());
+	CHECK_EQ(result.endpoint, u"100.124.236.66:2443"_q);
+	CHECK_EQ(result.dcId, 2);
+	CHECK(result.key.valid());
+
+	const auto ipv6 = ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"[fd7a:115c:a1e0::1234]:2443"_q));
+	CHECK(ipv6.valid());
+	CHECK_EQ(ipv6.endpoint, u"[fd7a:115c:a1e0::1234]:2443"_q);
+
+	const auto mapped = ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"[::ffff:100.124.236.66]:2443"_q));
+	CHECK(mapped.valid());
+}
+
+TEST_CASE(DiscoveryJsonRejectsTailnetIpForOtherOrigins) {
+	const auto origins = {
+		u"example.com"_q,
+		u"ts.net.example.com"_q,
+		u"evilts.net"_q,
+		u"ts.net"_q,
+	};
+	for (const auto &origin : origins) {
+		const auto result = ParsePublicDiscoveryResponse(
+			CheckServerSelection(origin),
+			PublicResponse(u"100.124.236.66:2443"_q));
+		CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+	}
+}
+
+TEST_CASE(DiscoveryJsonRejectsNonTailnetPrivateIpForMagicDnsOrigin) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	for (const auto &endpoint : {
+		u"10.0.0.5:2443"_q,
+		u"127.0.0.1:2443"_q,
+		u"[fd12:3456::5]:2443"_q,
+		u"[::ffff:10.0.0.5]:2443"_q,
+	}) {
+		const auto result = ParsePublicDiscoveryResponse(
+			selection,
+			PublicResponse(endpoint));
+		CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+	}
 }
 
 TEST_CASE(DiscoveryJsonRequiresAnExplicitEndpointPort) {

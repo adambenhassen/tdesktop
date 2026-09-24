@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "intro/intro_step.h"
+#include "intro/intro_server_discovery.h"
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QByteArray>
@@ -75,6 +76,7 @@ private:
 		MTP::ServerDiscoveryResult result,
 		const QHostInfo &info);
 	void discoveryFailed(bool connectionFailure);
+	void resetAfterDiscoveryFailure(bool connectionFailure);
 	void cancelDiscovery();
 	void showStatus(const QString &text, bool error);
 	void clearStatus();
@@ -101,6 +103,7 @@ private:
 	QByteArray _publicResponse;
 	int _hostLookupId = -1;
 	ServerWidgetDiscovery *_localDiscovery = nullptr;
+	ServerDiscoveryFlow _discoveryFlow;
 	QTimer *_deadline = nullptr;
 	QByteArray _localNonce;
 	std::optional<MTP::ServerDiscoveryAttempt> _discoveryAttempt;

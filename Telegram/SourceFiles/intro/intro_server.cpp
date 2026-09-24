@@ -504,11 +504,17 @@ void ServerWidget::submitSelection() {
 				tr::lng_intro_server_connecting(tr::now));
 			showStatus(tr::lng_intro_server_connecting(tr::now), false);
 			_deadline->start(kDiscoveryTimeout);
-			if (_selection.policy
-				== MTP::ServerDiscoveryPolicy::PublicHttps) {
-				beginPublicDiscovery();
-			} else {
-				beginLocalDiscovery();
+			const auto started = _discoveryFlow.start(
+				_selection,
+				{
+					.publicHttps = [=] { beginPublicDiscovery(); },
+					.localDirect = [=] { beginLocalDiscovery(); },
+					.failed = [=](bool connectionFailure) {
+						resetAfterDiscoveryFailure(connectionFailure);
+					},
+				});
+			if (!started) {
+				return;
 			}
 		})) {
 		return;
@@ -687,7 +693,7 @@ void ServerWidget::discoveryFinished(MTP::ServerDiscoveryResult result) {
 void ServerWidget::resolvePublicEndpoint(
 		MTP::ServerDiscoveryResult result) {
 	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
-	if (!MTP::IsPublicDiscoveryEndpoint(endpoint)) {
+	if (!MTP::IsPublicDiscoveryEndpoint(endpoint, _selection)) {
 		discoveryFailed(false);
 		return;
 	}
@@ -698,7 +704,7 @@ void ServerWidget::resolvePublicEndpoint(
 			discoveryFailed(false);
 			return;
 		}
-		if (!MTP::IsPublicAddress(address)) {
+		if (!MTP::IsPublicDiscoveryAddress(_selection, address)) {
 			discoveryFailed(false);
 			return;
 		}
@@ -735,26 +741,28 @@ void ServerWidget::publicEndpointResolved(
 		return;
 	}
 	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
-	if (!MTP::IsPublicDiscoveryEndpoint(endpoint)
+	if (!MTP::IsPublicDiscoveryEndpoint(endpoint, _selection)
 		|| result.policy != MTP::ServerDiscoveryPolicy::PublicHttps) {
 		discoveryFailed(false);
 		return;
 	}
-	for (const auto &address : info.addresses()) {
-		if (address.protocol() != QAbstractSocket::IPv4Protocol
-			&& address.protocol() != QAbstractSocket::IPv6Protocol) {
-			continue;
-		}
-		if (MTP::IsPublicAddress(address)) {
-			result.resolvedAddress = address.toString();
-			commitBinding(std::move(result));
-			return;
-		}
+	if (const auto address = MTP::FirstSafePublicDiscoveryAddress(
+			_selection,
+			info.addresses())) {
+		result.resolvedAddress = address->toString();
+		commitBinding(std::move(result));
+		return;
 	}
 	discoveryFailed(false);
 }
 
 void ServerWidget::discoveryFailed(bool connectionFailure) {
+	if (!_discoveryFlow.discoveryFailed(connectionFailure)) {
+		return;
+	}
+}
+
+void ServerWidget::resetAfterDiscoveryFailure(bool connectionFailure) {
 	if (!_connecting) {
 		return;
 	}
@@ -790,9 +798,10 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 }
 
 void ServerWidget::cancelDiscovery() {
-	if (!_connecting) {
+	if (!_discoveryFlow.active()) {
 		return;
 	}
+	_discoveryFlow.cancel();
 	_connecting = false;
 	_localDiscovery->cancel();
 	_discoveryAttempt.reset();
@@ -879,6 +888,7 @@ void ServerWidget::commitBinding(
 				account().mtp().dcOptions().constructBlocked();
 			}
 		})) {
+		_discoveryFlow.finish();
 		_connecting = false;
 		_discoveryAttempt.reset();
 		++_attempt;
@@ -900,6 +910,7 @@ void ServerWidget::commitBinding(
 	}
 
 	_discoveryAttempt.reset();
+	_discoveryFlow.finish();
 	_connecting = false;
 	getData()->serverEndpoint = result.endpoint;
 	switchToBound();
