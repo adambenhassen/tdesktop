@@ -364,7 +364,7 @@ void ServerWidgetDiscovery::sendRequest() {
 	}
 	const auto qtSocket = std::exchange(_socket, nullptr);
 	QObject::disconnect(qtSocket, nullptr, this, nullptr);
-	qtSocket->abort();
+	qtSocket->disconnectFromHost();
 	qtSocket->deleteLater();
 	_nativeReadDescriptor = descriptor;
 	if (!ShutdownNativeSocketWrite(_nativeReadDescriptor, error)) {
