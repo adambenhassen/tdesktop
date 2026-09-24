@@ -768,6 +768,13 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	if (!server.isListening()) {
 		return;
 	}
+	server.pauseAccepting();
+	const auto listenerNonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(listenerNonBlocking);
+	if (!listenerNonBlocking) {
+		return;
+	}
 
 	const auto selection = CheckServerSelection(
 		u"127.0.0.1:"_q + QString::number(server.serverPort()));
@@ -780,6 +787,13 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	QEventLoop loop;
 	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
 
+	// telegramd waits for request EOF, then replies on the same connection.
+#if defined Q_OS_WIN
+	const auto invalidPeer = INVALID_SOCKET;
+#else
+	const auto invalidPeer = -1;
+#endif
+	NativeTestSocket peer = invalidPeer;
 	auto receivedRequest = QByteArray();
 	auto responseScheduled = false;
 	auto responseSent = false;
@@ -787,27 +801,64 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 	auto failed = false;
 	auto earlySocketSignals = QByteArray();
 	auto earlySignalAbortedDiscovery = false;
-	QObject::connect(&server, &QTcpServer::newConnection, &owner, [&] {
-		const auto peer = server.nextPendingConnection();
-		CHECK(peer != nullptr);
-		if (!peer) {
-			return;
-		}
-		QObject::connect(peer, &QTcpSocket::readyRead, peer, [&, peer] {
-			receivedRequest += peer->readAll();
-			if (receivedRequest.size() < request.size()
-				|| responseScheduled) {
+	QTimer poll;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (peer == invalidPeer) {
+			peer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (peer == invalidPeer) {
 				return;
 			}
-			responseScheduled = true;
-			CHECK_EQ(receivedRequest, request);
-			QTimer::singleShot(100, &owner, [&, peer] {
-				responseSent = true;
-				peer->write(response);
-				peer->disconnectFromHost();
-			});
+			const auto peerNonBlocking = SetNativeTestNonBlocking(
+				qintptr(peer));
+			CHECK(peerNonBlocking);
+			if (!peerNonBlocking) {
+				CloseNativeTestSocket(peer);
+				peer = invalidPeer;
+				return;
+			}
+		}
+
+		auto peerSawEof = false;
+		while (!peerSawEof) {
+			char buffer[256];
+			const auto read = ReceiveNativeTestSocket(
+				peer,
+				buffer,
+				int(sizeof(buffer)));
+			if (read > 0) {
+				receivedRequest.append(buffer, int(read));
+				continue;
+			}
+			peerSawEof = (read == 0);
+			break;
+		}
+		if (!peerSawEof || responseScheduled) {
+			return;
+		}
+		responseScheduled = true;
+		CHECK_EQ(receivedRequest, request);
+
+		const auto responsePeer = peer;
+		QTimer::singleShot(100, &owner, [&, responsePeer] {
+			auto responseOffset = 0;
+			while (responseOffset < response.size()) {
+				const auto written = SendNativeTestSocket(
+					responsePeer,
+					response.constData() + responseOffset,
+					response.size() - responseOffset);
+				CHECK(written > 0);
+				if (written <= 0) {
+					break;
+				}
+				responseOffset += int(written);
+			}
+			CHECK_EQ(responseOffset, response.size());
+			responseSent = (responseOffset == response.size());
+			CloseNativeTestSocket(responsePeer);
+			peer = invalidPeer;
 		});
 	});
+	poll.start(1);
 
 	discovery.start(
 		selection,
@@ -849,8 +900,13 @@ TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
 		});
 	}
 	loop.exec();
+	poll.stop();
+	if (peer != invalidPeer) {
+		CloseNativeTestSocket(peer);
+	}
 
 	CHECK_EQ(receivedRequest, request);
+	CHECK(responseScheduled);
 	CHECK(responseSent);
 	CHECK(finished);
 	CHECK(!failed);
