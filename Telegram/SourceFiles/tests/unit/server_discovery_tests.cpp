@@ -760,6 +760,105 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	CHECK(!failed);
 }
 
+TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"127.0.0.1:"_q + QString::number(server.serverPort()));
+	const auto nonce = QByteArray(32, '\x08');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+	auto receivedRequest = QByteArray();
+	auto responseScheduled = false;
+	auto responseSent = false;
+	auto finished = false;
+	auto failed = false;
+	auto earlySocketSignals = QByteArray();
+	auto earlySignalAbortedDiscovery = false;
+	QObject::connect(&server, &QTcpServer::newConnection, &owner, [&] {
+		const auto peer = server.nextPendingConnection();
+		CHECK(peer != nullptr);
+		if (!peer) {
+			return;
+		}
+		QObject::connect(peer, &QTcpSocket::readyRead, peer, [&, peer] {
+			receivedRequest += peer->readAll();
+			if (receivedRequest.size() < request.size()
+				|| responseScheduled) {
+				return;
+			}
+			responseScheduled = true;
+			CHECK_EQ(receivedRequest, request);
+			QTimer::singleShot(100, &owner, [&, peer] {
+				responseSent = true;
+				peer->write(response);
+				peer->disconnectFromHost();
+			});
+		});
+	});
+
+	discovery.start(
+		selection,
+		nonce,
+		{ server.serverAddress() },
+		{
+			.finished = [&](ServerDiscoveryResult result) {
+				finished = true;
+				CHECK(result.valid());
+				loop.quit();
+			},
+			.failed = [&](bool connectionFailure) {
+				failed = true;
+				CHECK(!connectionFailure);
+				loop.quit();
+		},
+	});
+	const auto sockets = discovery.findChildren<QTcpSocket*>();
+	CHECK_EQ(sockets.size(), 1);
+	if (!sockets.isEmpty()) {
+		const auto socket = sockets.front();
+		QObject::connect(
+			socket,
+			&QTcpSocket::errorOccurred,
+			&owner,
+			[&](QAbstractSocket::SocketError error) {
+				if (!responseSent) {
+					earlySocketSignals += "errorOccurred(";
+					earlySocketSignals += QByteArray::number(int(error));
+					earlySocketSignals += ") ";
+					earlySignalAbortedDiscovery |= !discovery.running();
+				}
+			});
+		QObject::connect(socket, &QTcpSocket::disconnected, &owner, [&] {
+			if (!responseSent) {
+				earlySocketSignals += "disconnected ";
+				earlySignalAbortedDiscovery |= !discovery.running();
+			}
+		});
+	}
+	loop.exec();
+
+	CHECK_EQ(receivedRequest, request);
+	CHECK(responseSent);
+	CHECK(finished);
+	CHECK(!failed);
+	CHECK_EQ(
+		earlySignalAbortedDiscovery ? earlySocketSignals : QByteArray(),
+		QByteArray());
+}
+
 TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
 	using Intro::details::ServerWidgetDiscovery;
 

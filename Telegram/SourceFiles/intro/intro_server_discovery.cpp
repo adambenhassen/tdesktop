@@ -125,9 +125,17 @@ void ServerWidgetDiscovery::startNextAddress() {
 		&QTcpSocket::errorOccurred,
 		this,
 		[=](QAbstractSocket::SocketError error) {
+			LOG(("Server discovery errorOccurred(%1): %2, half-close=%3, response-bytes=%4")
+				.arg(int(error))
+				.arg(socket->errorString())
+				.arg(_writeClosed ? 1 : 0)
+				.arg(_response.size()));
 			if (!_running
 				|| _socket != socket
 				|| error == QAbstractSocket::RemoteHostClosedError) {
+				return;
+			}
+			if (_writeClosed) {
 				return;
 			}
 			if (_response.isEmpty()) {
@@ -141,6 +149,9 @@ void ServerWidgetDiscovery::startNextAddress() {
 			return;
 		}
 		_response += socket->readAll();
+		LOG(("Server discovery disconnected, half-close=%1, response-bytes=%2")
+			.arg(_writeClosed ? 1 : 0)
+			.arg(_response.size()));
 		if (_response.size() > kMaxDiscoveryBody) {
 			fail(false);
 			return;
