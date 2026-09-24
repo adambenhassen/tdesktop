@@ -16,12 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QTcpSocket>
 
-#if defined Q_OS_WIN
-#include <winsock2.h>
-#else
-#include <sys/socket.h>
-#endif
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -875,11 +869,7 @@ bool StartNextLocalDiscoverySocket(
 bool SendLocalDiscoveryRequest(
 		QTcpSocket &socket,
 		const QByteArray &request,
-		int &writeOffset,
-		bool &writeClosed) {
-	if (writeClosed) {
-		return true;
-	}
+		int &writeOffset) {
 	if (socket.state() != QAbstractSocket::ConnectedState
 		|| request.isEmpty()
 		|| writeOffset < 0
@@ -906,24 +896,6 @@ bool SendLocalDiscoveryRequest(
 			return true;
 		}
 	}
-
-	const auto descriptor = socket.socketDescriptor();
-	if (descriptor < 0) {
-		return false;
-	}
-#if defined Q_OS_WIN
-	const auto result = ::shutdown(
-		static_cast<SOCKET>(descriptor),
-		SD_SEND);
-#else
-	const auto result = ::shutdown(
-		static_cast<int>(descriptor),
-		SHUT_WR);
-#endif
-	if (result != 0) {
-		return false;
-	}
-	writeClosed = true;
 	return true;
 }
 

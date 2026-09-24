@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <optional>
 
 class QTcpSocket;
+class QSocketNotifier;
 
 namespace Intro {
 namespace details {
@@ -57,6 +58,9 @@ private:
 	void startNextAddress();
 	void sendRequest();
 	void readyRead();
+	void nativeReadyRead();
+	void finishNativeRead();
+	void closeNativeSocket();
 	void fail(bool connectionFailure);
 	void finish(MTP::ServerDiscoveryResult result);
 	void stopSocket();
@@ -69,7 +73,10 @@ private:
 	int _nextAddress = 0;
 	int _writeOffset = 0;
 	bool _writeClosed = false;
+	QHostAddress _resolvedAddress;
 	QTcpSocket *_socket = nullptr;
+	qintptr _nativeReadDescriptor = -1;
+	QSocketNotifier *_nativeReadNotifier = nullptr;
 	Callbacks _callbacks;
 	bool _running = false;
 };
