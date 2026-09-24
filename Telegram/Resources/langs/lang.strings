@@ -424,6 +424,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_save_failed"       = "Could not save this server on this device. Try again.";
 "lng_intro_server_key_mismatch"      = "This server no longer matches this account. Connection is blocked. Contact your server administrator.";
 "lng_intro_server_dc_mismatch"       = "This server's configuration does not match this account. Connection is blocked. Contact your server administrator.";
+"lng_intro_server_identity_title"     = "Server identity changed";
+"lng_intro_server_identity_changed"   = "The identity of the server pinned to this account has changed.\n\nPinned fingerprint: {pinned_fingerprint}\nPresented fingerprint: {presented_fingerprint}\n\nThe client cannot distinguish a legitimate key rotation from an interception, so the connection is blocked.\n\nCancel keeps this account and its current pin unchanged. Continue opens a final confirmation. Nothing is deleted until that final confirmation is explicitly accepted.";
+"lng_intro_server_identity_cancel"    = "Cancel";
+"lng_intro_server_identity_continue"  = "Continue to confirmation";
+"lng_intro_server_identity_confirm_title" = "Confirm account deletion";
+"lng_intro_server_identity_confirm"   = "This is the final confirmation. Accepting permanently deletes this account's server-scoped keys, sessions, cached messages and peers, endpoint, and server identity before returning to enrollment. This cannot be undone.";
+"lng_intro_server_identity_confirm_forget" = "Delete account data and trust a new server identity";
+"lng_intro_server_reenrollment_failed" = "The account could not be prepared for re-enrollment. It remains blocked.";
 
 "lng_intro_username_title"        = "Your username";
 "lng_intro_username_desc"         = "Enter your username on {server}.";

@@ -7,7 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "config.h"
+#include "main/main_account.h"
 #include "main/main_account_persistence.h"
+#include "main/main_domain.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_config.h"
@@ -16,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/session.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/storage_account.h"
+#include "storage/storage_domain.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -69,12 +73,48 @@ MakeEnrollmentServerKey() {
 		MTP::AuthKey::Data{ { gsl::byte{} } });
 }
 
+[[nodiscard]] bool WriteEnrollmentAccountList(
+		const QString &dataName,
+		const QString &basePath,
+		const MTP::AuthKeyPtr &localKey,
+		const std::vector<int> &indices,
+		int active) {
+	const auto salt = QByteArray(LocalEncryptSaltSize, '\x42');
+	const auto passcodeKey = Storage::details::CreateLocalKey(
+		QByteArray(),
+		salt);
+	Storage::details::EncryptedDescriptor localKeyData(MTP::AuthKey::kSize);
+	localKey->write(localKeyData.stream);
+	const auto localKeyEncrypted = Storage::details::PrepareEncrypted(
+		localKeyData,
+		passcodeKey);
+
+	Storage::details::EncryptedDescriptor info(
+		sizeof(qint32) * (2 + indices.size()));
+	info.stream << qint32(indices.size());
+	for (const auto index : indices) {
+		info.stream << qint32(index);
+	}
+	info.stream << qint32(active);
+
+	Storage::details::FileWriteDescriptor file(
+		u"key_"_q + dataName,
+		basePath,
+		true);
+	file.writeData(salt);
+	file.writeData(localKeyEncrypted);
+	file.writeEncrypted(info, localKey);
+	return file.finish();
+}
+
 [[nodiscard]] std::unique_ptr<Storage::Account> MakeEnrollmentStorageAccount(
 		const QString &basePath,
 		const MTP::AuthKeyPtr &key,
 		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
-		Fn<bool()> writeMtpAuthorizationOverride = nullptr) {
+		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
+		const QString &tempPath = {},
+		const QString &databasePath = {}) {
 	return std::make_unique<Storage::Account>(
 		basePath,
 		key,
@@ -82,7 +122,9 @@ MakeEnrollmentServerKey() {
 		false,
 		std::move(serializeMtpAuthorization),
 		std::move(restoreMtpAuthorization),
-		std::move(writeMtpAuthorizationOverride));
+		std::move(writeMtpAuthorizationOverride),
+		tempPath,
+		databasePath);
 }
 
 [[nodiscard]] bool HasReadableEnrollmentMap(
@@ -343,6 +385,358 @@ TEST_CASE(EnrollmentRestartRestoresBoundServerStep) {
 		false));
 	CHECK(!MTP::ShouldOpenServerEnrollment(false, false));
 	CHECK(MTP::ShouldOpenServerEnrollment(false, true));
+}
+
+TEST_CASE(ServerReenrollmentConfirmationLeavesBlockedPinUnchanged) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto account = std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		std::move(config),
+		false,
+		[] { return QByteArray("old-server-auth-key"); });
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+
+	MTP::ServerEnrollmentGate gate;
+	CHECK(gate.start());
+	CHECK(gate.pause());
+	auto wipeCalls = 0;
+	const auto wipe = [&] {
+		++wipeCalls;
+		const auto written = account->writeServerReenrollmentTombstone();
+		if (written) {
+			static_cast<void>(gate.resume());
+		}
+		return written;
+	};
+
+	// Canceling the identity warning and declining the final prompt must not
+	// reach the destructive callback, even though the first prompt was seen.
+	CHECK(!Main::details::CommitServerReenrollment(
+		Main::details::ServerReenrollmentPrompt::IdentityChange,
+		false,
+		wipe));
+	CHECK(!Main::details::CommitServerReenrollment(
+		Main::details::ServerReenrollmentPrompt::IdentityChange,
+		true,
+		wipe));
+	CHECK(!Main::details::CommitServerReenrollment(
+		Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+		false,
+		wipe));
+
+	CHECK_EQ(wipeCalls, 0);
+	CHECK(!account->serverReenrollmentPending());
+	CHECK(!gate.networkAllowed());
+	const auto restored = ReadEnrollmentConfig(basePath, key);
+	CHECK(restored != nullptr);
+	if (restored) {
+		CHECK(restored->hasCustomServer());
+		CHECK(restored->dcOptions().isAuthorized(2));
+	}
+}
+
+TEST_CASE(ServerReenrollmentWipeRemovesFutureStores) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto dataName = u"reenrollment"_q;
+	const auto tdataPath = directory.path() + u"/tdata/"_q;
+	const auto basePath = tdataPath + u"account/"_q;
+	const auto tempPath = tdataPath + u"temp_"_q + dataName + u"/"_q;
+	const auto databasePath = tdataPath + u"user_"_q + dataName + u"/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	const auto serialized = QByteArray("old-server-auth-key");
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto account = std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		std::move(config),
+		false,
+		[serialized] { return serialized; },
+		nullptr,
+		nullptr,
+		tempPath,
+		databasePath);
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+
+	CHECK(QDir().mkpath(basePath + u"future/nested"_q));
+	CHECK(QDir().mkpath(databasePath + u"future"_q));
+	CHECK(QDir().mkpath(tempPath + u"future"_q));
+	QFile futureStore(basePath + u"future/nested/messages"_q);
+	CHECK(futureStore.open(QIODevice::WriteOnly));
+	futureStore.write("server-scoped");
+	futureStore.close();
+
+	CHECK(account->writeServerReenrollmentTombstone());
+	CHECK(account->serverReenrollmentPending());
+	CHECK(account->completeServerReenrollment());
+	CHECK(!account->serverReenrollmentPending());
+	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
+	CHECK(!QFile::exists(basePath + u"future/nested/messages"_q));
+	CHECK(!QDir(databasePath).exists());
+	CHECK(!QDir(tempPath).exists());
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		tempPath,
+		databasePath);
+	restarted->readMtpDataForTest();
+	CHECK(restored.isEmpty());
+}
+
+TEST_CASE(ServerReenrollmentWipePreservesOtherAccountsLegacyStore) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto tdataPath = directory.path() + u"/tdata/"_q;
+	const auto accountAPath = tdataPath + u"account_a/"_q;
+	const auto tempAPath = tdataPath + u"temp_account_a/"_q;
+	const auto databaseAPath = tdataPath + u"user_account_a/"_q;
+	const auto accountBPath = tdataPath + u"account_b/"_q;
+	const auto tempBPath = tdataPath + u"temp_account_b/"_q;
+	const auto databaseBPath = tdataPath + u"user_account_b/"_q;
+	const auto legacyStorePath = tdataPath
+		+ u"tdld/account_b/future/messages"_q;
+	CHECK(QDir().mkpath(tdataPath + u"tdld/account_b/future"_q));
+	QFile legacyStore(legacyStorePath);
+	CHECK(legacyStore.open(QIODevice::WriteOnly));
+	legacyStore.write("account-b-server-scoped");
+	legacyStore.close();
+
+	const auto key = MakeEnrollmentStorageKey();
+	auto accountB = MakeEnrollmentStorageAccount(
+		accountBPath,
+		key,
+		nullptr,
+		nullptr,
+		nullptr,
+		tempBPath,
+		databaseBPath);
+	CHECK(accountB != nullptr);
+	CHECK(QDir().mkpath(databaseBPath + u"future"_q));
+
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto accountA = std::make_unique<Storage::Account>(
+		accountAPath,
+		key,
+		std::move(config),
+		false,
+		[] { return QByteArray("account-a-server-auth-key"); },
+		nullptr,
+		nullptr,
+		tempAPath,
+		databaseAPath);
+	CHECK(accountA->writeMtpConfig(true));
+	CHECK(accountA->writeMtpData(true));
+	CHECK(accountA->writeServerReenrollmentTombstone());
+	CHECK(accountA->completeServerReenrollment());
+
+	CHECK(QFile::exists(legacyStorePath));
+	QFile preservedLegacyStore(legacyStorePath);
+	CHECK(preservedLegacyStore.open(QIODevice::ReadOnly));
+	CHECK_EQ(
+		preservedLegacyStore.readAll(),
+		QByteArray("account-b-server-scoped"));
+	CHECK(QDir(databaseBPath).exists());
+}
+
+TEST_CASE(ServerReenrollmentStartupEntersEnrollment) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"/account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	{
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[] { return QByteArray("old-server-auth-key"); });
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(account->writeServerReenrollmentTombstone());
+		CHECK(account->serverReenrollmentPending());
+	}
+
+	auto restarted = MakeEnrollmentStorageAccount(basePath, nullptr);
+	const auto enrollment = restarted->startServerReenrollmentForTest(key);
+	CHECK(enrollment != nullptr);
+	if (enrollment) {
+		CHECK(enrollment->dcOptions().unenrolled());
+		CHECK(!enrollment->hasCustomServer());
+	}
+}
+
+TEST_CASE(ServerReenrollmentMultiAccountStartupRestoresEncryptedAccountList) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto dataName = u"reenrollment"_q;
+	const auto tdataPath = directory.path() + u"/tdata/"_q;
+	const auto activeDatabasePath = Main::Account::storageDatabasePathForTest(
+		dataName,
+		0);
+	const auto pendingBasePath = Main::Account::storageBasePathForTest(
+		dataName,
+		1);
+	const auto pendingTempPath = Main::Account::storageTempPathForTest(
+		dataName,
+		1);
+	const auto pendingDatabasePath
+		= Main::Account::storageDatabasePathForTest(dataName, 1);
+	const auto key = MakeEnrollmentStorageKey();
+
+	CHECK(QDir().mkpath(activeDatabasePath + u"future"_q));
+
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto pending = std::make_unique<Storage::Account>(
+		pendingBasePath,
+		key,
+		std::move(config),
+		false,
+		[] { return QByteArray("pending-server-auth-key"); },
+		nullptr,
+		nullptr,
+		pendingTempPath,
+		pendingDatabasePath,
+		Storage::FileKey(2));
+	CHECK(pending->writeMtpConfig(true));
+	CHECK(pending->writeMtpData(true));
+	CHECK(pending->writeServerReenrollmentTombstone());
+	CHECK(pending->serverReenrollmentPending());
+
+	const auto indices = std::vector<int>{ 0, 1 };
+	CHECK(WriteEnrollmentAccountList(
+		dataName,
+		tdataPath,
+		key,
+		indices,
+		0));
+
+	auto restarted = Main::Domain(dataName);
+	CHECK(restarted.local().start(QByteArray())
+		== Storage::StartResult::Success);
+	const auto &restored = restarted.accounts();
+	CHECK_EQ(int(restored.size()), 2);
+	auto restoredIndices = base::flat_set<int>();
+	for (const auto &[index, account] : restored) {
+		CHECK(account != nullptr);
+		restoredIndices.emplace(index);
+		if (index == 1) {
+			CHECK(account->startedUnenrolledForTest());
+			CHECK(!account->local().serverReenrollmentPending());
+		}
+	}
+
+	CHECK(restoredIndices.contains(0));
+	CHECK(restoredIndices.contains(1));
+	CHECK_EQ(int(restoredIndices.size()), 2);
+	CHECK(QDir(activeDatabasePath).exists());
+}
+
+TEST_CASE(ServerReenrollmentTombstoneReplaysAfterInterruption) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	const auto prepare = [&] {
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[] { return QByteArray("old-server-auth-key"); });
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(QDir().mkpath(basePath + u"future"_q));
+		QFile futureStore(basePath + u"future/messages"_q);
+		CHECK(futureStore.open(QIODevice::WriteOnly));
+		futureStore.write("server-scoped");
+		futureStore.close();
+		CHECK(account->writeServerReenrollmentTombstone());
+		return account;
+	};
+
+	for (const auto interruption : { 1, 2 }) {
+		auto account = prepare();
+		// The injected stop models a process kill at two different durable
+		// boundaries. The next account instance is the next launch.
+		account->setServerReenrollmentInterruptionForTest(interruption);
+		CHECK(!account->completeServerReenrollment());
+		CHECK(account->serverReenrollmentPending());
+		account.reset();
+
+		auto restored = QByteArray();
+		auto restarted = MakeEnrollmentStorageAccount(
+			basePath,
+			key,
+			[] { return QByteArray(); },
+			[&](const QByteArray &value) { restored = value; });
+		CHECK(restarted->serverReenrollmentPending());
+		CHECK(restarted->completeServerReenrollment());
+		CHECK(!restarted->serverReenrollmentPending());
+		restarted->readMtpDataForTest();
+		CHECK(restored.isEmpty());
+	}
 }
 
 TEST_CASE(MtpAuthorizationLifecycleWriteSurvivesCleanAccountRestart) {

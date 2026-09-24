@@ -250,6 +250,9 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	Expects(localKey != nullptr);
 
 	_localKey = std::move(localKey);
+	if (serverReenrollmentPending()) {
+		return startServerReenrollment();
+	}
 	readMapWith(_localKey);
 	clearLegacyFiles();
 	readStoredCustomServerPin();

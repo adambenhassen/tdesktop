@@ -71,7 +71,10 @@ public:
 		bool hasStoredCustomServer,
 		Fn<QByteArray()> serializeMtpAuthorization = nullptr,
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
-		Fn<bool()> writeMtpAuthorizationOverride = nullptr);
+		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
+		QString tempPath = {},
+		QString databasePath = {},
+		FileKey dataNameKey = 0);
 #endif
 	~Account();
 
@@ -126,9 +129,18 @@ public:
 	bool writeMtpAuthorizationFailure();
 	bool writeMtpData(bool sync = false);
 	bool writeMtpConfig(bool sync = false);
+	// A durable marker is written before destructive re-enrollment. The
+	// cleanup remains pending until every server-scoped store has been
+	// removed and an empty account can be written back.
+	bool writeServerReenrollmentTombstone();
+	bool completeServerReenrollment();
+	[[nodiscard]] bool serverReenrollmentPending() const;
 #ifdef TDESKTOP_UNIT_TESTS
 	void readMtpDataForTest();
 	void readMtpAuthorizationFailureMarkerForTest();
+	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollmentForTest(
+		MTP::AuthKeyPtr localKey);
+	void setServerReenrollmentInterruptionForTest(int point);
 #endif
 
 	void registerDraftSource(
@@ -305,6 +317,7 @@ private:
 	std::unique_ptr<MTP::Config> readMtpConfig();
 	void readMtpData();
 	void readMtpAuthorizationFailureMarker();
+	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollment();
 	bool clearMtpAuthorizationFailureMarker();
 	// Read the persisted pin marker before readMtpConfig(), so that a
 	// corrupted or truncated config blob on a pinned account still
@@ -392,6 +405,7 @@ private:
 	Fn<void(const QByteArray &)> _restoreMtpAuthorization;
 #ifdef TDESKTOP_UNIT_TESTS
 	Fn<bool()> _writeMtpAuthorizationOverride;
+	int _serverReenrollmentInterruptionForTest = 0;
 #endif
 	Fn<QByteArray()> _serializeSelf;
 	Fn<void()> _queueMapWrite;

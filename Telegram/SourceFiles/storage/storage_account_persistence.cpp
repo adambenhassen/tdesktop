@@ -67,6 +67,8 @@ constexpr auto kMtpAuthorizationWriteFailedPref
 	= "mtp_authorization_write_failed"_cs;
 const auto kMtpAuthorizationWriteFailedFile
 	= u"mtp_authorization_write_failed"_q;
+const auto kServerReenrollmentTombstonePrefix
+	= u"server_reenrollment_"_q;
 
 [[nodiscard]] QString BaseGlobalPath() {
 #ifdef TDESKTOP_UNIT_TESTS
@@ -74,6 +76,86 @@ const auto kMtpAuthorizationWriteFailedFile
 #else
 	return cWorkingDir() + u"tdata/"_q;
 #endif
+}
+
+[[nodiscard]] QString ServerReenrollmentTombstoneName(FileKey dataNameKey) {
+	return kServerReenrollmentTombstonePrefix + ToFilePart(dataNameKey);
+}
+
+[[nodiscard]] bool RemoveFileVariants(
+		const QString &basePath,
+		const QString &name) {
+	const auto base = basePath + name;
+	auto result = true;
+	for (const auto suffix : { 's', '0', '1' }) {
+		const auto path = base + suffix;
+		if (QFileInfo::exists(path) && !QFile::remove(path)) {
+			result = false;
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] bool RemovePath(const QString &path) {
+	if (path.isEmpty()) {
+		return true;
+	}
+	const auto info = QFileInfo(path);
+	if (!info.exists()) {
+		return true;
+	}
+	return info.isDir()
+		? QDir(path).removeRecursively()
+		: QFile::remove(path);
+}
+
+[[nodiscard]] bool IsKnownWebviewPath(
+		const QString &path,
+		const QString &databasePath,
+		const QString &globalPath) {
+	return path.isEmpty()
+		|| path == globalPath + u"webview"_q
+		|| path == databasePath + u"wvbots"_q
+		|| path == databasePath + u"wvother"_q;
+}
+
+[[nodiscard]] bool WriteMtpAuthorizationData(
+		FileKey dataNameKey,
+		const QString &basePath,
+		const MTP::AuthKeyPtr &localKey,
+		const QByteArray &serialized,
+		bool sync) {
+	const auto size = sizeof(quint32) + Serialize::bytearraySize(serialized);
+
+	FileWriteDescriptor mtp(ToFilePart(dataNameKey), basePath, sync);
+	EncryptedDescriptor data(size);
+	data.stream << quint32(dbiMtpAuthorization) << serialized;
+	mtp.writeEncrypted(data, localKey);
+	return mtp.finish();
+}
+
+[[nodiscard]] std::optional<std::pair<QString, QString>>
+ReadServerReenrollmentTombstone(
+		FileKey dataNameKey,
+		const QString &basePath,
+		const MTP::AuthKeyPtr &localKey) {
+	FileReadDescriptor marker;
+	if (!ReadEncryptedFile(
+			marker,
+			ServerReenrollmentTombstoneName(dataNameKey),
+			basePath,
+			localKey)) {
+		return std::nullopt;
+	}
+
+	quint32 version = 0;
+	QString webviewBots;
+	QString webviewOther;
+	marker.stream >> version >> webviewBots >> webviewOther;
+	if (!CheckStreamStatus(marker.stream) || version != 2) {
+		return std::nullopt;
+	}
+	return std::make_pair(std::move(webviewBots), std::move(webviewOther));
 }
 
 } // namespace
@@ -87,11 +169,21 @@ Account::Account(
 		bool hasStoredCustomServer,
 		Fn<QByteArray()> serializeMtpAuthorization,
 		Fn<void(const QByteArray &)> restoreMtpAuthorization,
-		Fn<bool()> writeMtpAuthorizationOverride)
+		Fn<bool()> writeMtpAuthorizationOverride,
+		QString tempPath,
+		QString databasePath,
+		FileKey dataNameKey)
 : _owner(nullptr)
+, _dataNameKey(dataNameKey)
 , _basePath(basePath.endsWith(QDir::separator())
 	? basePath
 	: basePath + QDir::separator())
+, _tempPath(tempPath.isEmpty()
+	? _basePath + u"temp/"_q
+	: std::move(tempPath))
+, _databasePath(databasePath.isEmpty()
+	? _basePath + u"database/"_q
+	: std::move(databasePath))
 , _localKey(std::move(localKey))
 , _hasStoredCustomServer(hasStoredCustomServer)
 , _mtpConfig([config = std::move(config)]() -> const MTP::Config & {
@@ -177,14 +269,234 @@ bool Account::writeMtpData(bool sync) {
 		? _serializeMtpAuthorization()
 		: _owner->serializeMtpAuthorization();
 #endif
-	const auto size = sizeof(quint32) + Serialize::bytearraySize(serialized);
-
-	FileWriteDescriptor mtp(ToFilePart(_dataNameKey), BaseGlobalPath(), sync);
-	EncryptedDescriptor data(size);
-	data.stream << quint32(dbiMtpAuthorization) << serialized;
-	mtp.writeEncrypted(data, _localKey);
-	return mtp.finish();
+	return WriteMtpAuthorizationData(
+		_dataNameKey,
+		BaseGlobalPath(),
+		_localKey,
+		serialized,
+		sync);
 }
+
+bool Account::writeServerReenrollmentTombstone() {
+	Expects(_localKey != nullptr);
+
+	const auto webviewBots = (!_webviewStorageIdBots.token.isEmpty())
+		? (_webviewStorageIdBots.path.isEmpty()
+			? ((_webviewStorageIdBots.token == Webview::LegacyStorageIdToken())
+				? BaseGlobalPath() + u"webview"_q
+				: _databasePath + u"wvbots"_q)
+			: _webviewStorageIdBots.path)
+		: QString();
+	const auto webviewOther = (!_webviewStorageIdOther.token.isEmpty())
+		? (_webviewStorageIdOther.path.isEmpty()
+			? _databasePath + u"wvother"_q
+			: _webviewStorageIdOther.path)
+		: QString();
+	if (!IsKnownWebviewPath(webviewBots, _databasePath, BaseGlobalPath())
+		|| !IsKnownWebviewPath(
+			webviewOther,
+			_databasePath,
+			BaseGlobalPath())) {
+		return false;
+	}
+
+	EncryptedDescriptor marker(
+		sizeof(quint32)
+		+ Serialize::stringSize(webviewBots)
+		+ Serialize::stringSize(webviewOther));
+	marker.stream << quint32(2) << webviewBots << webviewOther;
+	FileWriteDescriptor file(
+		ServerReenrollmentTombstoneName(_dataNameKey),
+		BaseGlobalPath(),
+		true);
+	file.writeEncrypted(marker, _localKey);
+	return file.finish();
+}
+
+bool Account::serverReenrollmentPending() const {
+	const auto name = ServerReenrollmentTombstoneName(_dataNameKey);
+	const auto base = BaseGlobalPath() + name;
+	return QFileInfo::exists(base + 's')
+		|| QFileInfo::exists(base + '0')
+		|| QFileInfo::exists(base + '1');
+}
+
+std::unique_ptr<MTP::Config> Account::startServerReenrollment() {
+	Expects(_localKey != nullptr);
+	// Do not read even the map or authorization file while the durable wipe
+	// is pending. If the previous launch stopped during cleanup, complete it
+	// before this account can become usable again.
+	if (!completeServerReenrollment()) {
+		LOG(("MTP Error: server re-enrollment cleanup is still pending."));
+		auto blocked = std::make_unique<MTP::Config>(
+			MTP::Environment::Production);
+		blocked->dcOptions().constructBlocked();
+		return blocked;
+	}
+	auto unenrolled = std::make_unique<MTP::Config>(
+			MTP::Environment::Production);
+	unenrolled->dcOptions().constructUnenrolled();
+	return unenrolled;
+}
+
+bool Account::completeServerReenrollment() {
+	Expects(_localKey != nullptr);
+	if (!serverReenrollmentPending()) {
+		return true;
+	}
+	const auto tombstone = ReadServerReenrollmentTombstone(
+		_dataNameKey,
+		BaseGlobalPath(),
+		_localKey);
+	if (!tombstone) {
+		return false;
+	}
+	_writeMapTimer.cancel();
+	_writePrefsTimer.cancel();
+	_writeLocationsTimer.cancel();
+	_writeSearchSuggestionsTimer.cancel();
+	_mapChanged = false;
+	_prefsChanged = false;
+	_locationsChanged = false;
+
+	const auto interrupted = [this](int point) {
+#ifdef TDESKTOP_UNIT_TESTS
+		if (_serverReenrollmentInterruptionForTest != point) {
+			return false;
+		}
+		_serverReenrollmentInterruptionForTest = 0;
+		return true;
+#else
+		return false;
+#endif
+	};
+
+	// The tombstone lives beside, not inside, the account directory. A
+	// process stop after this removal therefore cannot make the next launch
+	// mistake a partly deleted account for a clean one.
+	if (!RemovePath(_basePath) || interrupted(1)) {
+		return false;
+	}
+
+	const auto &[webviewBots, webviewOther] = *tombstone;
+	if (!IsKnownWebviewPath(webviewBots, _databasePath, BaseGlobalPath())
+		|| !IsKnownWebviewPath(
+			webviewOther,
+			_databasePath,
+			BaseGlobalPath())) {
+		return false;
+	}
+	// The legacy tdata/tdld directory predates per-account storage and is
+	// shared by every account. It has no ownership marker, so leave it
+	// intact rather than deleting another account's data.
+	if (!RemovePath(_databasePath)
+		|| !RemovePath(_tempPath)
+		|| !RemovePath(webviewBots)
+		|| !RemovePath(webviewOther)
+		|| !RemoveFileVariants(
+			BaseGlobalPath(),
+			ToFilePart(_dataNameKey))) {
+		return false;
+	}
+	if (interrupted(2)) {
+		return false;
+	}
+
+	_draftsMap.clear();
+	_draftCursorsMap.clear();
+	_draftsNotReadMap.clear();
+	_botStoragesMap.clear();
+	_botStoragesNotReadMap.clear();
+	_fileLocations.clear();
+	_fileLocationPairs.clear();
+	_fileLocationAliases.clear();
+	_downloadsSerialized.clear();
+	_downloadsSerialize = nullptr;
+	_trustedPeers.clear();
+	_trustedPayPerMessage.clear();
+	_trustedPeersRead = false;
+	_readingUserSettings = false;
+	_recentHashtagsAndBotsWereRead = false;
+	_searchSuggestionsRead = false;
+	_inlineBotsDownloadsRead = false;
+	_mediaLastPlaybackPositionsRead = false;
+	_mediaLastPlaybackPosition.clear();
+	_roundPlaceholder = QImage();
+	_webviewStorageIdBots = {};
+	_webviewStorageIdOther = {};
+	_prefs.clear();
+	_prefsKey = 0;
+	_locationsKey = 0;
+	_trustedPeersKey = 0;
+	_installedStickersKey = 0;
+	_featuredStickersKey = 0;
+	_recentStickersKey = 0;
+	_favedStickersKey = 0;
+	_archivedStickersKey = 0;
+	_archivedMasksKey = 0;
+	_savedGifsKey = 0;
+	_recentStickersKeyOld = 0;
+	_legacyBackgroundKeyDay = 0;
+	_legacyBackgroundKeyNight = 0;
+	_settingsKey = 0;
+	_recentHashtagsAndBotsKey = 0;
+	_exportSettingsKey = 0;
+	_installedMasksKey = 0;
+	_recentMasksKey = 0;
+	_installedCustomEmojiKey = 0;
+	_featuredCustomEmojiKey = 0;
+	_archivedCustomEmojiKey = 0;
+	_searchSuggestionsKey = 0;
+	_roundPlaceholderKey = 0;
+	_inlineBotsDownloadsKey = 0;
+	_mediaLastPlaybackPositionsKey = 0;
+	_oldMapVersion = 0;
+	_prefsReadFailed = false;
+	_hasStoredCustomServer = false;
+	_customServerPinUnknown = false;
+	_mtpAuthorizationWriteFailed = false;
+	_mapChanged = true;
+	_prefsChanged = false;
+	_locationsChanged = false;
+
+	// Startup normally reaches this method before a map has populated the
+	// self callback. Clear it for the same-account test path as well, so a
+	// failed or interrupted wipe can never write an old self record back.
+	auto serializeSelf = base::take(_serializeSelf);
+	const auto mapWritten = writeMap(true);
+	_serializeSelf = std::move(serializeSelf);
+	if (!mapWritten
+		|| !WriteMtpAuthorizationData(
+			_dataNameKey,
+			BaseGlobalPath(),
+			_localKey,
+			QByteArray(),
+			true)) {
+		return false;
+	}
+
+	if (!RemoveFileVariants(
+			BaseGlobalPath(),
+			ServerReenrollmentTombstoneName(_dataNameKey))) {
+		return false;
+	}
+	details::Sync();
+	return true;
+}
+
+#ifdef TDESKTOP_UNIT_TESTS
+
+std::unique_ptr<MTP::Config> Account::startServerReenrollmentForTest(
+		MTP::AuthKeyPtr localKey) {
+	_localKey = std::move(localKey);
+	return startServerReenrollment();
+}
+
+void Account::setServerReenrollmentInterruptionForTest(int point) {
+	_serverReenrollmentInterruptionForTest = point;
+}
+
+#endif // TDESKTOP_UNIT_TESTS
 
 #ifdef TDESKTOP_UNIT_TESTS
 
