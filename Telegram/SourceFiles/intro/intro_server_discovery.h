@@ -74,5 +74,10 @@ private:
 	bool _running = false;
 };
 
+[[nodiscard]] bool SubmitServerSelection(
+	const QString &value,
+	const std::function<void(MTP::ServerSelectionStatus)> &rejected,
+	const std::function<void(const MTP::ServerSelectionCheck &)> &accepted);
+
 } // namespace details
 } // namespace Intro

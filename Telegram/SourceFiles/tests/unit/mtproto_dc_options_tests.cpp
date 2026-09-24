@@ -16,6 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_server_enrollment.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 
 namespace {
 
@@ -187,24 +189,58 @@ TEST_CASE(StoredPublicLocalDirectPinLoadsButNewOneIsRefused) {
 	CHECK(!fresh.setCustomServer(server));
 }
 
-TEST_CASE(PublicHttpsDiscoveryCanPersistPublicIpEndpoint) {
-	auto options = DcOptions(Environment::Production);
-	auto server = MakeCustomServer();
-	server.ip = "8.8.8.88";
-	server.port = 8443;
-	server.serverSelection = "server.example.com";
-	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
-	server.discoveryOrigin =
-		"https://server.example.com/.well-known/telegramd/client";
-	CHECK(options.setCustomServer(server));
+TEST_CASE(PublicHttpsDiscoveryEnrollsWithPublicResolvedAddress) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	const auto key = MakeKey();
+	const auto der = key->getSubjectPublicKeyInfo();
+	const auto encoded = QString::fromLatin1(QByteArray(
+		reinterpret_cast<const char *>(der.data()),
+		int(der.size())).toBase64());
+	for (const auto &endpoint : {
+		u"8.8.8.88:8443"_q,
+		u"mtproto.example.com:8443"_q,
+	}) {
+		const auto json = QJsonDocument(QJsonObject{
+			{ u"version"_q, 1 },
+			{ u"mtproto"_q, QJsonObject{
+				{ u"endpoint"_q, endpoint },
+				{ u"dc_id"_q, 2 },
+				{ u"rsa_spki"_q, encoded }
+			} }
+		}).toJson(QJsonDocument::Compact);
+		auto result = ParsePublicDiscoveryResponse(selection, json);
+		CHECK(result.valid());
+		CHECK_EQ(result.endpoint, endpoint);
+		CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
+		result.resolvedAddress = u"8.8.8.88"_q;
+		const auto server = BuildCustomServerFromDiscovery(selection, result);
+		CHECK(server.has_value());
+		if (!server) {
+			continue;
+		}
+		CHECK_EQ(server->ip, "8.8.8.88");
+		CHECK_EQ(server->serverSelection, "server.example.com");
+		CHECK(server->discoveryPolicy == ServerDiscoveryPolicy::PublicHttps);
+		CHECK_EQ(
+			server->discoveryOrigin,
+			"https://server.example.com/.well-known/telegramd/client");
 
-	auto restored = DcOptions(Environment::Production);
-	CHECK(restored.constructFromSerialized(options.serialize()));
-	const auto got = restored.customServer();
-	CHECK_EQ(got.ip, "8.8.8.88");
-	CHECK_EQ(got.port, 8443);
-	CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps);
-	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
+		auto options = DcOptions(Environment::Production);
+		CHECK(options.setCustomServer(*server));
+
+		auto restored = DcOptions(Environment::Production);
+		CHECK(restored.constructFromSerialized(options.serialize()));
+		const auto got = restored.customServer();
+		CHECK_EQ(got.ip, "8.8.8.88");
+		CHECK_EQ(got.port, 8443);
+		CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps);
+		CHECK_EQ(got.discoveryOrigin, server->discoveryOrigin);
+		CHECK(got.key != nullptr);
+		if (got.key) {
+			CHECK_EQ(qint64(got.key->fingerprint()),
+				qint64(key->fingerprint()));
+		}
+	}
 }
 
 // An unpinned config must round-trip as unpinned rather than picking up

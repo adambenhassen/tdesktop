@@ -68,17 +68,6 @@ void ConfigureAddressField(not_null<Ui::InputField*> field) {
 		+ QString::number(server.port);
 }
 
-[[nodiscard]] QString AddressWithPort(
-		const QHostAddress &address,
-		int port) {
-	const auto host = address.toString();
-	return (address.protocol() == QAbstractSocket::IPv6Protocol
-		? (u"["_q + host + u"]"_q)
-		: host)
-		+ u":"_q
-		+ QString::number(port);
-}
-
 [[nodiscard]] bool HasBoundServer(Main::Account &account) {
 	const auto &options = account.mtp().dcOptions();
 	return options.hasCustomServer() || options.blocked();
@@ -479,46 +468,50 @@ void ServerWidget::submitSelection() {
 	if (_readOnly || _connecting || !_address) {
 		return;
 	}
-	const auto checked = MTP::CheckServerSelection(_address->getLastText());
-	if (!checked) {
-		_address->showError();
-		showStatus(selectionError(checked.status), true);
-		_address->setFocusFast();
+	if (!SubmitServerSelection(
+		_address->getLastText(),
+		[=](MTP::ServerSelectionStatus status) {
+			_address->showError();
+			showStatus(selectionError(status), true);
+			_address->setFocusFast();
+		},
+		[=](const MTP::ServerSelectionCheck &checked) {
+			auto acquisition = _localDiscovery->acquireAttempt();
+			if (!acquisition.token) {
+				const auto error = tr::lng_intro_server_connect_failed(tr::now);
+				_address->showError();
+				_address->rawTextEdit()->setReadOnly(
+					!acquisition.fieldEditable);
+				_continue->setDisabled(!acquisition.retryable);
+				if (acquisition.retryable) {
+					_continue->setText(tr::lng_intro_server_try_again());
+				}
+				_address->setAccessibleDescription(error);
+				showStatus(error, true);
+				_address->setFocusFast();
+				_scroll->scrollToWidget(_continue);
+				return;
+			}
+			_selection = checked;
+			getData()->serverSelection = _selection.normalizedSelection;
+			_discoveryAttempt = std::move(acquisition.token);
+			_connecting = true;
+			++_attempt;
+			_address->rawTextEdit()->setReadOnly(true);
+			_continue->setDisabled(true);
+			_continue->setText(tr::lng_intro_server_connecting());
+			_address->setAccessibleDescription(
+				tr::lng_intro_server_connecting(tr::now));
+			showStatus(tr::lng_intro_server_connecting(tr::now), false);
+			_deadline->start(kDiscoveryTimeout);
+			if (_selection.policy
+				== MTP::ServerDiscoveryPolicy::PublicHttps) {
+				beginPublicDiscovery();
+			} else {
+				beginLocalDiscovery();
+			}
+		})) {
 		return;
-	}
-	auto acquisition = _localDiscovery->acquireAttempt();
-	if (!acquisition.token) {
-		const auto error = tr::lng_intro_server_connect_failed(tr::now);
-		_address->showError();
-		_address->rawTextEdit()->setReadOnly(acquisition.fieldEditable
-			? false
-			: true);
-		_continue->setDisabled(!acquisition.retryable);
-		if (acquisition.retryable) {
-			_continue->setText(tr::lng_intro_server_try_again());
-		}
-		_address->setAccessibleDescription(error);
-		showStatus(error, true);
-		_address->setFocusFast();
-		_scroll->scrollToWidget(_continue);
-		return;
-	}
-	_selection = checked;
-	getData()->serverSelection = _selection.normalizedSelection;
-	_discoveryAttempt = std::move(acquisition.token);
-	_connecting = true;
-	++_attempt;
-	_address->rawTextEdit()->setReadOnly(true);
-	_continue->setDisabled(true);
-	_continue->setText(tr::lng_intro_server_connecting());
-	_address->setAccessibleDescription(
-		tr::lng_intro_server_connecting(tr::now));
-	showStatus(tr::lng_intro_server_connecting(tr::now), false);
-	_deadline->start(kDiscoveryTimeout);
-	if (_selection.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
-		beginPublicDiscovery();
-	} else {
-		beginLocalDiscovery();
 	}
 }
 
@@ -848,47 +841,10 @@ void ServerWidget::announceStatus() {
 
 void ServerWidget::commitBinding(
 		const MTP::ServerDiscoveryResult &result) {
-	if (result.policy != MTP::ServerDiscoveryPolicy::PublicHttps
-		&& result.policy != MTP::ServerDiscoveryPolicy::LocalDirect) {
-		discoveryFailed(false);
-		return;
-	}
-	const auto expectedOrigin = (result.policy
-		== MTP::ServerDiscoveryPolicy::PublicHttps)
-		? MTP::PublicDiscoveryUrl(_selection)
-		: (u"local:"_q + _selection.normalizedSelection);
-	if (result.origin != expectedOrigin || result.dcId <= 0) {
-		discoveryFailed(false);
-		return;
-	}
-	const auto endpoint = MTP::CheckServerSelection(result.endpoint);
-	const auto endpointAllowed = (result.policy
-		== MTP::ServerDiscoveryPolicy::PublicHttps)
-		? MTP::IsPublicDiscoveryEndpoint(endpoint)
-		: (endpoint && endpoint.policy == result.policy);
-	if (!endpointAllowed
-		|| !result.key.valid()) {
-		discoveryFailed(false);
-		return;
-	}
-	const auto connectionHost = result.resolvedAddress.isEmpty()
-		? endpoint.host
-		: result.resolvedAddress;
-	auto connectionAddress = QHostAddress();
-	const auto connectionIsLiteral = connectionAddress.setAddress(
-		connectionHost);
-	const auto connectionEndpoint = MTP::CheckServerSelection(
-		connectionIsLiteral
-			? AddressWithPort(connectionAddress, endpoint.operationalPort)
-			: connectionHost + u":"_q
-				+ QString::number(endpoint.operationalPort));
-	const auto connectionSafe = (result.policy
-		== MTP::ServerDiscoveryPolicy::PublicHttps)
-		? (connectionIsLiteral && MTP::IsPublicAddress(connectionAddress))
-		: (connectionEndpoint
-			&& connectionEndpoint.policy
-				== MTP::ServerDiscoveryPolicy::LocalDirect);
-	if (!connectionSafe) {
+	const auto server = MTP::BuildCustomServerFromDiscovery(
+		_selection,
+		result);
+	if (!server) {
 		discoveryFailed(false);
 		return;
 	}
@@ -900,23 +856,12 @@ void ServerWidget::commitBinding(
 		discoveryFailed(false);
 		return;
 	}
-	const auto key = std::make_shared<MTP::details::RSAPublicKey>(result.key);
-	const auto server = MTP::CustomServer{
-		.dcId = result.dcId,
-		.ip = connectionEndpoint.host.toStdString(),
-		.port = endpoint.operationalPort,
-		.ipv6 = connectionEndpoint.ipv6,
-		.key = key,
-		.serverSelection = _selection.normalizedSelection.toStdString(),
-		.discoveryPolicy = result.policy,
-		.discoveryOrigin = result.origin.toStdString(),
-	};
 	const auto previousOptions = account().mtp().dcOptions().serialize();
 	const auto previousWasBlocked = account().mtp().dcOptions().blocked();
 	const auto previousWasUnenrolled = account().mtp().dcOptions().unenrolled();
 	if (!MTP::CommitServerEnrollment(
 		[&] {
-			return account().mtp().dcOptions().setCustomServer(server);
+			return account().mtp().dcOptions().setCustomServer(*server);
 		},
 		[&] {
 			return account().local().writeMtpConfig(true);

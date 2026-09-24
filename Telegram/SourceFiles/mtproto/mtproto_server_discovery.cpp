@@ -60,7 +60,11 @@ std::atomic<int> ServerDiscoveryAttempts = 0;
 }
 
 [[nodiscard]] bool HasInetAtonNumericFinalLabel(const QString &host) {
-	const auto label = host.mid(host.lastIndexOf('.') + 1);
+	auto normalized = host;
+	if (normalized.endsWith(QChar::fromLatin1('.'))) {
+		normalized.chop(1);
+	}
+	const auto label = normalized.mid(normalized.lastIndexOf('.') + 1);
 	if (!label.isEmpty()
 		&& std::all_of(label.begin(), label.end(), IsAsciiDigit)) {
 		return true;
@@ -70,6 +74,17 @@ std::atomic<int> ServerDiscoveryAttempts = 0;
 		&& (label[1] == QChar::fromLatin1('x')
 			|| label[1] == QChar::fromLatin1('X'))
 		&& std::all_of(label.begin() + 2, label.end(), IsAsciiHexDigit);
+}
+
+[[nodiscard]] bool IsCanonicalIpv4WithTrailingDot(const QString &host) {
+	if (!host.endsWith(QChar::fromLatin1('.'))) {
+		return false;
+	}
+	const auto withoutTrailingDot = host.left(host.size() - 1);
+	auto address = QHostAddress();
+	return address.setAddress(withoutTrailingDot)
+		&& address.protocol() == QAbstractSocket::IPv4Protocol
+		&& address.toString() == withoutTrailingDot;
 }
 
 [[nodiscard]] bool IsInSubnet(
@@ -713,6 +728,10 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 		// only the canonical spelling so an equivalent input cannot change
 		// the endpoint identity later.
 		if (hostText != literal.toString().toLower()) {
+			if (HasInetAtonNumericFinalLabel(hostText)) {
+				return SelectionFailure(
+					ServerSelectionStatus::PublicIpLiteral);
+			}
 			return SelectionFailure(ServerSelectionStatus::BadHost);
 		}
 		if (!IsFirstUseTrustedLocalLiteral(literal)) {
@@ -731,6 +750,11 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 				.policy = ServerDiscoveryPolicy::PublicHttps,
 			};
 		}
+	}
+	if (!isLiteral
+		&& HasInetAtonNumericFinalLabel(hostText)
+		&& !IsCanonicalIpv4WithTrailingDot(hostText)) {
+		return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
 	}
 	if (!isLiteral && HostExceedsNameLimit(hostText)) {
 		return SelectionFailure(ServerSelectionStatus::HostTooLong);
@@ -751,9 +775,6 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	}
 
 	const auto localName = !isLiteral && IsLocalName(host);
-	if (localName && HasInetAtonNumericFinalLabel(host)) {
-		return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
-	}
 	const auto localLiteral = isLiteral;
 	const auto local = localName || localLiteral;
 	if (local && !explicitPort) {

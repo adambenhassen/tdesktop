@@ -297,6 +297,37 @@ TEST_CASE(RefusedIpLiteralDoesNotStartLocalConnection) {
 	CHECK(!server.waitForNewConnection(100));
 }
 
+TEST_CASE(SubmitPathRefusesPublicIpv4AndIpv6BeforeNetwork) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
+	const auto port = QString::number(listener.serverPort());
+	for (const auto &selection : {
+		u"8.8.8.8:"_q + port,
+		u"[2001:4860::8888]:"_q + port,
+	}) {
+		auto attempts = 0;
+		auto rejected = ServerSelectionStatus::Valid;
+		const auto accepted = Intro::details::SubmitServerSelection(
+			selection,
+			[&](ServerSelectionStatus status) { rejected = status; },
+			[&](const ServerSelectionCheck &) {
+				++attempts;
+				QTcpSocket socket;
+				socket.connectToHost(
+					QHostAddress(QHostAddress::LocalHost),
+					listener.serverPort());
+				(void)socket.waitForConnected(100);
+			});
+		CHECK(!accepted);
+		CHECK(rejected == ServerSelectionStatus::PublicIpLiteral);
+		CHECK_EQ(attempts, 0);
+		CHECK(!listener.waitForNewConnection(100));
+	}
+}
+
 TEST_CASE(LocalLiteralRequiresPortWhileDottedAddressKeepsDomainRoute) {
 	CHECK(CheckServerSelection(u"10.0.0.1"_q).status
 		== ServerSelectionStatus::NoPort);

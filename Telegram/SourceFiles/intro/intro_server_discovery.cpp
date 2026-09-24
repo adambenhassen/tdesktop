@@ -28,6 +28,24 @@ ServerWidgetDiscovery::~ServerWidgetDiscovery() {
 	cancel();
 }
 
+bool SubmitServerSelection(
+		const QString &value,
+		const std::function<void(MTP::ServerSelectionStatus)> &rejected,
+		const std::function<void(const MTP::ServerSelectionCheck &)> &accepted) {
+	const auto selection = MTP::CheckServerSelection(value);
+	if (!selection) {
+		if (rejected) {
+			rejected(selection.status);
+		}
+		return false;
+	}
+	if (!accepted) {
+		return false;
+	}
+	accepted(selection);
+	return true;
+}
+
 ServerWidgetDiscovery::Attempt ServerWidgetDiscovery::acquireAttempt() const {
 	auto token = MTP::ServerDiscoveryAttempt::Acquire();
 	if (token) {

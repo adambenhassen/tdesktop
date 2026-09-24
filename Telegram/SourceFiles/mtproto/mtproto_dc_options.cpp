@@ -184,6 +184,67 @@ bool SameCustomServerPin(
 		&& a.key->getE() == b.key->getE();
 }
 
+std::optional<CustomServer> BuildCustomServerFromDiscovery(
+		const ServerSelectionCheck &selection,
+		const ServerDiscoveryResult &result) {
+	if (!selection.valid()
+		|| !result
+		|| selection.policy != result.policy
+		|| (result.policy != ServerDiscoveryPolicy::PublicHttps
+			&& result.policy != ServerDiscoveryPolicy::LocalDirect)) {
+		return std::nullopt;
+	}
+	const auto expectedOrigin = (result.policy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? PublicDiscoveryUrl(selection)
+		: (u"local:"_q + selection.normalizedSelection);
+	if (result.origin != expectedOrigin || result.dcId <= 0) {
+		return std::nullopt;
+	}
+	const auto endpoint = CheckServerSelection(result.endpoint);
+	const auto endpointAllowed = (result.policy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? IsPublicDiscoveryEndpoint(endpoint)
+		: (endpoint && endpoint.policy == result.policy);
+	if (!endpointAllowed || !result.key.valid()) {
+		return std::nullopt;
+	}
+	const auto connectionHost = result.resolvedAddress.isEmpty()
+		? endpoint.host
+		: result.resolvedAddress;
+	auto connectionAddress = QHostAddress();
+	const auto connectionIsLiteral = connectionAddress.setAddress(
+		connectionHost);
+	const auto connectionHostText = connectionIsLiteral
+		? (connectionAddress.protocol() == QAbstractSocket::IPv6Protocol
+			? (u"["_q + connectionAddress.toString() + u"]"_q)
+			: connectionAddress.toString())
+		: connectionHost;
+	const auto connectionEndpoint = CheckServerSelection(
+		connectionHostText
+			+ u":"_q
+			+ QString::number(endpoint.operationalPort));
+	const auto connectionSafe = (result.policy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? (connectionIsLiteral && IsPublicAddress(connectionAddress))
+		: (connectionEndpoint
+			&& connectionEndpoint.policy
+				== ServerDiscoveryPolicy::LocalDirect);
+	if (!connectionSafe) {
+		return std::nullopt;
+	}
+	return CustomServer{
+		.dcId = result.dcId,
+		.ip = connectionEndpoint.host.toStdString(),
+		.port = endpoint.operationalPort,
+		.ipv6 = connectionEndpoint.ipv6,
+		.key = std::make_shared<details::RSAPublicKey>(result.key),
+		.serverSelection = selection.normalizedSelection.toStdString(),
+		.discoveryPolicy = result.policy,
+		.discoveryOrigin = result.origin.toStdString(),
+	};
+}
+
 bool CanStartSpecialConfigRequest(
 		const QString &delegatedDomain,
 		bool networkAllowed,
