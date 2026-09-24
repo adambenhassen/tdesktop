@@ -24,6 +24,20 @@ ServerWidgetDiscovery::ServerWidgetDiscovery(QObject *parent)
 : QObject(parent) {
 }
 
+void StartSelectedDiscovery(
+		const MTP::ServerSelectionCheck &selection,
+		const std::function<void()> &publicHttps,
+		const std::function<void()> &localDirect) {
+	if (!selection.valid()) {
+		return;
+	}
+	if (selection.policy == MTP::ServerDiscoveryPolicy::PublicHttps) {
+		publicHttps();
+	} else if (selection.policy == MTP::ServerDiscoveryPolicy::LocalDirect) {
+		localDirect();
+	}
+}
+
 ServerWidgetDiscovery::~ServerWidgetDiscovery() {
 	cancel();
 }

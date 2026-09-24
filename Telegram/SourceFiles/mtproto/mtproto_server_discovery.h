@@ -82,17 +82,26 @@ struct ServerSelectionCheck {
 [[nodiscard]] ServerSelectionCheck CheckServerSelection(
 	const QString &value);
 
-// A resolved address is safe for the public HTTPS delegation route only when
-// it is a globally routable IPv4 or IPv6 address. This deliberately remains
+// Whether an address is globally routable unicast. This deliberately remains
 // separate from CheckServerSelection(), where every IP literal is local-direct
 // because it has no DNS name that WebPKI can authenticate.
 [[nodiscard]] bool IsPublicAddress(const QHostAddress &address);
+// Whether an address is safe for public discovery from the typed HTTPS origin.
+// MagicDNS origins also allow addresses in the two Tailscale ranges.
+[[nodiscard]] bool IsPublicDiscoveryAddress(
+	const ServerSelectionCheck &origin,
+	const QHostAddress &address);
+[[nodiscard]] std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
+	const ServerSelectionCheck &origin,
+	const QList<QHostAddress> &addresses);
 
 // A delegated public endpoint must be an explicit-port public DNS name or a
-// globally routable IP literal. IP literals remain local-direct when they
-// are user selections, but a verified document may delegate to a public one.
+// safe IP literal for the selected HTTPS origin. IP literals remain
+// local-direct when they are user selections, but a verified document may
+// delegate to a public or Tailscale address.
 [[nodiscard]] bool IsPublicDiscoveryEndpoint(
-	const ServerSelectionCheck &selection);
+	const ServerSelectionCheck &endpoint,
+	const ServerSelectionCheck &origin);
 
 // This URL is derived only from a valid public selection. It never carries a
 // query, fragment, credentials, or a user-supplied path.

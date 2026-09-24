@@ -22,6 +22,12 @@ class QTcpSocket;
 namespace Intro {
 namespace details {
 
+// Starts exactly the discovery route selected from the normalized input.
+void StartSelectedDiscovery(
+	const MTP::ServerSelectionCheck &selection,
+	const std::function<void()> &publicHttps,
+	const std::function<void()> &localDirect);
+
 class ServerWidgetDiscovery final : public QObject {
 public:
 	struct Attempt {
