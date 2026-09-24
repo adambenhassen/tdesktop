@@ -383,8 +383,7 @@ void ServerWidgetDiscovery::sendRequest() {
 		this);
 	QObject::connect(
 		notifier,
-		qOverload<QSocketDescriptor, QSocketNotifier::Type>(
-			&QSocketNotifier::activated),
+		&QSocketNotifier::activated,
 		this,
 		[=](QSocketDescriptor, QSocketNotifier::Type) {
 			if (_nativeReadNotifier == notifier) {
