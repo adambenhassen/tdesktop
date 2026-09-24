@@ -185,17 +185,42 @@ TEST_CASE(PublicSelectionDefaultsToHttps) {
 	CHECK_EQ(result.operationalPort, 443);
 }
 
-TEST_CASE(FailedMagicDnsHttpsDiscoveryDoesNotFallBackToLocalDirect) {
+TEST_CASE(PublicDiscoveryFailureDoesNotStartLocalDirect) {
 	const auto selection = CheckServerSelection(
 		u"telegram-server.tailaa4918.ts.net"_q);
-	auto publicAttemptFailed = false;
+	auto publicAttempts = 0;
 	auto localAttempts = 0;
-	Intro::details::StartSelectedDiscovery(
+	auto failures = 0;
+	auto flow = Intro::details::ServerDiscoveryFlow();
+	CHECK(flow.start(
 		selection,
-		[&] { publicAttemptFailed = true; },
-		[&] { ++localAttempts; });
-	CHECK(publicAttemptFailed);
+		{
+			.publicHttps = [&] { ++publicAttempts; },
+			.localDirect = [&] { ++localAttempts; },
+			.failed = [&](bool) { ++failures; },
+		}));
+	CHECK_EQ(publicAttempts, 1);
+	CHECK(flow.discoveryFailed(true));
+	CHECK(!flow.active());
+	CHECK_EQ(failures, 1);
 	CHECK_EQ(localAttempts, 0);
+	CHECK(!flow.discoveryFailed(false));
+	CHECK_EQ(failures, 1);
+}
+
+TEST_CASE(LocalSelectionStartsOnlyLocalDirect) {
+	const auto selection = CheckServerSelection(u"localhost:443"_q);
+	auto publicAttempts = 0;
+	auto localAttempts = 0;
+	auto flow = Intro::details::ServerDiscoveryFlow();
+	CHECK(flow.start(
+		selection,
+		{
+			.publicHttps = [&] { ++publicAttempts; },
+			.localDirect = [&] { ++localAttempts; },
+		}));
+	CHECK_EQ(publicAttempts, 0);
+	CHECK_EQ(localAttempts, 1);
 }
 
 TEST_CASE(LocalSelectionRequiresExplicitPort) {

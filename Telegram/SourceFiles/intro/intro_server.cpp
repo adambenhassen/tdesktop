@@ -513,10 +513,18 @@ void ServerWidget::submitSelection() {
 		tr::lng_intro_server_connecting(tr::now));
 	showStatus(tr::lng_intro_server_connecting(tr::now), false);
 	_deadline->start(kDiscoveryTimeout);
-	StartSelectedDiscovery(
+	const auto started = _discoveryFlow.start(
 		_selection,
-		[=] { beginPublicDiscovery(); },
-		[=] { beginLocalDiscovery(); });
+		{
+			.publicHttps = [=] { beginPublicDiscovery(); },
+			.localDirect = [=] { beginLocalDiscovery(); },
+			.failed = [=](bool connectionFailure) {
+				resetAfterDiscoveryFailure(connectionFailure);
+			},
+		});
+	if (!started) {
+		return;
+	}
 }
 
 void ServerWidget::beginPublicDiscovery() {
@@ -755,6 +763,12 @@ void ServerWidget::publicEndpointResolved(
 }
 
 void ServerWidget::discoveryFailed(bool connectionFailure) {
+	if (!_discoveryFlow.discoveryFailed(connectionFailure)) {
+		return;
+	}
+}
+
+void ServerWidget::resetAfterDiscoveryFailure(bool connectionFailure) {
 	if (!_connecting) {
 		return;
 	}
@@ -790,9 +804,10 @@ void ServerWidget::discoveryFailed(bool connectionFailure) {
 }
 
 void ServerWidget::cancelDiscovery() {
-	if (!_connecting) {
+	if (!_discoveryFlow.active()) {
 		return;
 	}
+	_discoveryFlow.cancel();
 	_connecting = false;
 	_localDiscovery->cancel();
 	_discoveryAttempt.reset();
@@ -928,6 +943,7 @@ void ServerWidget::commitBinding(
 				account().mtp().dcOptions().constructBlocked();
 			}
 		})) {
+		_discoveryFlow.finish();
 		_connecting = false;
 		_discoveryAttempt.reset();
 		++_attempt;
@@ -949,6 +965,7 @@ void ServerWidget::commitBinding(
 	}
 
 	_discoveryAttempt.reset();
+	_discoveryFlow.finish();
 	_connecting = false;
 	getData()->serverEndpoint = result.endpoint;
 	switchToBound();
