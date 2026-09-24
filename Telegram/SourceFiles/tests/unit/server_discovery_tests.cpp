@@ -1146,14 +1146,38 @@ TEST_CASE(DiscoveryJsonRejectsConstrainedPortConflict) {
 	CHECK(result.status == ServerDiscoveryResponseStatus::EndpointMismatch);
 }
 
-TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpoint) {
+TEST_CASE(DiscoveryJsonRejectsPublicIpEndpointWithoutFallback) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
 	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	CHECK(selection.valid());
+	CHECK(selection.policy == ServerDiscoveryPolicy::PublicHttps);
+	const auto endpointText = u"8.8.8.8:"_q
+		+ QString::number(listener.serverPort());
+	const auto endpoint = CheckServerSelection(endpointText);
+	CHECK(endpoint.status == ServerSelectionStatus::PublicIpLiteral);
+	CHECK(!IsPublicDiscoveryEndpoint(endpoint));
+	auto candidates = 0;
+	Intro::details::ServerWidgetDiscovery fallback(nullptr);
+	fallback.start(
+		endpoint,
+		QByteArray(32, '\0'),
+		{ QHostAddress(QHostAddress::LocalHost) },
+		{
+			.candidateStarted = [&] { ++candidates; },
+		});
+	CHECK(!fallback.running());
+	CHECK_EQ(candidates, 0);
+	CHECK(!listener.waitForNewConnection(100));
 	const auto key = TestKey();
 	const auto der = key.getSubjectPublicKeyInfo();
 	const auto json = QJsonDocument(QJsonObject{
 		{ u"version"_q, 1 },
 		{ u"mtproto"_q, QJsonObject{
-			{ u"endpoint"_q, u"8.8.8.8:443"_q },
+			{ u"endpoint"_q, endpointText },
 			{ u"dc_id"_q, 2 },
 			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
 				reinterpret_cast<const char *>(der.data()),
@@ -1161,8 +1185,10 @@ TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpoint) {
 		} }
 	}).toJson(QJsonDocument::Compact);
 	const auto result = ParsePublicDiscoveryResponse(selection, json);
-	CHECK(result.valid());
-	CHECK_EQ(result.endpoint, u"8.8.8.8:443"_q);
+	CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+	CHECK(!result.valid());
+	CHECK(result.endpoint.isEmpty());
+	CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
 }
 
 TEST_CASE(DiscoveryJsonRequiresAnExplicitEndpointPort) {
