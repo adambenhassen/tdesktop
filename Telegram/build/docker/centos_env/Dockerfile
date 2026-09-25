@@ -1071,6 +1071,8 @@ patch -p1 -d /usr/lib64/gobject-introspection -i $PWD/patches/gobject-introspect
 rm -rf patches
 EOF
 
+RUN dnf -y install strace && dnf clean all
+
 ENV CCACHE_DISABLE=true
 WORKDIR /usr/src/tdesktop
 USER user

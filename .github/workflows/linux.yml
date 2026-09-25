@@ -340,6 +340,137 @@ jobs:
             fi
           '
 
+      - name: Clean-process network isolation.
+        if: env.ONLY_CACHE == 'false'
+        env:
+          REVIEWED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+
+          evidence_dir="$PWD/out/Debug/evidence/network-isolation"
+          mkdir -p "$evidence_dir"
+          {
+            printf 'event_name=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'workflow_sha=%s\n' "$GITHUB_SHA"
+            printf 'reviewed_head_sha=%s\n' "$REVIEWED_HEAD_SHA"
+            printf 'head_ref=%s\n' "$GITHUB_HEAD_REF"
+          } > "$evidence_dir/run-context.txt"
+
+          docker run --rm -i \
+            -u "$(id -u)" \
+            --network none \
+            --cap-add=SYS_PTRACE \
+            -v "$PWD:/usr/src/tdesktop" \
+            "$IMAGE_TAG" \
+            bash -s <<'TRACE_RUN'
+          set -Eeuo pipefail
+          cd /usr/src/tdesktop
+
+          evidence_dir=/usr/src/tdesktop/out/Debug/evidence/network-isolation
+          runner=/usr/src/tdesktop/Telegram/build/network_isolation_test.sh
+          binary=/usr/src/tdesktop/out/Debug/Telegram
+          summary="$evidence_dir/run-summary.txt"
+          expected_cases=16
+          expected_case_names=(
+            fresh-empty
+            malformed-selection
+            canceled-selection
+            failed-selection
+            partial-selection
+            timed-out-selection
+            public-selection
+            public-failure
+            local-preflight
+            pinned-endpoint
+            restart-pinned
+            multiple-account-isolation
+            proxy-intermediary
+            background-refresh
+            selected-endpoint-failure
+            late-callback
+          )
+
+          : > "$summary"
+          printf 'expected_cases=%s\n' "$expected_cases" >> "$summary"
+          case_rows="$("$runner" --list-cases)"
+          listed_cases="$(printf '%s\n' "$case_rows" | awk 'NF { count++ } END { print count + 0 }')"
+          listed_case_names=()
+          while IFS=$'\t' read -r case_name _; do
+            [[ -n "$case_name" ]] || continue
+            listed_case_names+=("$case_name")
+          done <<< "$case_rows"
+          expected_sorted="$(printf '%s\n' "${expected_case_names[@]}" | sort)"
+          listed_sorted="$(printf '%s\n' "${listed_case_names[@]}" | sort)"
+          manifest_matches_expected=0
+          if [[ "$expected_sorted" == "$listed_sorted" ]]; then
+            manifest_matches_expected=1
+          fi
+
+          printf 'listed_cases=%s\n' "$listed_cases" >> "$summary"
+          printf 'manifest_matches_expected=%s\n' "$manifest_matches_expected" >> "$summary"
+
+          executed_cases=0
+          passed_cases=0
+          failed_cases=0
+          while IFS=$'\t' read -r case_name _; do
+            [[ -n "$case_name" ]] || continue
+            if [[ ! "$case_name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+              failed_cases=$((failed_cases + 1))
+              printf 'case=invalid-name status=FAIL\n' >> "$summary"
+              continue
+            fi
+            executed_cases=$((executed_cases + 1))
+            case_evidence="$evidence_dir/$case_name"
+            mkdir -p "$case_evidence"
+            if "$runner" \
+              --case "$case_name" \
+              --evidence-dir "$case_evidence" \
+              -- "$binary"; then
+              passed_cases=$((passed_cases + 1))
+              printf 'case=%s status=PASS\n' "$case_name" >> "$summary"
+            else
+              case_status=$?
+              failed_cases=$((failed_cases + 1))
+              printf 'case=%s status=FAIL exit=%s\n' \
+                "$case_name" "$case_status" >> "$summary"
+            fi
+          done <<< "$case_rows"
+
+          printf 'executed_cases=%s\n' "$executed_cases" >> "$summary"
+          printf 'passed_cases=%s\n' "$passed_cases" >> "$summary"
+          printf 'failed_cases=%s\n' "$failed_cases" >> "$summary"
+
+          if (( listed_cases != expected_cases \
+            || manifest_matches_expected != 1 \
+            || executed_cases != expected_cases \
+            || passed_cases != expected_cases \
+            || failed_cases != 0 )); then
+            echo "FAIL: expected and passed all $expected_cases network trace cases" >&2
+            exit 1
+          fi
+          echo "PASS: all $expected_cases network trace cases"
+          TRACE_RUN
+
+      - name: Upload network isolation evidence.
+        if: always() && env.ONLY_CACHE == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-isolation-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            out/Debug/evidence/network-isolation/run-context.txt
+            out/Debug/evidence/network-isolation/run-summary.txt
+            out/Debug/evidence/network-isolation/*/allowed-*.txt
+            out/Debug/evidence/network-isolation/*/command.txt
+            out/Debug/evidence/network-isolation/*/network-report.json
+            out/Debug/evidence/network-isolation/*/network-report.stdout.json
+            out/Debug/evidence/network-isolation/*/observer.txt
+            out/Debug/evidence/network-isolation/*/process-status.txt
+            out/Debug/evidence/network-isolation/*/status.txt
+
       - name: Move artifact.
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
