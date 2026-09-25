@@ -62,6 +62,14 @@ private:
 		ConnectionPointer data;
 		int priority = 0;
 	};
+	struct ConnectionErrorInfo {
+		uint64 generation = 0;
+		QString endpoint;
+		int port = 0;
+		DcOptions::Variants::Protocol protocol = DcOptions::Variants::Tcp;
+		CustomServer pin;
+		uint64 presentedKeyId = 0;
+	};
 	struct SentContainer {
 		crl::time sent = 0;
 		std::vector<mtpMsgId> messages;
@@ -81,10 +89,11 @@ private:
 	void doDisconnect();
 	void restart();
 	void requestCDNConfig();
-	void handleError(int errorCode);
+	void handleError(int errorCode, ConnectionErrorInfo context);
 	void onError(
 		not_null<AbstractConnection*> connection,
-		qint32 errorCode);
+		qint32 errorCode,
+		ConnectionErrorInfo context);
 	void onConnected(not_null<AbstractConnection*> connection);
 	void onDisconnected(not_null<AbstractConnection*> connection);
 	void onSentSome(uint64 size);
@@ -235,6 +244,7 @@ private:
 	std::unique_ptr<SessionOptions> _options;
 	AuthKeyPtr _encryptionKey;
 	uint64 _keyId = 0;
+	uint8 _persistentKey404LoggedMask = 0;
 	uint64 _sessionId = 0;
 	uint64 _sessionSalt = 0;
 	uint32 _messagesCounter = 0;
