@@ -2002,7 +2002,9 @@ capture_endpoints() {
 	local hash="$1"
 	local output="$2"
 	local criterion="$3"
-	if ! find "$SOCKET_ROOT" -type s -name "$hash-*" -print > "$output" 2> "$EVIDENCE_DIR/endpoint-search-errors.txt"; then
+	# Qt places these hashed local sockets directly in TempLocation. Avoid
+	# descending into unrelated runner-owned mounts under /tmp.
+	if ! find "$SOCKET_ROOT" -maxdepth 1 -type s -name "$hash-*" -print > "$output" 2> "$EVIDENCE_DIR/endpoint-search-errors.txt"; then
 		fail "$criterion" "socket search failed"
 	fi
 }
