@@ -72,6 +72,7 @@ template <typename Log, typename Discard, typename Retry, typename Stop>
 		encryptionKeyId,
 		persistentKeyId);
 	log(decision);
+	discard();
 	switch (decision) {
 	case PersistentKeyErrorDecision::KeepAndRetry:
 		retry();
@@ -80,7 +81,6 @@ template <typename Log, typename Discard, typename Retry, typename Stop>
 		stop();
 		break;
 	case PersistentKeyErrorDecision::Discard:
-		discard();
 		break;
 	}
 	return decision;
