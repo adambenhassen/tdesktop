@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_serialized_request.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "mtproto/persistent_key_rejection.h"
 #include "mtproto/connection_abstract.h"
 #include "mtproto/facade.h"
 #include "base/timer.h"
@@ -61,14 +62,6 @@ private:
 	struct TestConnection {
 		ConnectionPointer data;
 		int priority = 0;
-	};
-	struct ConnectionErrorInfo {
-		uint64 generation = 0;
-		QString endpoint;
-		int port = 0;
-		DcOptions::Variants::Protocol protocol = DcOptions::Variants::Tcp;
-		CustomServer pin;
-		uint64 presentedKeyId = 0;
 	};
 	struct SentContainer {
 		crl::time sent = 0;
@@ -220,6 +213,9 @@ private:
 	// not a retry: only a corrected pin (dcOptionsChanged or the explicit
 	// enrollment resume) clears it.
 	bool _gaveUpOnPinnedFailure = false;
+	// A proxy can inject unauthenticated -404 errors. Keep the persistent
+	// key and stop reconnecting until the connection settings are restarted.
+	bool _gaveUpOnProxyError = false;
 	uint64 _presentedServerKeyFingerprint = 0;
 
 	base::Timer _oldConnectionTimer;

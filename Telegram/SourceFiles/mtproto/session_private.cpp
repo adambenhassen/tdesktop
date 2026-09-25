@@ -222,6 +222,9 @@ void SessionPrivate::appendTestConnection(
 			: (port ? port : pin.port),
 		.protocol = protocol,
 		.pin = pin,
+		.proxied = (_options->proxy.type != ProxyData::Type::None),
+		.proxyEndpoint = _options->proxy.host,
+		.proxyPort = int(_options->proxy.port),
 	};
 	connect(weak, &AbstractConnection::error, [=](int errorCode) {
 		auto errorContext = context;
@@ -372,6 +375,7 @@ void SessionPrivate::dcOptionsChanged() {
 		return;
 	}
 	_gaveUpOnPinnedFailure = false;
+	_gaveUpOnProxyError = false;
 	_retryTimeout = 1;
 	connectToServer(true);
 }
@@ -382,6 +386,7 @@ void SessionPrivate::resumeAfterServerEnrollment() {
 		return;
 	}
 	_gaveUpOnPinnedFailure = false;
+	_gaveUpOnProxyError = false;
 	_retryTimeout = 1;
 	restartNow();
 }
@@ -1049,6 +1054,7 @@ void SessionPrivate::retryByTimer() {
 }
 
 void SessionPrivate::restartNow() {
+	_gaveUpOnProxyError = false;
 	_retryTimeout = 1;
 	_retryTimer.cancel();
 	restart();
@@ -1063,6 +1069,11 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 	// it reports. A corrected pin arrives through dcOptionsChanged() or the
 	// explicit enrollment resume, both of which clear the give-up state first.
 	if (_gaveUpOnPinnedFailure && !afterConfig) {
+		return;
+	}
+	// A proxy -404 is unauthenticated. Wait for an explicit restart or
+	// connection settings change instead of reconnecting through that proxy.
+	if (_gaveUpOnProxyError && !afterConfig) {
 		return;
 	}
 	if (afterConfig && (!_testConnections.empty() || _connection)) {
@@ -2819,44 +2830,49 @@ void SessionPrivate::handleError(
 			const auto persistentKeyId = persistent
 				? persistent->keyId()
 				: 0;
-			const auto discardableKeyId = _encryptionKey
-				&& (_encryptionKey->keyId() == persistentKeyId)
-				? persistentKeyId
-				: 0;
 			const auto currentPin = _instance->dcOptions().customServer();
 			const auto currentGeneration =
 				_instance->serverEnrollmentStopToken();
-			const auto samePin = context.pin.key
-				&& currentPin.key
-				&& SameCustomServerPin(context.pin, currentPin);
-			const auto discard = ShouldDiscardPersistentKeyOn404({
-				.transport = (context.protocol == DcOptions::Variants::Tcp)
-					? PersistentKeyErrorTransport::Tcp
-					: PersistentKeyErrorTransport::Http,
-				.pinnedEndpoint = samePin,
-				.connectionGeneration = context.generation,
-				.currentGeneration = currentGeneration,
-				.presentedKeyId = context.presentedKeyId,
-				.persistentKeyId = discardableKeyId,
-			});
+			const auto decision = DecidePersistentKey404(
+				context,
+				currentPin,
+				currentGeneration,
+				_encryptionKey ? _encryptionKey->keyId() : 0,
+				persistentKeyId);
+			const auto discard = (decision
+				== PersistentKeyErrorDecision::Discard);
 			const auto protocolIndex = static_cast<int>(context.protocol);
+			const auto decisionIndex = static_cast<int>(decision);
 			const auto logBit = uint8(
-				1U << (protocolIndex * 2 + (discard ? 1 : 0)));
+				1U << (protocolIndex * 3 + decisionIndex));
 			if (!(_persistentKey404LoggedMask & logBit)) {
 				_persistentKey404LoggedMask |= logBit;
 				const auto transport = (context.protocol == DcOptions::Variants::Tcp)
 					? u"TCP"_q
 					: u"HTTP"_q;
-				const auto outcome = discard ? u"discarded"_q : u"kept"_q;
+				const auto source = context.proxied ? u"proxy"_q : u"server"_q;
+				const auto endpoint = context.proxied
+					? context.proxyEndpoint
+					: context.endpoint;
+				const auto port = context.proxied
+					? context.proxyPort
+					: context.port;
+				const auto outcome = (decision
+					== PersistentKeyErrorDecision::Discard)
+					? u"discarded"_q
+					: (decision == PersistentKeyErrorDecision::KeepAndStop)
+					? u"kept; reconnect stopped"_q
+					: u"kept"_q;
 				LOG((u"MTP Security: persistent key 0x%1 presented as 0x%2 "
-					u"received -404 at %3 port %4 via %5, connection generation %6, "
-					u"current generation %7; key %8."_q
+					u"received -404 from %3 %4 port %5 via %6, connection generation %7, "
+					u"current generation %8; key %9."_q
 					).arg(QString::number(persistentKeyId, 16)
 					).arg(QString::number(context.presentedKeyId, 16)
-					).arg(context.endpoint.isEmpty()
+					).arg(source
+					).arg(endpoint.isEmpty()
 						? u"unknown"_q
-						: context.endpoint
-					).arg(context.port
+						: endpoint
+					).arg(port
 					).arg(transport
 					).arg(QString::number(context.generation)
 					).arg(QString::number(currentGeneration)
@@ -2864,6 +2880,11 @@ void SessionPrivate::handleError(
 			}
 			if (discard) {
 				destroyPersistentKey();
+			} else if (decision
+					== PersistentKeyErrorDecision::KeepAndStop) {
+				_gaveUpOnProxyError = true;
+				_retryTimer.cancel();
+				doDisconnect();
 			} else {
 				return restart();
 			}

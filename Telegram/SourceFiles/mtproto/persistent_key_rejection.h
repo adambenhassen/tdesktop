@@ -7,31 +7,51 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/basic_types.h"
+#include "mtproto/mtproto_dc_options.h"
+
+#include <QtCore/QString>
 
 namespace MTP::details {
 
-enum class PersistentKeyErrorTransport {
-	Tcp,
-	Http,
-};
-
-struct PersistentKeyErrorContext {
-	PersistentKeyErrorTransport transport = PersistentKeyErrorTransport::Tcp;
-	bool pinnedEndpoint = false;
-	uint64 connectionGeneration = 0;
-	uint64 currentGeneration = 0;
+struct ConnectionErrorInfo {
+	uint64 generation = 0;
+	QString endpoint;
+	int port = 0;
+	DcOptions::Variants::Protocol protocol = DcOptions::Variants::Tcp;
+	CustomServer pin;
 	uint64 presentedKeyId = 0;
-	uint64 persistentKeyId = 0;
+	bool proxied = false;
+	QString proxyEndpoint;
+	int proxyPort = 0;
 };
 
-[[nodiscard]] inline bool ShouldDiscardPersistentKeyOn404(
-	const PersistentKeyErrorContext &context) {
-	return (context.transport == PersistentKeyErrorTransport::Tcp)
-		&& context.pinnedEndpoint
-		&& (context.connectionGeneration == context.currentGeneration)
-		&& (context.persistentKeyId != 0)
-		&& (context.presentedKeyId == context.persistentKeyId);
+enum class PersistentKeyErrorDecision {
+	KeepAndRetry,
+	KeepAndStop,
+	Discard,
+};
+
+[[nodiscard]] inline PersistentKeyErrorDecision DecidePersistentKey404(
+		const ConnectionErrorInfo &connection,
+		const CustomServer &currentPin,
+		uint64 currentGeneration,
+		uint64 encryptionKeyId,
+		uint64 persistentKeyId) {
+	if (connection.proxied) {
+		return PersistentKeyErrorDecision::KeepAndStop;
+	}
+	const auto samePin = connection.pin.key
+		&& currentPin.key
+		&& SameCustomServerPin(connection.pin, currentPin);
+	const auto sameKey = (persistentKeyId != 0)
+		&& (encryptionKeyId == persistentKeyId)
+		&& (connection.presentedKeyId == persistentKeyId);
+	return (connection.protocol == DcOptions::Variants::Tcp)
+		&& samePin
+		&& (connection.generation == currentGeneration)
+		&& sameKey
+		? PersistentKeyErrorDecision::Discard
+		: PersistentKeyErrorDecision::KeepAndRetry;
 }
 
 } // namespace MTP::details
