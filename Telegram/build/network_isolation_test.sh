@@ -691,6 +691,7 @@ esac
 
 require_command strace
 require_command timeout
+require_command xvfb-run
 [ -f "$CASE_MANIFEST" ] || fail "trace case manifest is missing: $CASE_MANIFEST"
 [ -x "$PARSER" ] || fail "trace parser is missing or not executable: $PARSER"
 [ -x "${COMMAND[0]}" ] || fail "target executable is missing or not executable: ${COMMAND[0]}"
@@ -769,6 +770,7 @@ start_public_fixture() {
 	local key="$RUN_ROOT/public-fixture-key.pem"
 	local ready="$RUN_ROOT/public-fixture.ready"
 	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+		-config /dev/null \
 		-subj /CN=public.example \
 		-addext subjectAltName=DNS:public.example \
 		-keyout "$key" -out "$certificate" >/dev/null 2>&1 \
@@ -838,6 +840,7 @@ env \
 	"${INVOCATION_ENV[@]}" \
 	timeout --signal=TERM --kill-after=5s "$TIMEOUT_SECONDS" \
 	strace -ff -ttt -yy -s 0 -e trace=%network -o "$TRACE_PREFIX" \
+	xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" \
 	"${COMMAND[@]}" \
 	> "$EVIDENCE_DIR/stdout.log" \
 	2> "$EVIDENCE_DIR/stderr.log" &
