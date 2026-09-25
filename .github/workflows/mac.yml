@@ -17,9 +17,9 @@ jobs:
     name: MacOS
     permissions:
       contents: write
-    # macOS 15 and 26 hosted images did not stop traced fork children.
-    # Keep the arm64 isolation gate on macOS 14 while validating this path.
-    runs-on: macos-14
+    # The translation provider uses macOS 15 SDK APIs absent from macOS 14.
+    # Keep the arm64 isolation gate fail-closed on the Xcode 16.4 image.
+    runs-on: macos-15
     timeout-minutes: 180
 
     strategy:
@@ -59,13 +59,19 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_UPGRADE: "1"
         run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          xcode_version="$(xcodebuild -version | sed -n '1p')"
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "$xcode_version"
+          echo "macOS SDK: $sdk_version"
+          test "$xcode_version" = "Xcode 16.4"
+          test "$sdk_version" = "15.5"
+
           # Install only the declared build tools; don't update unrelated runner packages.
           brew install automake libtool meson nasm ninja pkg-config
 
           # Disable spotlight.
           sudo mdutil -a -i off
-
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
           sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
 
