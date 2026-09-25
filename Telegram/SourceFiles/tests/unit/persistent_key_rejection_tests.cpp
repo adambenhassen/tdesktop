@@ -7,7 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "mtproto/details/mtproto_dcenter.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
+#include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/persistent_key_rejection.h"
 
@@ -35,6 +37,12 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 			kTestPublicKey,
 			sizeof(kTestPublicKey) - 1)),
 	};
+}
+
+[[nodiscard]] AuthKeyPtr MakePersistentKey() {
+	auto data = AuthKey::Data();
+	data[0] = gsl::byte(1);
+	return std::make_shared<AuthKey>(data);
 }
 
 [[nodiscard]] ConnectionErrorInfo CurrentTcpRejection() {
@@ -102,4 +110,96 @@ TEST_CASE(Proxy404KeepsPersistentKeyAndStopsRetrying) {
 TEST_CASE(CurrentDirectPinnedTcp404DiscardsPresentedPersistentKey) {
 	CHECK(Decide(CurrentTcpRejection())
 		== PersistentKeyErrorDecision::Discard);
+}
+
+TEST_CASE(Http404KeepsStoredKeyAndSchedulesSessionRetry) {
+	auto storedKey = MakePersistentKey();
+	auto dc = Dcenter(DcId(2), AuthKeyPtr(storedKey));
+	auto context = CurrentTcpRejection();
+	context.protocol = DcOptions::Variants::Http;
+	context.presentedKeyId = storedKey->keyId();
+	auto keyDestroyed = false;
+	auto retryRequested = false;
+	auto retryStopped = false;
+
+	const auto decision = HandlePersistentKey404(
+		context,
+		CurrentPin(),
+		7,
+		storedKey->keyId(),
+		storedKey->keyId(),
+		[](PersistentKeyErrorDecision) {},
+		[&] {
+			keyDestroyed = dc.destroyPersistentKey(storedKey->keyId());
+		},
+		[&] { retryRequested = true; },
+		[&] { retryStopped = true; });
+
+	CHECK(decision == PersistentKeyErrorDecision::KeepAndRetry);
+	CHECK(!keyDestroyed);
+	CHECK(dc.getPersistentKey() == storedKey);
+	CHECK(retryRequested);
+	CHECK(!retryStopped);
+}
+
+TEST_CASE(Proxy404KeepsStoredKeyAndStopsSessionReconnect) {
+	auto storedKey = MakePersistentKey();
+	auto dc = Dcenter(DcId(2), AuthKeyPtr(storedKey));
+	auto context = CurrentTcpRejection();
+	context.proxied = true;
+	context.proxyEndpoint = u"proxy.example"_q;
+	context.proxyPort = 1080;
+	context.presentedKeyId = storedKey->keyId();
+	auto keyDestroyed = false;
+	auto retryRequested = false;
+	auto retryStopped = false;
+
+	const auto decision = HandlePersistentKey404(
+		context,
+		CurrentPin(),
+		7,
+		storedKey->keyId(),
+		storedKey->keyId(),
+		[](PersistentKeyErrorDecision) {},
+		[&] {
+			keyDestroyed = dc.destroyPersistentKey(storedKey->keyId());
+		},
+		[&] { retryRequested = true; },
+		[&] { retryStopped = true; });
+
+	CHECK(decision == PersistentKeyErrorDecision::KeepAndStop);
+	CHECK(!keyDestroyed);
+	CHECK(dc.getPersistentKey() == storedKey);
+	CHECK(!retryRequested);
+	CHECK(retryStopped);
+}
+
+TEST_CASE(CurrentDirectTcp404DestroysStoredKeyAndRestartsSession) {
+	auto storedKey = MakePersistentKey();
+	auto dc = Dcenter(DcId(2), AuthKeyPtr(storedKey));
+	auto context = CurrentTcpRejection();
+	context.presentedKeyId = storedKey->keyId();
+	auto keyDestroyed = false;
+	auto sessionRestarted = false;
+	auto retryStopped = false;
+
+	const auto decision = HandlePersistentKey404(
+		context,
+		CurrentPin(),
+		7,
+		storedKey->keyId(),
+		storedKey->keyId(),
+		[](PersistentKeyErrorDecision) {},
+		[&] {
+			keyDestroyed = dc.destroyPersistentKey(storedKey->keyId());
+			sessionRestarted = true;
+		},
+		[] {},
+		[&] { retryStopped = true; });
+
+	CHECK(decision == PersistentKeyErrorDecision::Discard);
+	CHECK(keyDestroyed);
+	CHECK(dc.getPersistentKey() == nullptr);
+	CHECK(sessionRestarted);
+	CHECK(!retryStopped);
 }
