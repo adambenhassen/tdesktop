@@ -2833,61 +2833,63 @@ void SessionPrivate::handleError(
 			const auto currentPin = _instance->dcOptions().customServer();
 			const auto currentGeneration =
 				_instance->serverEnrollmentStopToken();
-			const auto decision = DecidePersistentKey404(
+			static_cast<void>(HandlePersistentKey404(
 				context,
 				currentPin,
 				currentGeneration,
 				_encryptionKey ? _encryptionKey->keyId() : 0,
-				persistentKeyId);
-			const auto discard = (decision
-				== PersistentKeyErrorDecision::Discard);
-			const auto protocolIndex = static_cast<int>(context.protocol);
-			const auto decisionIndex = static_cast<int>(decision);
-			const auto logBit = uint8(
-				1U << (protocolIndex * 3 + decisionIndex));
-			if (!(_persistentKey404LoggedMask & logBit)) {
-				_persistentKey404LoggedMask |= logBit;
-				const auto transport = (context.protocol == DcOptions::Variants::Tcp)
-					? u"TCP"_q
-					: u"HTTP"_q;
-				const auto source = context.proxied ? u"proxy"_q : u"server"_q;
-				const auto endpoint = context.proxied
-					? context.proxyEndpoint
-					: context.endpoint;
-				const auto port = context.proxied
-					? context.proxyPort
-					: context.port;
-				const auto outcome = (decision
-					== PersistentKeyErrorDecision::Discard)
-					? u"discarded"_q
-					: (decision == PersistentKeyErrorDecision::KeepAndStop)
-					? u"kept; reconnect stopped"_q
-					: u"kept"_q;
-				LOG((u"MTP Security: persistent key 0x%1 presented as 0x%2 "
-					u"received -404 from %3 %4 port %5 via %6, connection generation %7, "
-					u"current generation %8; key %9."_q
-					).arg(QString::number(persistentKeyId, 16)
-					).arg(QString::number(context.presentedKeyId, 16)
-					).arg(source
-					).arg(endpoint.isEmpty()
-						? u"unknown"_q
-						: endpoint
-					).arg(port
-					).arg(transport
-					).arg(QString::number(context.generation)
-					).arg(QString::number(currentGeneration)
-					).arg(outcome));
-			}
-			if (discard) {
-				destroyPersistentKey();
-			} else if (decision
-					== PersistentKeyErrorDecision::KeepAndStop) {
-				_gaveUpOnProxyError = true;
-				_retryTimer.cancel();
-				doDisconnect();
-			} else {
-				return restart();
-			}
+				persistentKeyId,
+				[&](PersistentKeyErrorDecision decision) {
+					const auto protocolIndex = static_cast<int>(context.protocol);
+					const auto decisionIndex = static_cast<int>(decision);
+					const auto logBit = uint8(
+						1U << (protocolIndex * 3 + decisionIndex));
+					if (_persistentKey404LoggedMask & logBit) {
+						return;
+					}
+					_persistentKey404LoggedMask |= logBit;
+					const auto transport = (context.protocol
+						== DcOptions::Variants::Tcp)
+						? u"TCP"_q
+						: u"HTTP"_q;
+					const auto source = context.proxied
+						? u"proxy"_q
+						: u"server"_q;
+					const auto endpoint = context.proxied
+						? context.proxyEndpoint
+						: context.endpoint;
+					const auto port = context.proxied
+						? context.proxyPort
+						: context.port;
+					const auto outcome = (decision
+						== PersistentKeyErrorDecision::Discard)
+						? u"discarded"_q
+						: (decision
+							== PersistentKeyErrorDecision::KeepAndStop)
+						? u"kept; reconnect stopped"_q
+						: u"kept"_q;
+					LOG((u"MTP Security: persistent key 0x%1 presented as 0x%2 "
+						u"received -404 from %3 %4 port %5 via %6, connection generation %7, "
+						u"current generation %8; key %9."_q
+						).arg(QString::number(persistentKeyId, 16)
+						).arg(QString::number(context.presentedKeyId, 16)
+						).arg(source
+						).arg(endpoint.isEmpty()
+							? u"unknown"_q
+							: endpoint
+						).arg(port
+						).arg(transport
+						).arg(QString::number(context.generation)
+						).arg(QString::number(currentGeneration)
+						).arg(outcome));
+				},
+				[this] { destroyPersistentKey(); },
+				[this] { restart(); },
+				[this] {
+					_gaveUpOnProxyError = true;
+					_retryTimer.cancel();
+					doDisconnect();
+				}));
 		} else {
 			destroyTemporaryKey();
 		}

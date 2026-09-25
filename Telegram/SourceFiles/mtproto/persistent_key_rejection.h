@@ -54,4 +54,36 @@ enum class PersistentKeyErrorDecision {
 		: PersistentKeyErrorDecision::KeepAndRetry;
 }
 
+template <typename Log, typename Discard, typename Retry, typename Stop>
+[[nodiscard]] PersistentKeyErrorDecision HandlePersistentKey404(
+		const ConnectionErrorInfo &connection,
+		const CustomServer &currentPin,
+		uint64 currentGeneration,
+		uint64 encryptionKeyId,
+		uint64 persistentKeyId,
+		Log log,
+		Discard discard,
+		Retry retry,
+		Stop stop) {
+	const auto decision = DecidePersistentKey404(
+		connection,
+		currentPin,
+		currentGeneration,
+		encryptionKeyId,
+		persistentKeyId);
+	log(decision);
+	switch (decision) {
+	case PersistentKeyErrorDecision::KeepAndRetry:
+		retry();
+		break;
+	case PersistentKeyErrorDecision::KeepAndStop:
+		stop();
+		break;
+	case PersistentKeyErrorDecision::Discard:
+		discard();
+		break;
+	}
+	return decision;
+}
+
 } // namespace MTP::details
