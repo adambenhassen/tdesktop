@@ -54,11 +54,12 @@ jobs:
         run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME"
 
       - name: First set up.
+        timeout-minutes: 20
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_UPGRADE: "1"
         run: |
-          sudo chown -R `whoami`:admin /usr/local/share
-
-          brew update
-          brew upgrade || true
+          # Install only the declared build tools; don't update unrelated runner packages.
           brew install automake libtool meson nasm ninja pkg-config
 
           # Disable spotlight.
