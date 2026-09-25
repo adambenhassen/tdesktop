@@ -13,10 +13,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_dcenter.h"
 #include "mtproto/details/mtproto_dump_to_text.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
-#include "mtproto/session.h"
-#include "mtproto/mtproto_response.h"
-#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/connection_abstract.h"
+#include "mtproto/mtproto_dc_options.h"
+#include "mtproto/mtproto_response.h"
+#include "mtproto/persistent_key_rejection.h"
+#include "mtproto/session.h"
 #include "base/random.h"
 #include "base/qthelp_url.h"
 #include "base/openssl_help.h"
@@ -210,8 +211,25 @@ void SessionPrivate::appendTestConnection(
 		priority
 	});
 	const auto weak = _testConnections.back().data.get();
+	const auto pin = _instance->dcOptions().customServer();
+	const auto context = ConnectionErrorInfo{
+		.generation = _instance->serverEnrollmentStopToken(),
+		.endpoint = ip.isEmpty() && pin.key
+			? QString::fromStdString(pin.ip)
+			: ip,
+		.port = (protocol == DcOptions::Variants::Http)
+			? 80
+			: (port ? port : pin.port),
+		.protocol = protocol,
+		.pin = pin,
+		.proxied = (_options->proxy.type != ProxyData::Type::None),
+		.proxyEndpoint = _options->proxy.host,
+		.proxyPort = int(_options->proxy.port),
+	};
 	connect(weak, &AbstractConnection::error, [=](int errorCode) {
-		onError(weak, errorCode);
+		auto errorContext = context;
+		errorContext.presentedKeyId = weak->sentEncryptedWithKeyId();
+		onError(weak, errorCode, std::move(errorContext));
 	});
 	connect(weak, &AbstractConnection::receivedSome, [=] {
 		onReceivedSome();
@@ -357,6 +375,7 @@ void SessionPrivate::dcOptionsChanged() {
 		return;
 	}
 	_gaveUpOnPinnedFailure = false;
+	_gaveUpOnProxyError = false;
 	_retryTimeout = 1;
 	connectToServer(true);
 }
@@ -367,6 +386,7 @@ void SessionPrivate::resumeAfterServerEnrollment() {
 		return;
 	}
 	_gaveUpOnPinnedFailure = false;
+	_gaveUpOnProxyError = false;
 	_retryTimeout = 1;
 	restartNow();
 }
@@ -1034,6 +1054,7 @@ void SessionPrivate::retryByTimer() {
 }
 
 void SessionPrivate::restartNow() {
+	_gaveUpOnProxyError = false;
 	_retryTimeout = 1;
 	_retryTimer.cancel();
 	restart();
@@ -1048,6 +1069,11 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 	// it reports. A corrected pin arrives through dcOptionsChanged() or the
 	// explicit enrollment resume, both of which clear the give-up state first.
 	if (_gaveUpOnPinnedFailure && !afterConfig) {
+		return;
+	}
+	// A proxy -404 is unauthenticated. Wait for an explicit restart or
+	// connection settings change instead of reconnecting through that proxy.
+	if (_gaveUpOnProxyError && !afterConfig) {
 		return;
 	}
 	if (afterConfig && (!_testConnections.empty() || _connection)) {
@@ -2769,7 +2795,8 @@ void SessionPrivate::authKeyChecked() {
 
 void SessionPrivate::onError(
 		not_null<AbstractConnection*> connection,
-		qint32 errorCode) {
+		qint32 errorCode,
+		ConnectionErrorInfo context) {
 	if (!_instance->isServerEnrollmentNetworkAllowed()) {
 		doDisconnect();
 		return;
@@ -2785,19 +2812,84 @@ void SessionPrivate::onError(
 	removeTestConnection(connection);
 
 	if (_testConnections.empty()) {
-		handleError(errorCode);
+		handleError(errorCode, std::move(context));
 	} else {
 		confirmBestConnection();
 	}
 }
 
-void SessionPrivate::handleError(int errorCode) {
+void SessionPrivate::handleError(
+		int errorCode,
+		ConnectionErrorInfo context) {
 	destroyAllConnections();
 	_waitForConnectedTimer.cancel();
 
 	if (errorCode == -404) {
 		if (usesPermanentAuthKey()) {
-			destroyPersistentKey();
+			const auto persistent = _sessionData->getPersistentKey();
+			const auto persistentKeyId = persistent
+				? persistent->keyId()
+				: 0;
+			const auto currentPin = _instance->dcOptions().customServer();
+			const auto currentGeneration =
+				_instance->serverEnrollmentStopToken();
+			static_cast<void>(HandlePersistentKey404(
+				context,
+				currentPin,
+				currentGeneration,
+				_encryptionKey ? _encryptionKey->keyId() : 0,
+				persistentKeyId,
+				[&](PersistentKeyErrorDecision decision) {
+					const auto protocolIndex = static_cast<int>(context.protocol);
+					const auto decisionIndex = static_cast<int>(decision);
+					const auto logBit = uint8(
+						1U << (protocolIndex * 3 + decisionIndex));
+					if (_persistentKey404LoggedMask & logBit) {
+						return;
+					}
+					_persistentKey404LoggedMask |= logBit;
+					const auto transport = (context.protocol
+						== DcOptions::Variants::Tcp)
+						? u"TCP"_q
+						: u"HTTP"_q;
+					const auto source = context.proxied
+						? u"proxy"_q
+						: u"server"_q;
+					const auto endpoint = context.proxied
+						? context.proxyEndpoint
+						: context.endpoint;
+					const auto port = context.proxied
+						? context.proxyPort
+						: context.port;
+					const auto outcome = (decision
+						== PersistentKeyErrorDecision::Discard)
+						? u"discarded"_q
+						: (decision
+							== PersistentKeyErrorDecision::KeepAndStop)
+						? u"kept; reconnect stopped"_q
+						: u"kept"_q;
+					LOG((u"MTP Security: persistent key 0x%1 presented as 0x%2 "
+						u"received -404 from %3 %4 port %5 via %6, connection generation %7, "
+						u"current generation %8; key %9."_q
+						).arg(QString::number(persistentKeyId, 16)
+						).arg(QString::number(context.presentedKeyId, 16)
+						).arg(source
+						).arg(endpoint.isEmpty()
+							? u"unknown"_q
+							: endpoint
+						).arg(port
+						).arg(transport
+						).arg(QString::number(context.generation)
+						).arg(QString::number(currentGeneration)
+						).arg(outcome));
+				},
+				[this] { destroyPersistentKey(); },
+				[this] { restart(); },
+				[this] {
+					_gaveUpOnProxyError = true;
+					_retryTimer.cancel();
+					doDisconnect();
+				}));
 		} else {
 			destroyTemporaryKey();
 		}
