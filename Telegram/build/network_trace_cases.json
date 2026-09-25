@@ -122,6 +122,7 @@
         "file": "network-resolution.json",
         "origin": "https://public.example/.well-known/telegramd/client",
         "host": "public.example",
+        "request_path": "/.well-known/telegramd/client",
         "destinations": ["203.0.113.10:443"]
       },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
@@ -158,6 +159,7 @@
         "file": "network-resolution.json",
         "origin": "https://public-failure.invalid/.well-known/telegramd/client",
         "host": "public-failure.invalid",
+        "request_path": "/.well-known/telegramd/client",
         "destinations": ["203.0.113.10:443"]
       },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
@@ -235,6 +237,10 @@
       },
       "allowlist": {"origins": [], "destinations": ["127.0.0.1:19082"], "dns": [], "proxies": ["127.0.0.1:19080"]},
       "required": {"destinations": ["127.0.0.1:19082"], "dns": [], "proxies": ["127.0.0.1:19080"], "proxy_target": "127.0.0.1:19082"},
+      "proxy_fixture": {
+        "listener": "127.0.0.1:19080",
+        "target": "127.0.0.1:19082"
+      },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },
@@ -265,13 +271,6 @@
       },
       "allowlist": {"origins": [], "destinations": ["127.0.0.1:19083"], "dns": [], "proxies": []},
       "required": {"destinations": ["127.0.0.1:19083"], "dns": [], "proxies": [], "proxy_target": null},
-      "failure_evidence": {
-        "file": "network-selected-failure.json",
-        "endpoint": "127.0.0.1:19083",
-        "attempted": true,
-        "failed": true,
-        "fallback_suppressed": true
-      },
       "completion": {"log": "test_log.txt", "marker": "TEST_COMPLETE", "result": "SCENARIO_RESULT: PASS"},
       "report": "network-report.json"
     },

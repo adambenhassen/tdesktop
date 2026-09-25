@@ -18,14 +18,14 @@ COMPLETION_LOG_NAME="test_log.txt"
 COMPLETION_MARKER="TEST_COMPLETE"
 COMPLETION_RESULT="SCENARIO_RESULT: PASS"
 RESOLUTION_FILE=""
-FAILURE_EVIDENCE_FILE=""
-FAILURE_EVIDENCE_ENDPOINT=""
 TEST_EVIDENCE_DIR=""
 PROXY_ASSERTION_FILE=""
 PROXY_TARGET=""
 PUBLIC_FIXTURE_FILE=""
 PUBLIC_FIXTURE_ADDRESS=""
 PUBLIC_FIXTURE_PROXY=""
+PROXY_FIXTURE_LISTENER=""
+PROXY_FIXTURE_TARGET=""
 INVOCATION_ARGS=()
 INVOCATION_ENV=()
 ORIGINS=()
@@ -39,6 +39,7 @@ COMMAND=()
 RUN_ROOT=""
 RUNNER_PID=""
 PUBLIC_FIXTURE_PID=""
+PROXY_FIXTURE_PID=""
 
 usage() {
 	cat >&2 <<'EOF'
@@ -70,6 +71,10 @@ cleanup() {
 	if [ -n "$PUBLIC_FIXTURE_PID" ] && kill -0 "$PUBLIC_FIXTURE_PID" 2>/dev/null; then
 		kill -TERM "$PUBLIC_FIXTURE_PID" 2>/dev/null || true
 		wait "$PUBLIC_FIXTURE_PID" 2>/dev/null || true
+	fi
+	if [ -n "$PROXY_FIXTURE_PID" ] && kill -0 "$PROXY_FIXTURE_PID" 2>/dev/null; then
+		kill -TERM "$PROXY_FIXTURE_PID" 2>/dev/null || true
+		wait "$PROXY_FIXTURE_PID" 2>/dev/null || true
 	fi
 	if [ -n "$RUNNER_PID" ] && kill -0 "$RUNNER_PID" 2>/dev/null; then
 		kill -TERM "$RUNNER_PID" 2>/dev/null || true
@@ -127,18 +132,21 @@ socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
 EOF
 	cat > "$test_root/public-failure.trace" <<'EOF'
-socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 3
-sendto(3, "dns", 3, MSG_NOSIGNAL, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16) = 3
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
+connect(3, {sa_family=AF_INET, sin_port=htons(19444), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 EOF
 	cat > "$test_root/public-resolution.json" <<'EOF'
-{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"]}
+{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"],"request_path":"/.well-known/telegramd/client","proxy_target":"203.0.113.10:443","observed":true,"source":"network_public_fixture"}
 EOF
 	cat > "$test_root/public-failure-resolution.json" <<'EOF'
-{"origin":"https://public-failure.invalid/.well-known/telegramd/client","host":"public-failure.invalid","error":"HostNotFound","addresses":[],"destinations":[]}
+{"origin":"https://public-failure.invalid/.well-known/telegramd/client","host":"public-failure.invalid","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"],"request_path":"/.well-known/telegramd/client","proxy_target":"203.0.113.10:443","observed":true,"source":"network_public_fixture"}
 EOF
+	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"203.0.113.10:443","observed":true}' > "$test_root/public-proxy-target.txt"
 	cat > "$test_root/proxy.trace" <<'EOF'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(19080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.10")}, 16) = 0
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4
+connect(4, {sa_family=AF_INET, sin_port=htons(1080), sin_addr=inet_addr("198.51.100.9")}, 16) = 0
 EOF
 	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"192.0.2.10:443","observed":true}' > "$test_root/proxy-target.txt"
 
@@ -168,16 +176,20 @@ EOF
 		--trace "$test_root/public-failure.trace" \
 		--case public-failure --phase public-discovery \
 		--origin https://public-failure.invalid/.well-known/telegramd/client \
-		--allow-dns 127.0.0.53:53 \
-		--require-dns 127.0.0.53:53 \
+		--allow-destination 203.0.113.10:443 \
+		--require-destination 203.0.113.10:443 \
+		--allow-proxy 127.0.0.1:19444 \
+		--require-proxy 127.0.0.1:19444 \
+		--proxy-target 203.0.113.10:443 \
+		--proxy-target-proof "$test_root/public-proxy-target.txt" \
 		--resolution-evidence "$test_root/public-failure-resolution.json"
 	run_expected_success proxy-intermediary "${parser[@]}" \
 		--trace "$test_root/proxy.trace" \
 		--case proxy-intermediary --phase pinned-endpoint \
 		--allow-destination 192.0.2.10:443 \
-		--allow-proxy 127.0.0.1:19080 \
+		--allow-proxy 198.51.100.9:1080 \
 		--require-destination 192.0.2.10:443 \
-		--require-proxy 127.0.0.1:19080 \
+		--require-proxy 198.51.100.9:1080 \
 		--proxy-target 192.0.2.10:443 \
 		--proxy-target-proof "$test_root/proxy-target.txt"
 	trap - RETURN
@@ -205,7 +217,7 @@ with open(sys.argv[1], encoding="utf-8") as manifest:
             json.dumps(allowlist, sort_keys=True),
             json.dumps(case["required"], sort_keys=True),
             json.dumps(case.get("resolution"), sort_keys=True),
-            json.dumps(case.get("failure_evidence"), sort_keys=True),
+            json.dumps(case.get("proxy_fixture"), sort_keys=True),
             json.dumps(case["completion"], sort_keys=True),
             case["description"],
         )))
@@ -404,24 +416,25 @@ for index, case in enumerate(cases):
         not required["proxies"] or proxy_target is None
     ):
         fail(f"{name} needs proxy transport and target evidence")
+    proxy_fixture = case.get("proxy_fixture")
+    if name == "proxy-intermediary":
+        if proxy_fixture != {
+            "listener": "127.0.0.1:19080",
+            "target": proxy_target,
+        } or proxy_fixture["listener"] not in required["proxies"]:
+            fail(f"{name} needs its runner-owned SOCKS fixture contract")
+    elif proxy_fixture is not None:
+        fail(f"{name} cannot declare a SOCKS fixture")
 
-    failure_evidence = case.get("failure_evidence")
-    if name == "selected-endpoint-failure":
-        if failure_evidence != {
-            "file": "network-selected-failure.json",
-            "endpoint": "127.0.0.1:19083",
-            "attempted": True,
-            "failed": True,
-            "fallback_suppressed": True,
-        }:
-            fail(f"{name} needs post-commit failure evidence")
-    elif failure_evidence is not None:
-        fail(f"{name} cannot declare failure evidence")
+    if name == "selected-endpoint-failure" and required["destinations"] != [
+        "127.0.0.1:19083"
+    ]:
+        fail(f"{name} must require the selected endpoint trace")
 
     resolution = case.get("resolution")
     if phase == "public-discovery":
         if not isinstance(resolution, dict) or set(resolution) != {
-            "file", "origin", "host", "destinations"
+            "file", "origin", "host", "request_path", "destinations"
         }:
             fail(f"{name} needs observed resolution evidence contract")
         resolution_file = resolution["file"]
@@ -446,6 +459,12 @@ for index, case in enumerate(cases):
             != urllib.parse.urlsplit(resolution["origin"]).hostname
         ):
             fail(f"{name} resolution host must match its origin")
+        if (
+            not isinstance(resolution["request_path"], str)
+            or resolution["request_path"]
+            != urllib.parse.urlsplit(resolution["origin"]).path
+        ):
+            fail(f"{name} fixture request path must match its origin")
         if (
             not isinstance(resolution["destinations"], list)
             or any(
@@ -531,12 +550,12 @@ elif field == "completion_result":
 elif field == "resolution_file":
     if case.get("resolution") is not None:
         print(case["resolution"]["file"])
-elif field == "failure_evidence_file":
-    if case.get("failure_evidence") is not None:
-        print(case["failure_evidence"]["file"])
-elif field == "failure_evidence_endpoint":
-    if case.get("failure_evidence") is not None:
-        print(case["failure_evidence"]["endpoint"])
+elif field == "proxy_fixture_listener":
+    if case.get("proxy_fixture") is not None:
+        print(case["proxy_fixture"]["listener"])
+elif field == "proxy_fixture_target":
+    if case.get("proxy_fixture") is not None:
+        print(case["proxy_fixture"]["target"])
 elif field == "public_fixture_file":
     print(case["invocation"]["environment"].get(
         "TDESKTOP_NETWORK_TRACE_PUBLIC_FIXTURE", ""
@@ -627,11 +646,11 @@ COMPLETION_LOG_NAME="$(case_contract_values completion_log)"
 COMPLETION_MARKER="$(case_contract_values completion_marker)"
 COMPLETION_RESULT="$(case_contract_values completion_result)"
 RESOLUTION_FILE="$(case_contract_values resolution_file)"
-FAILURE_EVIDENCE_FILE="$(case_contract_values failure_evidence_file)"
-FAILURE_EVIDENCE_ENDPOINT="$(case_contract_values failure_evidence_endpoint)"
 PUBLIC_FIXTURE_FILE="$(case_contract_values public_fixture_file)"
 PUBLIC_FIXTURE_ADDRESS="$(case_contract_values public_fixture_address)"
 PUBLIC_FIXTURE_PROXY="$(case_contract_values public_fixture_proxy)"
+PROXY_FIXTURE_LISTENER="$(case_contract_values proxy_fixture_listener)"
+PROXY_FIXTURE_TARGET="$(case_contract_values proxy_fixture_target)"
 PROXY_TARGET="$(case_contract_values proxy_target)"
 while IFS= read -r argument; do
 	[ -n "$argument" ] && INVOCATION_ARGS+=("$argument")
@@ -682,14 +701,12 @@ RUN_ROOT="$(mktemp -d "$EVIDENCE_DIR/run.XXXXXX")"
 mkdir -p "$RUN_ROOT/home" "$RUN_ROOT/workdir"
 touch "$RUN_ROOT/workdir/testing"
 TEST_EVIDENCE_DIR="$EVIDENCE_DIR/test-evidence"
-PROXY_ASSERTION_FILE="$TEST_EVIDENCE_DIR/proxy-target.txt"
+PROXY_ASSERTION_FILE="$RUN_ROOT/proxy-target.json"
+RESOLUTION_PROOF_FILE=""
 mkdir -p "$TEST_EVIDENCE_DIR"
-rm -f -- "$TEST_EVIDENCE_DIR/$COMPLETION_LOG_NAME" "$PROXY_ASSERTION_FILE"
+rm -f -- "$TEST_EVIDENCE_DIR/$COMPLETION_LOG_NAME"
 if [ -n "$RESOLUTION_FILE" ]; then
-	rm -f -- "$TEST_EVIDENCE_DIR/$RESOLUTION_FILE"
-fi
-if [ -n "$FAILURE_EVIDENCE_FILE" ]; then
-	rm -f -- "$TEST_EVIDENCE_DIR/$FAILURE_EVIDENCE_FILE"
+	RESOLUTION_PROOF_FILE="$RUN_ROOT/$RESOLUTION_FILE"
 fi
 TRACE_PREFIX="$RUN_ROOT/strace"
 REPORT="$EVIDENCE_DIR/$REPORT_NAME"
@@ -761,6 +778,7 @@ start_public_fixture() {
 		--key "$key" \
 		--response "$ROOT/network_trace_fixtures/$PUBLIC_FIXTURE_FILE" \
 		--proof "$PROXY_ASSERTION_FILE" \
+		--resolution-proof "$RESOLUTION_PROOF_FILE" \
 		--ready "$ready" \
 		--proxy-port "${PUBLIC_FIXTURE_PROXY##*:}" \
 		--https-port 19443 &
@@ -778,8 +796,37 @@ start_public_fixture() {
 	fail "public fixture did not become ready"
 }
 
+start_proxy_fixture() {
+	if [ "$CASE_NAME" != "proxy-intermediary" ]; then
+		return
+	fi
+	[ "$PROXY_FIXTURE_LISTENER" = "127.0.0.1:19080" ] || \
+		fail "SOCKS fixture listener is not trusted"
+	[ "$PROXY_FIXTURE_TARGET" = "127.0.0.1:19082" ] || \
+		fail "SOCKS fixture target is not trusted"
+	local ready="$RUN_ROOT/socks-fixture.ready"
+	python3 "$ROOT/network_socks_fixture.py" \
+		--proof "$PROXY_ASSERTION_FILE" \
+		--expected-target "$PROXY_FIXTURE_TARGET" \
+		--port "${PROXY_FIXTURE_LISTENER##*:}" \
+		--ready "$ready" &
+	PROXY_FIXTURE_PID=$!
+	for _ in $(seq 1 100); do
+		if [ -f "$ready" ]; then
+			return
+		fi
+		if ! kill -0 "$PROXY_FIXTURE_PID" 2>/dev/null; then
+			wait "$PROXY_FIXTURE_PID" 2>/dev/null || true
+			fail "SOCKS fixture exited before becoming ready"
+		fi
+		sleep 0.05
+	done
+	fail "SOCKS fixture did not become ready"
+}
+
 trap cleanup EXIT
 start_public_fixture
+start_proxy_fixture
 
 set +e
 env \
@@ -788,7 +835,6 @@ env \
 	XDG_DATA_HOME="$RUN_ROOT/home/.local/share" \
 	RES_OPTIONS="attempts:1 timeout:1" \
 	TDESKTOP_TEST_EVIDENCE_DIR="$TEST_EVIDENCE_DIR" \
-	TDESKTOP_PROXY_ASSERTION_FILE="$PROXY_ASSERTION_FILE" \
 	"${INVOCATION_ENV[@]}" \
 	timeout --signal=TERM --kill-after=5s "$TIMEOUT_SECONDS" \
 	strace -ff -ttt -yy -s 0 -e trace=%network -o "$TRACE_PREFIX" \
@@ -831,13 +877,7 @@ if [ -n "$PROXY_TARGET" ]; then
 	PARSER_COMMAND+=(--proxy-target-proof "$PROXY_ASSERTION_FILE")
 fi
 if [ -n "$RESOLUTION_FILE" ]; then
-	PARSER_COMMAND+=(--resolution-evidence "$TEST_EVIDENCE_DIR/$RESOLUTION_FILE")
-fi
-if [ -n "$FAILURE_EVIDENCE_FILE" ]; then
-	PARSER_COMMAND+=(
-		--failure-evidence "$TEST_EVIDENCE_DIR/$FAILURE_EVIDENCE_FILE"
-		--failure-endpoint "$FAILURE_EVIDENCE_ENDPOINT"
-	)
+	PARSER_COMMAND+=(--resolution-evidence "$RESOLUTION_PROOF_FILE")
 fi
 
 set +e
@@ -873,33 +913,6 @@ if ! grep -Fqx "$COMPLETION_RESULT" "$COMPLETION_LOG" 2>/dev/null; then
 	printf 'FAIL: case=%s missing completion result=%s\n' \
 		"$CASE_NAME" "$COMPLETION_RESULT" | tee "$STATUS_FILE" >&2
 	exit 1
-fi
-
-if [ -n "$FAILURE_EVIDENCE_FILE" ]; then
-	python3 - "$TEST_EVIDENCE_DIR/$FAILURE_EVIDENCE_FILE" "$FAILURE_EVIDENCE_ENDPOINT" <<'PY'
-import json
-import sys
-
-path, endpoint = sys.argv[1:]
-try:
-    with open(path, encoding="utf-8") as evidence:
-        observed = json.load(evidence)
-except (OSError, json.JSONDecodeError) as error:
-    print(f"FAIL: selected endpoint failure evidence is invalid: {error}", file=sys.stderr)
-    raise SystemExit(1)
-expected = {
-    "endpoint": endpoint,
-    "attempted": True,
-    "failed": True,
-    "fallback_suppressed": True,
-}
-if observed != expected:
-    print(
-        f"FAIL: selected endpoint failure evidence mismatch: {observed!r}",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-PY
 fi
 
 printf 'PASS: case=%s phase=%s process_status=%s\n' \

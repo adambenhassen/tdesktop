@@ -33,6 +33,14 @@ _IPV4 = re.compile(
 _IPV6 = re.compile(r"inet_pton\(AF_INET6,\s*\"([^\"]+)\"\)")
 _FAMILY = re.compile(r"sa_family=(AF_[A-Z0-9_]+)")
 _UNIX_PATH = re.compile(r"sun_path=\"([^\"]*)\"")
+_NETWORK_SYSCALL = re.compile(
+    r"^(?:<\.\.\.\s+)?"
+    r"(?P<name>socket|bind|connect|sendto|sendmsg|sendmmsg|getsockopt)"
+    r"(?:\s+resumed>)?(?:\(|\s)"
+)
+_TRACE_TIMESTAMP = re.compile(
+    r"^(?:\[pid\s+\d+\]\s+|\d+\s+)?(?P<timestamp>\d+\.\d+)\s+"
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,8 @@ class NetworkEvent:
     socket_id: str | None
     destination: str | None
     family: str | None
+    result: str
+    timestamp: float | None
     line: str
     pid: int | None
 
@@ -62,6 +72,11 @@ def _pid_and_body(line: str) -> tuple[int | None, str]:
         return None, line.rstrip("\n")
     pid = match.group("bracket_pid") or match.group("pid")
     return (int(pid) if pid else None), match.group("body")
+
+
+def _trace_timestamp(line: str) -> float | None:
+    match = _TRACE_TIMESTAMP.match(line)
+    return float(match.group("timestamp")) if match else None
 
 
 def _destination(text: str) -> tuple[str | None, str | None]:
@@ -174,8 +189,23 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
     for raw_line in lines:
         line = raw_line.rstrip("\n")
         pid, body = _pid_and_body(line)
+        timestamp = _trace_timestamp(line)
         match = _SYSCALL.match(body)
         if not match:
+            unfinished = _NETWORK_SYSCALL.match(body)
+            if unfinished:
+                result.append(NetworkEvent(
+                    kind="unknown",
+                    syscall=unfinished.group("name"),
+                    fd=None,
+                    socket_id=None,
+                    destination=None,
+                    family=None,
+                    result="<unfinished or unmatched>",
+                    timestamp=timestamp,
+                    line=line,
+                    pid=pid,
+                ))
             continue
         syscall = match.group("name")
         args = match.group("args")
@@ -191,9 +221,29 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
                 socket_id=socket_id,
                 destination=None,
                 family=family,
+                result=match.group("result"),
+                timestamp=timestamp,
                 line=line,
                 pid=pid,
             ))
+            continue
+        if syscall == "getsockopt":
+            if "SO_ERROR" in args:
+                error = re.search(r"\[(E[A-Z0-9]+)\]", args)
+                if error:
+                    fd, socket_id = _fd_info(args)
+                    result.append(NetworkEvent(
+                        kind="connect-error",
+                        syscall=syscall,
+                        fd=fd,
+                        socket_id=socket_id,
+                        destination=None,
+                        family=None,
+                        result=error.group(1),
+                        timestamp=timestamp,
+                        line=line,
+                        pid=pid,
+                    ))
             continue
         if syscall not in {
             "bind", "connect", "sendto", "sendmsg", "sendmmsg"
@@ -227,6 +277,8 @@ def parse_trace_lines(lines: Iterable[str]) -> list[NetworkEvent]:
                 socket_id=socket_id,
                 destination=destination,
                 family=family,
+                result=match.group("result"),
+                timestamp=timestamp,
                 line=line,
                 pid=pid,
             ))
@@ -429,18 +481,20 @@ def check_trace(
         elif not proxy_target_proven:
             violations.append("proxy target assertion was not proven")
     if phase == "public-discovery" and (
-        (case != "public-failure" and not required_destinations)
-        or (not required_dns and not proxy_target_proven)
+        not required_destinations
+        or not (
+            required_dns
+            or (required_proxies and proxy_target_proven)
+        )
     ):
         violations.append(
-            "public discovery requires destination and resolver or fixture evidence"
+            "public discovery requires destination and bounded fixture evidence"
         )
     if phase in {"local-direct", "pinned-endpoint"} and not required_destinations:
         if not (proxy_target and proxy_target_proven):
             violations.append("endpoint phase requires destination evidence")
     if phase == "public-discovery":
-        if case != "public-failure" and set(required_destinations) != set(
-                configured_destinations):
+        if set(required_destinations) != set(configured_destinations):
             violations.append(
                 "public discovery origin is not bound to its destination allowlist"
             )
@@ -457,10 +511,11 @@ def check_trace(
         if not isinstance(resolution_evidence, dict):
             violations.append("missing observed resolution evidence")
         elif set(resolution_evidence) != {
-            "origin", "host", "error", "addresses", "destinations"
+            "origin", "host", "error", "addresses", "destinations",
+            "request_path", "proxy_target", "observed", "source",
         }:
             violations.append(
-                "invalid observed resolution evidence shape; callback result is required"
+                "invalid runner fixture resolution evidence shape"
             )
         else:
             observed_origin = resolution_evidence.get("origin")
@@ -468,6 +523,10 @@ def check_trace(
             observed_error = resolution_evidence.get("error")
             observed_addresses = resolution_evidence.get("addresses")
             observed_destinations = resolution_evidence.get("destinations")
+            request_path = resolution_evidence.get("request_path")
+            fixture_target = resolution_evidence.get("proxy_target")
+            fixture_observed = resolution_evidence.get("observed")
+            fixture_source = resolution_evidence.get("source")
             derived_destinations = (
                 _resolution_destinations(observed_addresses)
                 if isinstance(observed_addresses, list)
@@ -490,6 +549,16 @@ def check_trace(
                 "destinations": list(observed_destinations)
                 if isinstance(observed_destinations, list)
                 else None,
+                "request_path": request_path
+                if isinstance(request_path, str)
+                else None,
+                "proxy_target": fixture_target
+                if isinstance(fixture_target, str)
+                else None,
+                "observed": fixture_observed is True,
+                "source": fixture_source
+                if isinstance(fixture_source, str)
+                else None,
             }
             if (
                 len(allowed_origins) != 1
@@ -508,6 +577,34 @@ def check_trace(
                 violations.append(
                     "observed resolution host does not match the selected origin"
                 )
+            try:
+                expected_path = urllib.parse.urlsplit(
+                    allowed_origins[0]
+                ).path
+            except (IndexError, ValueError):
+                expected_path = None
+            if request_path != expected_path:
+                violations.append(
+                    "runner fixture request path does not match the selected origin"
+                )
+            if fixture_source != "network_public_fixture" or fixture_observed is not True:
+                violations.append(
+                    "public request evidence was not observed by the runner fixture"
+                )
+            expected_fixture_target = proxy_target or (
+                required_destinations[0]
+                if len(required_destinations) == 1
+                else None
+            )
+            if (
+                not expected_fixture_target
+                or fixture_target != expected_fixture_target
+                or fixture_target not in configured_destinations
+                or fixture_target not in required_destinations
+            ):
+                violations.append(
+                    "runner fixture CONNECT target does not match the destination policy"
+                )
             if observed_error not in {"NoError", "HostNotFound", "UnknownError"}:
                 violations.append("observed resolution has an invalid callback error")
             if not isinstance(observed_addresses, list) or derived_destinations is None:
@@ -522,19 +619,9 @@ def check_trace(
                 violations.append(
                     "observed resolution destinations are not derived from callback addresses"
                 )
-            if case != "public-failure" and observed_destinations != list(
-                    required_destinations):
+            if observed_destinations != list(required_destinations):
                 violations.append(
                     "observed resolution destinations do not match required evidence"
-                )
-            elif case == "public-failure" and any(
-                not isinstance(destination, str)
-                or not _valid_ip_destination(destination)
-                or destination not in configured_destinations
-                for destination in observed_destinations or []
-            ):
-                violations.append(
-                    "observed resolution contains an invalid destination"
                 )
     allowed_fds = set()
     socket_events = []
@@ -546,7 +633,9 @@ def check_trace(
             continue
         if event.kind == "unknown":
             violations.append(
-                f"unknown network family {event.family or '<unknown>'}"
+                f"unknown network family {event.family}"
+                if event.syscall == "socket" and event.family
+                else f"unknown network syscall {event.syscall}"
             )
             continue
         if event.kind == "dns":
@@ -598,6 +687,107 @@ def check_trace(
                 and _destination_allowed(event.destination, [required])
                 for event in events):
             violations.append(f"required proxy not observed {required}")
+    proxy_route_report = None
+    if case == "proxy-intermediary":
+        endpoint = proxy_target
+        proxy = required_proxies[0] if len(required_proxies) == 1 else None
+        endpoint_attempts = [
+            (index, event) for index, event in enumerate(events)
+            if event.syscall == "connect"
+            and event.kind == "connect"
+            and endpoint
+            and _destination_allowed(event.destination, [endpoint])
+        ]
+        proxy_attempts = [
+            (index, event) for index, event in enumerate(events)
+            if event.syscall == "connect"
+            and event.kind == "connect"
+            and proxy
+            and _destination_allowed(event.destination, [proxy])
+        ]
+        observed = (
+            len(endpoint_attempts) == 1
+            and bool(proxy_attempts)
+            and endpoint_attempts[0][0] < proxy_attempts[0][0]
+        )
+        if not observed:
+            violations.append(
+                "proxy case requires one endpoint preflight before an observed account proxy connection"
+            )
+        proxy_route_report = {
+            "preflight_destination": endpoint,
+            "preflight_connects": len(endpoint_attempts),
+            "proxy": proxy,
+            "proxy_connects": len(proxy_attempts),
+            "observed": observed,
+        }
+    post_commit_report = None
+    if case in {
+        "pinned-endpoint",
+        "restart-pinned",
+        "multiple-account-isolation",
+        "background-refresh",
+    }:
+        endpoint = (
+            required_destinations[0]
+            if len(required_destinations) == 1
+            else None
+        )
+        attempts = [
+            event for event in events
+            if event.syscall == "connect"
+            and event.kind == "connect"
+            and endpoint
+            and _destination_allowed(event.destination, [endpoint])
+        ]
+        observed = len(attempts) >= 2
+        if not observed:
+            violations.append(
+                "post-commit selected endpoint contact not observed in trace"
+            )
+        post_commit_report = {
+            "endpoint": endpoint,
+            "connect_attempts": len(attempts),
+            "observed": observed,
+        }
+    selected_failure_report = None
+    if case == "selected-endpoint-failure":
+        endpoint = (
+            required_destinations[0]
+            if len(required_destinations) == 1
+            else None
+        )
+        attempts = [
+            event for event in events
+            if event.syscall == "connect"
+            and event.kind == "connect"
+            and endpoint
+            and _destination_allowed(event.destination, [endpoint])
+        ]
+        post_commit = attempts[1] if len(attempts) > 1 else None
+        connection_error = None
+        if post_commit:
+            if "ECONNREFUSED" in post_commit.result:
+                connection_error = "ECONNREFUSED"
+            else:
+                connection_error = next((
+                    "ECONNREFUSED"
+                    for event in events
+                    if event.kind == "connect-error"
+                    and _fd_key(event) == _fd_key(post_commit)
+                    and "ECONNREFUSED" in event.result
+                ), None)
+        observed = bool(post_commit and connection_error)
+        if not observed:
+            violations.append(
+                "post-commit selected endpoint failure not observed in trace"
+            )
+        selected_failure_report = {
+            "endpoint": endpoint,
+            "connect_attempts": len(attempts),
+            "observed": observed,
+            "post_commit_result": connection_error,
+        }
     if phase == "public-discovery" and resolution_report:
         for destination in resolution_report["destinations"] or []:
             if proxy_target_proven and destination == proxy_target:
@@ -631,6 +821,9 @@ def check_trace(
             "required_proxies": list(required_proxies),
         },
         "resolution": resolution_report,
+        "proxy_route": proxy_route_report,
+        "post_commit_activity": post_commit_report,
+        "selected_endpoint_failure": selected_failure_report,
     }
 
 
@@ -658,6 +851,8 @@ def _read_trace(paths: Sequence[Path]) -> list[NetworkEvent]:
                     if event.pid is None and source_pid is not None
                     else event
                 )
+    if events and all(event.timestamp is not None for event in events):
+        events.sort(key=lambda event: event.timestamp)
     return events
 
 
@@ -699,8 +894,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--proxy-target")
     parser.add_argument("--proxy-target-proof")
     parser.add_argument("--resolution-evidence")
-    parser.add_argument("--failure-evidence")
-    parser.add_argument("--failure-endpoint")
     parser.add_argument("--target-status", type=int)
     parser.add_argument("--report")
     return parser
@@ -726,31 +919,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             print(f"invalid resolution evidence: {error}", file=sys.stderr)
             return 2
-    failure_evidence = None
-    if args.case == "selected-endpoint-failure" and (
-        not args.failure_evidence or not args.failure_endpoint
-    ):
-        print(
-            "selected endpoint failure evidence is required",
-            file=sys.stderr,
-        )
-        return 2
-    if args.failure_evidence:
-        try:
-            failure_evidence = json.loads(
-                Path(args.failure_evidence).read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            print(f"invalid failure evidence: {error}", file=sys.stderr)
-            return 2
-        if failure_evidence != {
-            "endpoint": args.failure_endpoint,
-            "attempted": True,
-            "failed": True,
-            "fallback_suppressed": True,
-        }:
-            print("invalid selected endpoint failure evidence", file=sys.stderr)
-            return 2
     report = check_trace(
         events,
         case=args.case,
@@ -767,8 +935,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         resolution_evidence=resolution_evidence,
     )
     report["trace_count"] = len(paths)
-    if failure_evidence is not None:
-        report["failure_evidence"] = failure_evidence
     if args.target_status is not None:
         report["target_status"] = args.target_status
     if args.proxy_target:

@@ -10,7 +10,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "test/test_runner.h"
 
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "core/update_checker.h"
+#include "core/update_policy.h"
 #include "intro/intro_server_discovery.h"
 #include "lang/lang_cloud_manager.h"
 #include "lang/lang_instance.h"
@@ -24,10 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "test/test_log.h"
 
 #include <QtCore/QCoreApplication>
-#include <QtCore/QFile>
-#include <QtCore/QJsonArray>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
@@ -82,21 +80,6 @@ constexpr auto kProxyPort = quint16(19080);
 		|| name == u"late-callback"_q;
 }
 
-[[nodiscard]] QString EvidenceFile(const QString &name) {
-	return EvidenceDir() + name;
-}
-
-[[nodiscard]] QString Endpoint(
-		const QHostAddress &address,
-		quint16 port) {
-	const auto host = address.toString();
-	return (address.protocol() == QAbstractSocket::IPv6Protocol
-			? (u"["_q + host + u"]"_q)
-			: host)
-		+ u":"_q
-		+ QString::number(port);
-}
-
 [[nodiscard]] QString HostInfoErrorName(QHostInfo::HostInfoError error) {
 	switch (error) {
 	case QHostInfo::NoError:
@@ -148,123 +131,6 @@ void AppendBigEndian(QByteArray &target, quint16 value) {
 	return response;
 }
 
-[[nodiscard]] bool WriteResolutionEvidence(
-		const QString &host,
-		const QString &origin,
-		const QHostInfo &info,
-		quint16 port) {
-	auto addresses = QJsonArray();
-	auto destinations = QJsonArray();
-	for (const auto &address : info.addresses()) {
-		if (address.protocol() != QAbstractSocket::IPv4Protocol
-			&& address.protocol() != QAbstractSocket::IPv6Protocol) {
-			continue;
-		}
-		addresses.append(address.toString());
-		destinations.append(Endpoint(address, port));
-	}
-	auto object = QJsonObject();
-	object.insert(u"origin"_q, origin);
-	object.insert(u"host"_q, host);
-	object.insert(u"error"_q, HostInfoErrorName(info.error()));
-	object.insert(u"addresses"_q, addresses);
-	object.insert(u"destinations"_q, destinations);
-	auto file = QFile(EvidenceFile(u"network-resolution.json"_q));
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		Fail(
-			u"write public resolution evidence"_q,
-			u"could not open network-resolution.json"_q);
-		return false;
-	}
-	const auto data = QJsonDocument(object).toJson(QJsonDocument::Compact);
-	if (file.write(data) != data.size() || file.write("\n") != 1) {
-		Fail(
-			u"write public resolution evidence"_q,
-			u"could not write network-resolution.json"_q);
-		return false;
-	}
-	file.flush();
-	return true;
-}
-
-[[nodiscard]] std::optional<QString> SocksConnectTarget(
-		const QByteArray &request) {
-	if (request.size() != 10
-		|| request[0] != char(0x05)
-		|| request[1] != char(0x01)
-		|| request[2] != char(0x00)
-		|| request[3] != char(0x01)) {
-		return std::nullopt;
-	}
-	const auto target = QStringLiteral("%1.%2.%3.%4:%5")
-		.arg(uchar(request[4]))
-		.arg(uchar(request[5]))
-		.arg(uchar(request[6]))
-		.arg(uchar(request[7]))
-		.arg((quint16(uchar(request[8])) << 8) | uchar(request[9]));
-	return target;
-}
-
-[[nodiscard]] bool WriteProxyTargetEvidence(const QString &target) {
-	const auto path = qEnvironmentVariable("TDESKTOP_PROXY_ASSERTION_FILE");
-	if (path.isEmpty()) {
-		Fail(
-			u"write proxy target evidence"_q,
-			u"TDESKTOP_PROXY_ASSERTION_FILE is unset"_q);
-		return false;
-	}
-	auto object = QJsonObject();
-	object.insert(u"protocol"_q, u"SOCKS5"_q);
-	object.insert(u"version"_q, 5);
-	object.insert(u"command"_q, u"CONNECT"_q);
-	object.insert(u"target"_q, target);
-	object.insert(u"observed"_q, true);
-	auto file = QFile(path);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		Fail(
-			u"write proxy target evidence"_q,
-			u"could not open the assertion file"_q);
-		return false;
-	}
-	const auto data = QJsonDocument(object).toJson(QJsonDocument::Compact);
-	if (file.write(data) != data.size() || file.write("\n") != 1) {
-		Fail(
-			u"write proxy target evidence"_q,
-			u"could not write the assertion file"_q);
-		return false;
-	}
-	file.flush();
-	return true;
-}
-
-[[nodiscard]] bool WriteSelectedFailureEvidence(
-		const QString &endpoint,
-		bool attempted,
-		bool failed,
-		bool fallbackSuppressed) {
-	auto object = QJsonObject();
-	object.insert(u"endpoint"_q, endpoint);
-	object.insert(u"attempted"_q, attempted);
-	object.insert(u"failed"_q, failed);
-	object.insert(u"fallback_suppressed"_q, fallbackSuppressed);
-	auto file = QFile(EvidenceFile(u"network-selected-failure.json"_q));
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		Fail(
-			u"write selected endpoint failure evidence"_q,
-			u"could not open network-selected-failure.json"_q);
-		return false;
-	}
-	const auto data = QJsonDocument(object).toJson(QJsonDocument::Compact);
-	if (file.write(data) != data.size() || file.write("\n") != 1) {
-		Fail(
-			u"write selected endpoint failure evidence"_q,
-			u"could not write network-selected-failure.json"_q);
-		return false;
-	}
-	file.flush();
-	return true;
-}
-
 struct NetworkCaseState final {
 	~NetworkCaseState() {
 		stop();
@@ -302,21 +168,11 @@ struct NetworkCaseState final {
 		if (_localServer) {
 			_localServer->close();
 		}
-		closeSocket();
-		if (_proxyPeer) {
-			_proxyPeer->abort();
-			_proxyPeer = nullptr;
-		}
-		if (_proxyServer) {
-			_proxyServer->close();
-		}
-	}
-
-	void closeSocket() {
-		if (_socket) {
-			QObject::disconnect(_socket.get(), nullptr, nullptr, nullptr);
-			_socket->abort();
-			_socket.reset();
+		if (_proxySettingsSaved) {
+			Core::App().setCurrentProxy(
+				_originalProxy,
+				_originalProxySettings);
+			_proxySettingsSaved = false;
 		}
 	}
 
@@ -329,7 +185,6 @@ struct NetworkCaseState final {
 			_account = nullptr;
 		}
 		_done = true;
-		_socketFinished = nullptr;
 		stop();
 	}
 
@@ -491,18 +346,14 @@ struct NetworkCaseState final {
 		_lookupId = QHostInfo::lookupHost(
 			fixtureAddress,
 			QCoreApplication::instance(),
-			[shared = shared_from_this(), host, origin, fixtureAddress](
+			[shared = shared_from_this(), host, fixtureAddress](
 					const QHostInfo &info) {
 				if (shared->_done) {
 					return;
 				}
 				shared->_lookupId = -1;
 				const auto addresses = info.addresses();
-				shared->_resolutionWritten = WriteResolutionEvidence(
-					host,
-					origin,
-					info,
-					443);
+				shared->_resolutionObserved = true;
 				Check(
 					info.error() == QHostInfo::NoError
 						&& std::any_of(
@@ -520,15 +371,15 @@ struct NetworkCaseState final {
 			});
 		if (_lookupId < 0) {
 			Fail(u"start public resolver"_q);
-			_resolutionWritten = false;
+			_resolutionObserved = false;
 			maybeFinishPublic();
 		}
 	}
 
 	void maybeFinishPublic() {
-		if (_publicReplyFinished && _resolutionWritten) {
+		if (_publicReplyFinished && _resolutionObserved) {
 			QTimer::singleShot(0, [shared = shared_from_this()] {
-				if (shared->_publicReplyFinished && shared->_resolutionWritten) {
+				if (shared->_publicReplyFinished && shared->_resolutionObserved) {
 					shared->settle();
 				}
 			});
@@ -556,26 +407,6 @@ struct NetworkCaseState final {
 		while (_localServer->hasPendingConnections()) {
 			const auto peer = QPointer<QTcpSocket>(
 				_localServer->nextPendingConnection());
-			if (_watchSelectedEndpoint) {
-				_selectedEndpointAttempted = true;
-				if (peer) {
-					QObject::connect(
-						peer.data(),
-						&QTcpSocket::disconnected,
-						[shared = shared_from_this()] {
-							shared->_selectedEndpointFailed = true;
-						});
-					QObject::connect(
-						peer.data(),
-						&QTcpSocket::errorOccurred,
-						[shared = shared_from_this()](QAbstractSocket::SocketError) {
-							shared->_selectedEndpointFailed = true;
-						});
-					peer->abort();
-				}
-				_localServer->close();
-				continue;
-			}
 			_localPeer = peer;
 			_localRequest.clear();
 			QObject::connect(
@@ -834,7 +665,11 @@ struct NetworkCaseState final {
 					result,
 					[shared] { shared->_account->mtp().resume(); });
 				Check(committed, u"pinned endpoint commits through enrollment"_q);
-				shared->settle();
+				if (committed) {
+					QTimer::singleShot(1000, [shared] { shared->settle(); });
+				} else {
+					shared->settle();
+				}
 			});
 	}
 
@@ -878,7 +713,7 @@ struct NetworkCaseState final {
 				if (shared->_account) {
 					shared->_account->mtp().resume();
 				}
-				shared->settle();
+				QTimer::singleShot(1000, [shared] { shared->settle(); });
 			});
 	}
 
@@ -896,7 +731,8 @@ struct NetworkCaseState final {
 			false,
 			false,
 			false,
-			[shared = shared_from_this(), other](MTP::ServerDiscoveryResult result) {
+			[shared = shared_from_this(), other, domainPtr = &domain](
+					MTP::ServerDiscoveryResult result) {
 				const auto committed = shared->commitResult(
 					*shared->_account,
 					result,
@@ -908,10 +744,20 @@ struct NetworkCaseState final {
 				Check(
 					other->mtp().dcOptions().unenrolled(),
 					u"account B remains independently unenrolled"_q);
-				domain.activate(not_null{ other });
-				domain.activate(not_null{ shared->_account });
-				shared->_account->mtp().resume();
-				shared->settle();
+				domainPtr->activate(not_null{ other });
+				other->mtp().resume();
+				other->mtp().requestConfigIfOld();
+				QTimer::singleShot(100, [shared, other, domainPtr] {
+					Check(
+						other->mtp().dcOptions().unenrolled()
+							&& !other->mtp().dcOptions().hasCustomServer(),
+						u"account B request remains network-gated"_q);
+					domainPtr->activate(not_null{ shared->_account });
+					shared->_account->mtp().resume();
+					QTimer::singleShot(
+						1000,
+						[shared] { shared->settle(); });
+				});
 			});
 	}
 
@@ -932,30 +778,18 @@ struct NetworkCaseState final {
 					*shared->_account,
 					result,
 					[shared] {
-						shared->_watchSelectedEndpoint = true;
+						if (shared->_localServer) {
+							shared->_localServer->close();
+						}
 						shared->_account->mtp().resume();
 					});
 				Check(committed, u"failed endpoint is committed before connect"_q);
-				QTimer::singleShot(1000, [shared] {
+				QTimer::singleShot(2000, [shared] {
 					const auto &options = shared->_account->mtp().dcOptions();
-					Check(
-						shared->_selectedEndpointAttempted,
-						u"selected endpoint attempt is observed after commit"_q);
-					Check(
-						shared->_selectedEndpointFailed,
-						u"selected endpoint failure is observed after commit"_q);
 					Check(
 						options.hasCustomServer()
 							&& options.refusesProductionFallback(),
 						u"selected endpoint failure suppresses production fallback"_q);
-					shared->_selectedFailureWritten = WriteSelectedFailureEvidence(
-						QString::fromLatin1(kFailureDestination),
-						shared->_selectedEndpointAttempted,
-						shared->_selectedEndpointFailed,
-						options.refusesProductionFallback());
-					Check(
-						shared->_selectedFailureWritten,
-						u"selected endpoint failure evidence is recorded"_q);
 					shared->settle();
 				});
 			});
@@ -977,7 +811,7 @@ struct NetworkCaseState final {
 				const auto committed = shared->commitResult(
 					*shared->_account,
 					result,
-					nullptr);
+					[shared] { shared->_account->mtp().resume(); });
 				Check(committed, u"background case pins its account first"_q);
 				shared->_account->appConfig().start();
 				shared->_account->appConfig().refresh(true);
@@ -993,152 +827,68 @@ struct NetworkCaseState final {
 				shared->_updateChecker = std::make_unique<Core::UpdateChecker>();
 				shared->_updateChecker->test();
 				Note(u"background refresh invoked app-config and update-check paths"_q);
-				QTimer::singleShot(100, [shared] {
+				QTimer::singleShot(1000, [shared] {
 					Check(
 						shared->_updateChecker != nullptr,
 						u"background update checker was created"_q);
+					Check(
+						!Core::UpdateNetworkAllowed(
+							Core::UpdateEntryPoint::Automatic)
+							&& !Core::UpdateNetworkAllowed(
+								Core::UpdateEntryPoint::Manual),
+						u"untrusted update origins remain network-disabled"_q);
 					shared->settle();
 				});
 			});
 	}
 
 	void startProxy() {
-		_proxyServer = std::make_unique<QTcpServer>();
-		QObject::connect(
-			_proxyServer.get(),
-			&QTcpServer::newConnection,
-			[shared = shared_from_this()] { shared->acceptProxy(); });
-		if (!_proxyServer->listen(
-			QHostAddress(QString::fromLatin1(kProxyHost)),
-			kProxyPort)) {
-			Fail(u"start bounded SOCKS5 observer"_q);
+		_account = accountForCase();
+		if (!_account) {
 			settle();
 			return;
 		}
-		_socket = std::make_unique<QTcpSocket>();
-		_socket->setProxy(QNetworkProxy::NoProxy);
-		QObject::connect(
-			_socket.get(),
-			&QTcpSocket::connected,
-			[shared = shared_from_this()] {
-				shared->_socket->write(QByteArray::fromHex("050100"));
-			});
-		QObject::connect(
-			_socket.get(),
-			&QTcpSocket::readyRead,
-			[shared = shared_from_this()] { shared->proxyClientReadyRead(); });
-		connectErrors(_socket.get());
-		_socket->connectToHost(
-			QHostAddress(QString::fromLatin1(kProxyHost)),
-			kProxyPort);
-		QTimer::singleShot(1000, [shared = shared_from_this()] {
-			if (!shared->_done) {
-				Fail(u"bounded SOCKS5 exchange"_q);
-				shared->settle();
-			}
-		});
-	}
-
-	void connectErrors(QTcpSocket *socket) {
-		QObject::connect(
-			socket,
-			&QTcpSocket::errorOccurred,
-			[shared = shared_from_this()](QAbstractSocket::SocketError) {
-				shared->socketFinished();
-			});
-	}
-
-	void socketFinished() {
-		if (_done || _socketReported) {
-			return;
-		}
-		_socketReported = true;
-		const auto finished = std::move(_socketFinished);
-		_socketFinished = nullptr;
-		closeSocket();
-		if (finished) {
-			finished();
-		} else {
-			settle();
-		}
-	}
-
-	void acceptProxy() {
-		if (!_proxyServer || !_proxyServer->hasPendingConnections()) {
-			return;
-		}
-		_proxyPeer = _proxyServer->nextPendingConnection();
-		QObject::connect(
-			_proxyPeer.data(),
-			&QTcpSocket::readyRead,
-			[shared = shared_from_this()] { shared->proxyRequestReadyRead(); });
-		QObject::connect(
-			_proxyPeer.data(),
-			&QTcpSocket::disconnected,
-			[shared = shared_from_this()] {
-				if (!shared->_proxyWritten && !shared->_done) {
-					Fail(u"SOCKS5 proxy received a target"_q);
+		startLocalDiscovery(
+			QString::fromLatin1(kPinnedDestination),
+			true,
+			false,
+			false,
+			false,
+			[shared = shared_from_this()](MTP::ServerDiscoveryResult result) {
+				auto &settings = Core::App().settings().proxy();
+				shared->_originalProxy = settings.selected();
+				shared->_originalProxySettings = settings.settings();
+				shared->_proxySettingsSaved = true;
+				auto proxy = MTP::ProxyData();
+				proxy.type = MTP::ProxyData::Type::Socks5;
+				proxy.host = QString::fromLatin1(kProxyHost);
+				proxy.port = kProxyPort;
+				Core::App().setCurrentProxy(
+					proxy,
+					MTP::ProxyData::Settings::Enabled);
+				const auto configured = settings.selected();
+				const auto proxyConfigured = settings.isEnabled()
+					&& configured.type == MTP::ProxyData::Type::Socks5
+					&& configured.host == QString::fromLatin1(kProxyHost)
+					&& configured.port == kProxyPort;
+				Check(
+					proxyConfigured,
+					u"account transport uses the bounded SOCKS5 proxy"_q);
+				if (!proxyConfigured) {
 					shared->settle();
+					return;
 				}
+				const auto committed = shared->commitResult(
+					*shared->_account,
+					result,
+					[shared] { shared->_account->mtp().resume(); });
+				Check(committed, u"proxy case commits its endpoint before resume"_q);
+				if (!committed) {
+					shared->settle();
+					return;
+				}
+				QTimer::singleShot(1500, [shared] { shared->settle(); });
 			});
-	}
-
-	void proxyRequestReadyRead() {
-		if (!_proxyPeer || _done) {
-			return;
-		}
-		_proxyRequest += _proxyPeer->readAll();
-		if (_proxyStage == 0 && _proxyRequest.size() >= 3) {
-			if (_proxyRequest.left(3) != QByteArray::fromHex("050100")) {
-				Fail(u"SOCKS5 greeting is valid"_q);
-				settle();
-				return;
-			}
-			_proxyRequest.remove(0, 3);
-			_proxyPeer->write(QByteArray::fromHex("0500"));
-			_proxyStage = 1;
-		}
-		if (_proxyStage == 1 && _proxyRequest.size() >= 10) {
-			const auto target = SocksConnectTarget(_proxyRequest.left(10));
-			if (!target) {
-				Fail(u"SOCKS5 CONNECT request is valid"_q);
-				settle();
-				return;
-			}
-			_proxyWritten = WriteProxyTargetEvidence(*target);
-			Check(
-				*target == QString::fromLatin1(kPinnedDestination),
-				u"SOCKS5 target is the pinned endpoint"_q);
-			if (!_proxyWritten) {
-				settle();
-				return;
-			}
-			_proxyPeer->write(QByteArray::fromHex("050000017f0000014a8a"));
-			_proxyStage = 2;
-		}
-	}
-
-	void proxyClientReadyRead() {
-		if (!_socket || _done) {
-			return;
-		}
-		_proxyResponse += _socket->readAll();
-		if (_proxyClientStage == 0 && _proxyResponse.size() >= 2) {
-			if (_proxyResponse.left(2) != QByteArray::fromHex("0500")) {
-				Fail(u"SOCKS5 proxy selected no-authentication"_q);
-				settle();
-				return;
-			}
-			_proxyResponse.remove(0, 2);
-			_socket->write(QByteArray::fromHex("050100017f0000014a8a"));
-			_proxyClientStage = 1;
-		}
-		if (_proxyClientStage == 1 && _proxyResponse.size() >= 10) {
-			Check(
-				_proxyResponse.left(2) == QByteArray::fromHex("0500"),
-				u"SOCKS5 proxy accepted CONNECT"_q);
-			socketFinished();
-		}
 	}
 
 	[[nodiscard]] bool done() const {
@@ -1146,7 +896,7 @@ struct NetworkCaseState final {
 	}
 
 	[[nodiscard]] bool evidenceWritten() const {
-		return _resolutionWritten || _proxyWritten || _selectedFailureWritten;
+		return _resolutionObserved;
 	}
 
 	std::shared_ptr<NetworkCaseState> shared_from_this() {
@@ -1157,13 +907,10 @@ struct NetworkCaseState final {
 		_self = self;
 	}
 
-	std::unique_ptr<QTcpSocket> _socket;
-	std::unique_ptr<QTcpServer> _proxyServer;
 	std::unique_ptr<QTcpServer> _localServer;
 	std::unique_ptr<Intro::details::ServerWidgetDiscovery> _discovery;
 	std::unique_ptr<QNetworkAccessManager> _network;
 	std::unique_ptr<Core::UpdateChecker> _updateChecker;
-	QPointer<QTcpSocket> _proxyPeer;
 	QPointer<QTcpSocket> _localPeer;
 	QPointer<QNetworkReply> _reply;
 	std::weak_ptr<NetworkCaseState> _self;
@@ -1171,29 +918,22 @@ struct NetworkCaseState final {
 		_discoveryAttempt;
 	Main::Account *_account = nullptr;
 	MTP::ServerSelectionCheck _selection;
-	Fn<void()> _socketFinished;
 	QByteArray _discoveryNonce;
 	QByteArray _localRequest;
-	QByteArray _proxyRequest;
-	QByteArray _proxyResponse;
+	MTP::ProxyData _originalProxy;
+	MTP::ProxyData::Settings _originalProxySettings =
+		MTP::ProxyData::Settings::System;
 	int _lookupId = -1;
 	int _discoveryCallbacks = 0;
-	int _proxyStage = 0;
-	int _proxyClientStage = 0;
 	bool _done = false;
 	bool _publicFailure = false;
-	bool _socketReported = false;
 	bool _publicReplyFinished = false;
 	bool _expectDiscoveryFailure = false;
 	bool _holdResponse = false;
 	bool _partialResponse = false;
-	bool _resolutionWritten = false;
-	bool _proxyWritten = false;
+	bool _resolutionObserved = false;
+	bool _proxySettingsSaved = false;
 	bool _preselectionFailure = false;
-	bool _watchSelectedEndpoint = false;
-	bool _selectedEndpointAttempted = false;
-	bool _selectedEndpointFailed = false;
-	bool _selectedFailureWritten = false;
 };
 
 [[nodiscard]] std::shared_ptr<NetworkCaseState> MakeState() {
@@ -1234,14 +974,6 @@ void AddNetworkCase(
 				Check(
 					state->evidenceWritten(),
 					u"public resolution evidence was written"_q);
-			} else if (name == u"proxy-intermediary"_q) {
-				Check(
-					state->evidenceWritten(),
-					u"observed SOCKS5 target evidence was written"_q);
-			} else if (name == u"selected-endpoint-failure"_q) {
-				Check(
-					state->evidenceWritten(),
-					u"selected endpoint failure evidence was written"_q);
 			}
 		},
 		.timeout = crl::time(3000),

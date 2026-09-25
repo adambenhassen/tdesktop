@@ -76,13 +76,13 @@ The case manifest is the required scenario inventory and execution contract:
 Telegram/build/network_isolation_test.sh --list-cases
 ```
 
-Every case in the version-5 manifest declares its phase, bounded timeout, `-testagent` arguments, the
-`TDESKTOP_NETWORK_TRACE_CASE` environment binding, all four destination
-allowlists, required evidence, completion marker, update mode, and report
-filename. Public cases also declare the resolution-evidence filename, origin,
-and destination sequence that the client must produce. The runner reads this
-checked-in manifest directly. It does not accept a caller-supplied manifest,
-phase, origin, destination, DNS, proxy, or timeout policy.
+Every case in the version-5 manifest declares its phase, bounded timeout,
+`-testagent` arguments, the `TDESKTOP_NETWORK_TRACE_CASE` environment binding,
+all four destination allowlists, required evidence, completion marker, update
+mode, and report filename. Public cases additionally bind a normalized origin,
+request path, resolution-evidence file, and destination sequence. The runner
+reads this checked-in manifest directly. It does not accept a caller-supplied
+manifest, phase, origin, destination, DNS, proxy, or timeout policy.
 
 Run a fixed-head case from that contract:
 
@@ -108,30 +108,33 @@ Telegram/build/network_isolation_test.sh \
 ```
 
 For a configured proxy, the manifest lists its transport address separately
-from the pinned endpoint. The checked-in driver runs a bounded SOCKS5
-CONNECT exchange against its local observer, which writes a JSON proof only
-after parsing the target request. An unrelated destination, protocol, or
-missing proof fails. A public scenario writes `network-resolution.json` under
-`$TDESKTOP_TEST_EVIDENCE_DIR` only from the `QHostInfo` completion callback;
-the file contains the selected host, callback error, every returned address,
-and derived `host:port` destinations. The parser requires that callback result
-to match the normalized origin and observed connect activity. Each report
-preserves the case, observed socket metadata, target exit status, origin,
-resolution, destination, DNS, proxy, and required evidence contract. Raw
-`strace` files are not retained.
+from the pinned endpoint. The bounded SOCKS5 observer writes a JSON proof only
+after parsing the CONNECT request. Public cases use a runner-owned SOCKS5/TLS
+fixture: it records the hostname from CONNECT and the Host/path from the HTTPS
+request, then writes `network-resolution.json` with the fixed fixture mapping
+to `203.0.113.10:443`. The client separately checks its resolver callback;
+the target does not write the parser's resolution evidence. The parser binds
+the fixture-observed host, path, origin, and CONNECT target to the manifest and
+the traced proxy connection. Each report preserves observed socket metadata,
+the target exit status, resolution, destination, DNS, proxy, and required
+evidence contract. Raw `strace` files are not retained.
 
 The checked-in Debug driver in `Telegram/SourceFiles/test/test_scenario.cpp`
 consumes `TDESKTOP_NETWORK_TRACE_CASE` and registers every manifest case with
-the test runner. Preselection cases exercise distinct validation, cancellation,
-timeout, parser, and generation-cancellation paths without opening a DNS,
-socket, or connect operation. Local preflight exercises the framed discovery
-request; pin,
-restart, account-isolation, selected-failure, and refresh cases use the actual
-account enrollment, persistence, activation, fallback-suppression, app-config,
-and update-check paths. Public cases issue the HTTPS discovery request through
-the runner-owned SOCKS5 HTTPS fixture, whose CONNECT proof targets the fixed
-`203.0.113.10:443` address, and record the deterministic `QHostInfo` callback.
-The proxy case performs its own SOCKS5 target exchange.
+the test runner. Preselection contracts allow no network activity. The
+canceled, failed, partial, timed-out, and late-callback selectors currently
+exercise local selection/discovery checks without a live pending network
+operation; their clean traces do not establish timeout or late-network-callback
+behavior. Local preflight exercises the framed discovery request. Pin and
+restart cases must produce a second endpoint connection after preflight,
+account-isolation invokes account B's gated config request before resuming A,
+and selected-endpoint-failure requires a second traced connect plus an
+`ECONNREFUSED` result. Public cases issue HTTPS through the runner-owned
+fixture. Background refresh invokes app-config, langpack, configuration, CDN,
+and update-check entry points; the update policy is explicitly network-disabled
+for untrusted origins. The proxy case commits the endpoint, configures the
+account transport through the runner-owned SOCKS5 relay, and requires both a
+traced proxy connection and the relay's independently observed CONNECT target.
 The selected scenario must write the manifest's completion log under
 `$TDESKTOP_TEST_EVIDENCE_DIR`, including both
 `TEST_COMPLETE` and `SCENARIO_RESULT: PASS`. A missing marker, failed result, or

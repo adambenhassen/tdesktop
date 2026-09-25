@@ -40,21 +40,19 @@ for name in ("public-selection", "public-failure"):
     if fixture != "public-discovery.json":
         raise SystemExit(f"FAIL: {name} lacks the controlled public fixture")
 
-failure = cases["selected-endpoint-failure"].get("failure_evidence")
-if failure != {
-    "file": "network-selected-failure.json",
-    "endpoint": "127.0.0.1:19083",
-    "attempted": True,
-    "failed": True,
-    "fallback_suppressed": True,
-}:
+failure = cases["selected-endpoint-failure"]["required"]["destinations"]
+if failure != ["127.0.0.1:19083"]:
     raise SystemExit(
-        "FAIL: selected-endpoint-failure lacks post-commit failure evidence"
+        "FAIL: selected-endpoint-failure lacks its endpoint trace contract"
     )
 PY
 
 if ! python3 "$ROOT/network_public_fixture.py" --help >/dev/null; then
 	echo "FAIL: controlled public fixture is unavailable" >&2
+	exit 1
+fi
+if ! python3 "$ROOT/network_socks_fixture.py" --help >/dev/null; then
+	echo "FAIL: controlled SOCKS fixture is unavailable" >&2
 	exit 1
 fi
 
@@ -68,24 +66,9 @@ mkdir -p "$FAKE_BIN"
 cat > "$TARGET" <<'EOF'
 #!/usr/bin/env bash
 printf 'trace-case=%s args=%s\n' "${TDESKTOP_NETWORK_TRACE_CASE:-unset}" "$*"
-if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = proxy-intermediary ] \
-	&& [ "${TDESKTOP_SKIP_PROXY_ASSERTION:-0}" != 1 ]; then
-printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"127.0.0.1:19082","observed":true}' > "$TDESKTOP_PROXY_ASSERTION_FILE"
-fi
-if { [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-selection ] \
-	|| [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-failure ]; } \
-	&& [ "${TDESKTOP_SKIP_PROXY_ASSERTION:-0}" != 1 ]; then
-	printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"203.0.113.10:443","observed":true}' > "$TDESKTOP_PROXY_ASSERTION_FILE"
-fi
-if [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-selection ]; then
-	printf '%s\n' '{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"]}' \
-		> "$TDESKTOP_TEST_EVIDENCE_DIR/network-resolution.json"
-elif [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = public-failure ]; then
-	printf '%s\n' '{"origin":"https://public-failure.invalid/.well-known/telegramd/client","host":"public-failure.invalid","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"]}' \
-		> "$TDESKTOP_TEST_EVIDENCE_DIR/network-resolution.json"
-elif [ "${TDESKTOP_NETWORK_TRACE_CASE:-}" = selected-endpoint-failure ]; then
-	printf '%s\n' '{"endpoint":"127.0.0.1:19083","attempted":true,"failed":true,"fallback_suppressed":true}' \
-		> "$TDESKTOP_TEST_EVIDENCE_DIR/network-selected-failure.json"
+if [ "${TDESKTOP_PROXY_ASSERTION_FILE+x}" = x ]; then
+	echo "FAIL: runner proof path leaked to target" >&2
+	exit 96
 fi
 if [ "${TDESKTOP_SKIP_COMPLETION:-0}" != 1 ]; then
 	mkdir -p "$TDESKTOP_TEST_EVIDENCE_DIR"
@@ -134,12 +117,16 @@ background-refresh)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4
+connect(4, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 TRACE
 	;;
 proxy-intermediary)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(19080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4
+connect(4, {sa_family=AF_INET, sin_port=htons(19080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 TRACE
 	;;
 failed-selection|canceled-selection|partial-selection|timed-out-selection|late-callback)
@@ -158,12 +145,16 @@ pinned-endpoint|restart-pinned|multiple-account-isolation)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
 connect(3, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4
+connect(4, {sa_family=AF_INET, sin_port=htons(19082), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 TRACE
 	;;
 selected-endpoint-failure)
 	cat > "${TRACE_PREFIX}.$$" <<'TRACE'
 socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 3
-connect(3, {sa_family=AF_INET, sin_port=htons(19083), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
+connect(3, {sa_family=AF_INET, sin_port=htons(19083), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 4
+connect(4, {sa_family=AF_INET, sin_port=htons(19083), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 ECONNREFUSED
 TRACE
 	;;
 *)
@@ -171,8 +162,29 @@ TRACE
 socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0) = 3
 connect(3, {sa_family=AF_UNIX, sun_path="/tmp/display"}, 19) = 0
 TRACE
-	;;
+		;;
 esac
+
+if [ "${TDESKTOP_SKIP_PROXY_ASSERTION:-0}" != 1 ]; then
+	case "${TDESKTOP_NETWORK_TRACE_CASE:-}" in
+	public-selection)
+		printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"203.0.113.10:443","observed":true}' \
+			> "$(dirname "$HOME")/proxy-target.json"
+		printf '%s\n' '{"origin":"https://public.example/.well-known/telegramd/client","host":"public.example","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"],"request_path":"/.well-known/telegramd/client","proxy_target":"203.0.113.10:443","observed":true,"source":"network_public_fixture"}' \
+			> "$(dirname "$HOME")/network-resolution.json"
+		;;
+	public-failure)
+		printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"203.0.113.10:443","observed":true}' \
+			> "$(dirname "$HOME")/proxy-target.json"
+		printf '%s\n' '{"origin":"https://public-failure.invalid/.well-known/telegramd/client","host":"public-failure.invalid","error":"NoError","addresses":["203.0.113.10"],"destinations":["203.0.113.10:443"],"request_path":"/.well-known/telegramd/client","proxy_target":"203.0.113.10:443","observed":true,"source":"network_public_fixture"}' \
+			> "$(dirname "$HOME")/network-resolution.json"
+		;;
+	proxy-intermediary)
+		printf '%s\n' '{"protocol":"SOCKS5","version":5,"command":"CONNECT","target":"127.0.0.1:19082","observed":true}' \
+			> "$(dirname "$HOME")/proxy-target.json"
+		;;
+	esac
+fi
 "$@"
 EOF
 chmod +x "$FAKE_BIN/strace"
@@ -266,9 +278,9 @@ if ! PATH="$FAKE_BIN:$PATH" "$SCRIPT" \
 	echo "FAIL: selected endpoint failure contract should execute" >&2
 	exit 1
 fi
-if ! grep -Fq '"failure_evidence"' \
+if ! grep -Fq '"selected_endpoint_failure"' \
 	"$SELECTED_FAILURE_EVIDENCE/network-report.json"; then
-	echo "FAIL: selected endpoint failure was not recorded in the report" >&2
+	echo "FAIL: selected endpoint failure trace was not recorded in the report" >&2
 	exit 1
 fi
 
@@ -285,5 +297,11 @@ for case_name in \
 		exit 1
 	fi
 done
+
+if [ -e "$TEST_ROOT/all-cases/public-selection/test-evidence/network-resolution.json" ] \
+	|| [ -e "$TEST_ROOT/all-cases/proxy-intermediary/test-evidence/proxy-target.json" ]; then
+	echo "FAIL: runner-owned fixture proof was exposed in target evidence" >&2
+	exit 1
+fi
 
 echo "network-isolation-runner-status=PASS"
