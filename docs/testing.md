@@ -61,6 +61,109 @@ TEST_CASE(SomethingHolds) {
 A case that cannot fail is not evidence of anything. When adding one, break
 the code it covers on purpose, confirm the case goes red, and restore it.
 
+## Clean-process network trace
+
+`Telegram/build/network_isolation_test.sh` is the process-level destination
+gate for the account network boundary. It starts the supplied Debug executable
+with an empty `HOME` and work directory, captures the target process and its
+children with `strace`, and fails closed when a network socket has no allowed
+DNS or destination event. AF_UNIX display and desktop-integration sockets are
+not remote network activity.
+
+The case manifest is the required scenario inventory and execution contract:
+
+```bash
+Telegram/build/network_isolation_test.sh --list-cases
+```
+
+Every case in the version-5 manifest declares its phase, bounded timeout,
+`-testagent` arguments, the `TDESKTOP_NETWORK_TRACE_CASE` environment binding,
+all four destination allowlists, required evidence, completion marker, update
+mode, and report filename. Public cases additionally bind a normalized origin,
+request path, resolution-evidence file, and destination sequence. The runner
+reads this checked-in manifest directly. It does not accept a caller-supplied
+manifest, phase, origin, destination, DNS, proxy, or timeout policy.
+
+Run a fixed-head case from that contract:
+
+An empty-storage check records no DNS, socket, or connect activity:
+
+```bash
+Telegram/build/network_isolation_test.sh \
+  --case fresh-empty \
+  --evidence-dir "$PWD/network-evidence/fresh-empty" \
+  -- "$PWD/out/Debug/Telegram"
+```
+
+The workflow can invoke each manifest entry the same way. Discovery and
+pinned-endpoint cases carry their resolved destination sets explicitly. A public
+origin is bound to that resolved set, while the IP:port values are the only
+remote destinations accepted by the trace checker:
+
+```bash
+Telegram/build/network_isolation_test.sh \
+  --case public-selection \
+  --evidence-dir "$PWD/network-evidence/public-selection" \
+  -- "$PWD/out/Debug/Telegram"
+```
+
+For a configured proxy, the manifest lists its transport address separately
+from the pinned endpoint. The bounded SOCKS5 observer writes a JSON proof only
+after parsing the CONNECT request. Public cases use a runner-owned SOCKS5/TLS
+fixture: it records the hostname from CONNECT and the Host/path from the HTTPS
+request, then writes `network-resolution.json` with the fixed fixture mapping
+to `203.0.113.10:443`. The client separately checks its resolver callback;
+the target does not write the parser's resolution evidence. The parser binds
+the fixture-observed host, path, origin, and CONNECT target to the manifest and
+the traced proxy connection. Each report preserves observed socket metadata,
+the target exit status, resolution, destination, DNS, proxy, and required
+evidence contract. Raw `strace` files are not retained.
+
+The checked-in Debug driver in `Telegram/SourceFiles/test/test_scenario.cpp`
+consumes `TDESKTOP_NETWORK_TRACE_CASE` and registers every manifest case with
+the test runner. Preselection contracts allow no network activity. The
+canceled, failed, partial, timed-out, and late-callback selectors currently
+exercise local selection/discovery checks without a live pending network
+operation; their clean traces do not establish timeout or late-network-callback
+behavior. Local preflight exercises the framed discovery request. Pin and
+restart cases must produce a second endpoint connection after preflight,
+account-isolation invokes account B's gated config request before resuming A,
+and selected-endpoint-failure requires a second traced connect plus an
+`ECONNREFUSED` result. Public cases issue HTTPS through the runner-owned
+fixture. Background refresh invokes app-config, langpack, configuration, CDN,
+and update-check entry points; the update policy is explicitly network-disabled
+for untrusted origins. The proxy case commits the endpoint, configures the
+account transport through the runner-owned SOCKS5 relay, and requires both a
+traced proxy connection and the relay's independently observed CONNECT target.
+The selected scenario must write the manifest's completion log under
+`$TDESKTOP_TEST_EVIDENCE_DIR`, including both
+`TEST_COMPLETE` and `SCENARIO_RESULT: PASS`. A missing marker, failed result, or
+bounded timeout fails the case even when the trace has no forbidden contact.
+`background-refresh` is the one case whose contract leaves update mode enabled;
+the runner only adds `-noupdate` for cases that explicitly disable updates.
+
+The target exit status is metadata, not a destination verdict. A target may
+finish with an ordinary nonzero status after producing a valid trace; the
+runner still parses and enforces that trace. Missing or invalid observer
+output remains a hard failure.
+
+The observer and parser have a deterministic self-test. It includes the
+reported official-DC connect as a vulnerable fixture, verifies that it fails,
+and verifies that the fixed empty-process and public-origin fixtures pass:
+
+```bash
+Telegram/build/network_isolation_test.sh --self-test
+```
+
+The process trace is intentionally separate from the unit binary. Unit tests
+prove framing, canonicalization, persistence, gate ordering, and cancellation;
+this runner proves what the operating system observed for DNS, sockets, and
+connect destinations. The runner uses `strace -yy` so socket identity remains
+stable across worker trace files; if the parser is used without `-yy`, its
+fallback identity is scoped to process ID plus file descriptor. A missing
+`strace`, target executable, trace file, or case manifest is an error, never an
+advisory pass.
+
 ### The build image
 
 The workflow builds `tdesktop:centos_env` from

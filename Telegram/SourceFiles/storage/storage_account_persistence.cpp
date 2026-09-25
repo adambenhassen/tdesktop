@@ -359,17 +359,17 @@ bool Account::completeServerReenrollment() {
 	_prefsChanged = false;
 	_locationsChanged = false;
 
-	const auto interrupted = [this](int point) {
 #ifdef TDESKTOP_UNIT_TESTS
+	const auto interrupted = [this](int point) {
 		if (_serverReenrollmentInterruptionForTest != point) {
 			return false;
 		}
 		_serverReenrollmentInterruptionForTest = 0;
 		return true;
-#else
-		return false;
-#endif
 	};
+#else
+	const auto interrupted = [](int) { return false; };
+#endif
 
 	// The tombstone lives beside, not inside, the account directory. A
 	// process stop after this removal therefore cannot make the next launch
