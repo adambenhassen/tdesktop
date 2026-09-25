@@ -17,9 +17,9 @@ jobs:
     name: MacOS
     permissions:
       contents: write
-    # This fork cannot schedule a depot label, and a build that queues forever
-    # is not a build. macos-latest is Apple Silicon, which is what we ship.
-    runs-on: macos-latest
+    # The macOS 26 hosted image has not passed the DTrace process-stop gate.
+    # macos-15 is also an Apple Silicon runner.
+    runs-on: macos-15
     timeout-minutes: 180
 
     strategy:
