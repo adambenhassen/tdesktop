@@ -2860,7 +2860,7 @@ void SessionPrivate::handleError(
 					).arg(transport
 					).arg(QString::number(context.generation)
 					).arg(QString::number(currentGeneration)
-					).arg(outcome)));
+					).arg(outcome));
 			}
 			if (discard) {
 				destroyPersistentKey();
