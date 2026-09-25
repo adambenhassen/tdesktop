@@ -17,9 +17,9 @@ jobs:
     name: MacOS
     permissions:
       contents: write
-    # The macOS 26 hosted image has not passed the DTrace process-stop gate.
-    # macos-15 is also an Apple Silicon runner.
-    runs-on: macos-15
+    # macOS 15 and 26 hosted images did not stop traced fork children.
+    # Keep the arm64 isolation gate on macOS 14 while validating this path.
+    runs-on: macos-14
     timeout-minutes: 180
 
     strategy:
