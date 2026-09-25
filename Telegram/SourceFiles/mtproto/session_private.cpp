@@ -13,10 +13,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_dcenter.h"
 #include "mtproto/details/mtproto_dump_to_text.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
-#include "mtproto/session.h"
-#include "mtproto/mtproto_response.h"
-#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/connection_abstract.h"
+#include "mtproto/mtproto_dc_options.h"
+#include "mtproto/mtproto_response.h"
+#include "mtproto/persistent_key_rejection.h"
+#include "mtproto/session.h"
 #include "base/random.h"
 #include "base/qthelp_url.h"
 #include "base/openssl_help.h"
@@ -210,8 +211,22 @@ void SessionPrivate::appendTestConnection(
 		priority
 	});
 	const auto weak = _testConnections.back().data.get();
+	const auto pin = _instance->dcOptions().customServer();
+	const auto context = ConnectionErrorInfo{
+		.generation = _instance->serverEnrollmentStopToken(),
+		.endpoint = ip.isEmpty() && pin.key
+			? QString::fromStdString(pin.ip)
+			: ip,
+		.port = (protocol == DcOptions::Variants::Http)
+			? 80
+			: (port ? port : pin.port),
+		.protocol = protocol,
+		.pin = pin,
+	};
 	connect(weak, &AbstractConnection::error, [=](int errorCode) {
-		onError(weak, errorCode);
+		auto errorContext = context;
+		errorContext.presentedKeyId = weak->sentEncryptedWithKeyId();
+		onError(weak, errorCode, std::move(errorContext));
 	});
 	connect(weak, &AbstractConnection::receivedSome, [=] {
 		onReceivedSome();
@@ -2769,7 +2784,8 @@ void SessionPrivate::authKeyChecked() {
 
 void SessionPrivate::onError(
 		not_null<AbstractConnection*> connection,
-		qint32 errorCode) {
+		qint32 errorCode,
+		ConnectionErrorInfo context) {
 	if (!_instance->isServerEnrollmentNetworkAllowed()) {
 		doDisconnect();
 		return;
@@ -2785,19 +2801,72 @@ void SessionPrivate::onError(
 	removeTestConnection(connection);
 
 	if (_testConnections.empty()) {
-		handleError(errorCode);
+		handleError(errorCode, std::move(context));
 	} else {
 		confirmBestConnection();
 	}
 }
 
-void SessionPrivate::handleError(int errorCode) {
+void SessionPrivate::handleError(
+		int errorCode,
+		ConnectionErrorInfo context) {
 	destroyAllConnections();
 	_waitForConnectedTimer.cancel();
 
 	if (errorCode == -404) {
 		if (usesPermanentAuthKey()) {
-			destroyPersistentKey();
+			const auto persistent = _sessionData->getPersistentKey();
+			const auto persistentKeyId = persistent
+				? persistent->keyId()
+				: 0;
+			const auto discardableKeyId = _encryptionKey
+				&& (_encryptionKey->keyId() == persistentKeyId)
+				? persistentKeyId
+				: 0;
+			const auto currentPin = _instance->dcOptions().customServer();
+			const auto currentGeneration =
+				_instance->serverEnrollmentStopToken();
+			const auto samePin = context.pin.key
+				&& currentPin.key
+				&& SameCustomServerPin(context.pin, currentPin);
+			const auto discard = ShouldDiscardPersistentKeyOn404({
+				.transport = (context.protocol == DcOptions::Variants::Tcp)
+					? PersistentKeyErrorTransport::Tcp
+					: PersistentKeyErrorTransport::Http,
+				.pinnedEndpoint = samePin,
+				.connectionGeneration = context.generation,
+				.currentGeneration = currentGeneration,
+				.presentedKeyId = context.presentedKeyId,
+				.persistentKeyId = discardableKeyId,
+			});
+			const auto protocolIndex = static_cast<int>(context.protocol);
+			const auto logBit = uint8(
+				1U << (protocolIndex * 2 + (discard ? 1 : 0)));
+			if (!(_persistentKey404LoggedMask & logBit)) {
+				_persistentKey404LoggedMask |= logBit;
+				const auto transport = (context.protocol == DcOptions::Variants::Tcp)
+					? u"TCP"_q
+					: u"HTTP"_q;
+				const auto outcome = discard ? u"discarded"_q : u"kept"_q;
+				LOG((u"MTP Security: persistent key 0x%1 presented as 0x%2 "
+					u"received -404 at %3 port %4 via %5, connection generation %6, "
+					u"current generation %7; key %8."_q
+					).arg(QString::number(persistentKeyId, 16)
+					).arg(QString::number(context.presentedKeyId, 16)
+					).arg(context.endpoint.isEmpty()
+						? u"unknown"_q
+						: context.endpoint
+					).arg(context.port
+					).arg(transport
+					).arg(QString::number(context.generation)
+					).arg(QString::number(currentGeneration)
+					).arg(outcome)));
+			}
+			if (discard) {
+				destroyPersistentKey();
+			} else {
+				return restart();
+			}
 		} else {
 			destroyTemporaryKey();
 		}
