@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_enrollment.h"
+#include "mtproto/proxy_check.h"
 #include "mtproto/session.h"
 
 #include <QtCore/QByteArray>
@@ -232,14 +233,16 @@ TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
 		CHECK_EQ(qint64(pin.key->fingerprint()), kProductionKeyFingerprint);
 	}
 
-	CHECK(details::UseTcpForProxy(
+	const auto checkProtocol = ProxyCheckProtocol(
 		ProxyData::Type::Http,
-		restored.hasCustomServer()));
-	CHECK(!details::UseTcpForProxy(ProxyData::Type::Http, false));
+		restored.hasCustomServer());
+	CHECK(checkProtocol == DcOptions::Variants::Tcp);
+	CHECK(ProxyCheckProtocol(
+		ProxyData::Type::Http,
+		false) == DcOptions::Variants::Http);
 
 	const auto proxied = restored.lookup(server.dcId, DcType::Regular, true);
-	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4]
-		[DcOptions::Variants::Tcp];
+	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4][checkProtocol];
 	CHECK(proxiedTcp.size() == 1);
 	if (proxiedTcp.size() == 1) {
 		CHECK_EQ(proxiedTcp.front().ip, server.ip);
