@@ -9,65 +9,188 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "boxes/peers/edit_peer_common.h"
 
+#include <functional>
+
 namespace {
 
-using Ui::EditPeer::UsernameCheckState;
-using FailureResult = UsernameCheckState::FailureResult;
+using Ui::EditPeer::UsernameEditorFlow;
+using FailureResult = UsernameEditorFlow::FailureResult;
+using Status = UsernameEditorFlow::Status;
 
-TEST_CASE(UsernameCheckDiscardsLateAvailabilityAfterInputChanges) {
-	UsernameCheckState state;
-	state.inputChanged(u"Ab"_q, true);
-	const auto request = state.requestStarted();
+class ControlledUsernameApi final {
+public:
+	[[nodiscard]] bool check(
+			UsernameEditorFlow &flow,
+			const QString &username,
+			bool force = false,
+			bool trackAvailability = true) {
+		return flow.check(
+			username,
+			force,
+			trackAvailability,
+			[this](
+					const QString &checking,
+					auto done,
+					auto fail) {
+			++checks;
+			checkedUsername = checking;
+			_done = std::move(done);
+			_fail = std::move(fail);
+		},
+			[](bool) {
+		},
+			[this](
+					const QString &,
+					FailureResult result,
+					bool current) {
+			++failureCallbacks;
+			lastFailure = result;
+			failureWasCurrent = current;
+		});
+	}
 
-	state.inputChanged(u"A"_q, false);
+	void fail(const QString &error) {
+		_fail(error);
+	}
 
-	CHECK(!state.setAvailability(request, true));
-	CHECK(!state.good());
+	void succeed(bool available) {
+		_done(available);
+	}
+
+	template <typename Save>
+	[[nodiscard]] bool update(
+			UsernameEditorFlow &flow,
+			bool requireGood,
+			Save save) {
+		return flow.trySave(
+			requireGood,
+			[this, save = std::move(save)](const QString &username) {
+			++updates;
+			updatedUsername = username;
+			save(username);
+			});
+	}
+
+	int checks = 0;
+	int failureCallbacks = 0;
+	int updates = 0;
+	QString checkedUsername;
+	QString updatedUsername;
+	FailureResult lastFailure = FailureResult::Handled;
+	bool failureWasCurrent = false;
+
+private:
+	std::function<void(bool)> _done;
+	std::function<void(const QString &)> _fail;
+};
+
+TEST_CASE(UsernameEditorFlowDiscardsLateAvailabilityAfterInputChanges) {
+	UsernameEditorFlow flow;
+	ControlledUsernameApi api;
+	flow.inputChanged(u"Ab"_q, true);
+	if (!api.check(flow, u"Ab"_q)) {
+		CHECK(false);
+		return;
+	}
+
+	flow.inputChanged(u"A"_q, false);
+
+	api.succeed(true);
+	CHECK(!flow.good());
+	CHECK(flow.status() == Status::Error);
 }
 
-TEST_CASE(UsernameCheckUnavailableAllowsValidEditsWithoutMoreRequests) {
-	UsernameCheckState state;
-	state.inputChanged(u"Ab"_q, true);
-	const auto request = state.requestStarted();
+TEST_CASE(AccountUsernameEditorFallbackSendsUpdateWithoutRepeatCheck) {
+	UsernameEditorFlow flow;
+	ControlledUsernameApi api;
 
-	CHECK(state.isCurrent(request));
-	CHECK(state.availabilityFailed(request, u"INPUT_METHOD_INVALID"_q)
-		== FailureResult::Unavailable);
-	CHECK(state.unavailable());
+	flow.inputChanged(u"Ab"_q, true);
+	if (!api.check(flow, u"Ab"_q)) {
+		CHECK(false);
+		return;
+	}
+	api.fail(u"INPUT_METHOD_INVALID"_q);
+	CHECK(api.lastFailure == FailureResult::Unavailable);
+	CHECK(api.failureWasCurrent);
+	CHECK(flow.status() == Status::Unavailable);
 
-	state.inputChanged(u"Ab"_q, true);
-	CHECK(state.good());
-	CHECK(!state.shouldCheck());
+	flow.inputChanged(u"A"_q, false);
+	CHECK(flow.status() == Status::Unavailable);
+	CHECK(!api.check(flow, u"A"_q));
+	CHECK_EQ(api.checks, 1);
 
-	state.inputChanged(u"A"_q, false);
-	CHECK(!state.good());
-	CHECK(!state.shouldCheck());
-
-	state.inputChanged(u"Cd"_q, true);
-	CHECK(state.good());
-	CHECK(!state.shouldCheck());
+	flow.inputChanged(u"Cd"_q, true);
+	CHECK(flow.status() == Status::Unavailable);
+	CHECK(!api.check(flow, u"Cd"_q));
+	CHECK_EQ(api.checks, 1);
+	CHECK(api.update(flow, false, [](const QString &) {}));
+	CHECK_EQ(api.updates, 1);
+	CHECK_EQ(api.updatedUsername, u"Cd"_q);
 }
 
-TEST_CASE(UsernameCheckUnavailableResponseFromStaleRequestDisablesChecks) {
-	UsernameCheckState state;
-	state.inputChanged(u"Ab"_q, true);
-	const auto request = state.requestStarted();
-	state.inputChanged(u"A"_q, false);
+TEST_CASE(GroupChannelFallbackRejectsShortAndSavesValidEdit) {
+	UsernameEditorFlow flow;
+	ControlledUsernameApi api;
 
-	CHECK(state.availabilityFailed(request, u"USERNAME_OCCUPIED"_q)
-		== FailureResult::Ignored);
-	CHECK(!state.unavailable());
-	CHECK(state.availabilityFailed(request, u"INPUT_METHOD_INVALID"_q)
-		== FailureResult::Unavailable);
-	CHECK(state.unavailable());
+	flow.inputChanged(u"Ab"_q, true);
+	if (!api.check(flow, u"Ab"_q)) {
+		CHECK(false);
+		return;
+	}
+	api.fail(u"INPUT_METHOD_INVALID"_q);
+	CHECK(api.lastFailure == FailureResult::Unavailable);
 
-	state.inputChanged(u"A"_q, false);
-	CHECK(!state.good());
-	CHECK(!state.shouldCheck());
+	flow.inputChanged(u"A"_q, false);
+	CHECK(flow.status() == Status::Unavailable);
+	CHECK(!api.check(flow, u"A"_q));
+	CHECK(!api.update(flow, true, [](const QString &) {}));
+	CHECK_EQ(api.checks, 1);
+	CHECK_EQ(api.updates, 0);
 
-	state.inputChanged(u"Cd"_q, true);
-	CHECK(state.good());
-	CHECK(!state.shouldCheck());
+	flow.inputChanged(u"Cd"_q, true);
+	CHECK(flow.status() == Status::Unavailable);
+	CHECK(!api.check(flow, u"Cd"_q));
+	CHECK(api.update(flow, true, [](const QString &) {}));
+	CHECK_EQ(api.checks, 1);
+	CHECK_EQ(api.updates, 1);
+	CHECK_EQ(api.updatedUsername, u"Cd"_q);
+}
+
+TEST_CASE(UsernameEditorFlowIgnoresStaleOrdinaryFailure) {
+	UsernameEditorFlow flow;
+	ControlledUsernameApi api;
+	flow.inputChanged(u"Ab"_q, true);
+	if (!api.check(flow, u"Ab"_q)) {
+		CHECK(false);
+		return;
+	}
+	flow.inputChanged(u"A"_q, false);
+
+	api.fail(u"USERNAME_OCCUPIED"_q);
+	CHECK_EQ(api.failureCallbacks, 0);
+	CHECK(!flow.unavailable());
+	CHECK(flow.status() == Status::Error);
+}
+
+TEST_CASE(UsernameEditorFlowHandlesStaleUnavailableResponse) {
+	UsernameEditorFlow flow;
+	ControlledUsernameApi api;
+	flow.inputChanged(u"Ab"_q, true);
+	if (!api.check(flow, u"Ab"_q)) {
+		CHECK(false);
+		return;
+	}
+	flow.inputChanged(u"A"_q, false);
+
+	api.fail(u"INPUT_METHOD_INVALID"_q);
+	CHECK_EQ(api.failureCallbacks, 1);
+	CHECK(api.lastFailure == FailureResult::Unavailable);
+	CHECK(!api.failureWasCurrent);
+	CHECK(flow.status() == Status::Unavailable);
+	CHECK(!api.check(flow, u"A"_q));
+	CHECK(!api.update(flow, true, [](const QString &) {}));
+	CHECK_EQ(api.checks, 1);
+	CHECK_EQ(api.updates, 0);
 }
 
 } // namespace

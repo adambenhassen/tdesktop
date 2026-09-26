@@ -135,10 +135,6 @@ public:
 			: tr::lng_manage_peer_channel_type();
 	}
 
-	[[nodiscard]] bool goodUsername() const {
-		return _usernameCheckState.good();
-	}
-
 	[[nodiscard]] Privacy getPrivacy() const {
 		return _controls.privacy->current();
 	}
@@ -226,7 +222,7 @@ private:
 	bool _useLocationPhrases = false;
 	bool _isGroup = false;
 	bool _originalRequestToJoin = false;
-	Ui::EditPeer::UsernameCheckState _usernameCheckState;
+	Ui::EditPeer::UsernameEditorFlow _usernameEditorFlow;
 
 	base::unique_qptr<Ui::VerticalLayout> _wrap;
 	base::Timer _checkUsernameTimer;
@@ -262,7 +258,24 @@ Controller::Controller(
 	: false)
 , _wrap(container)
 , _checkUsernameTimer([=] { checkUsernameAvailability(); }) {
-	_usernameCheckState.setGood(_dataSavedValue
+	const auto username = _dataSavedValue
+		? _dataSavedValue->username
+		: (_peer->isChannel()
+			? _peer->asChannel()->editableUsername()
+			: QString());
+	const auto bad = ranges::any_of(username, [](QChar ch) {
+		return (ch < 'A' || ch > 'Z')
+			&& (ch < 'a' || ch > 'z')
+			&& (ch < '0' || ch > '9')
+			&& (ch != '_');
+	});
+	_usernameEditorFlow.inputChanged(
+		username,
+		!username.isEmpty()
+			&& !bad
+			&& (username.size() >= Ui::EditPeer::kMinUsernameLength)
+			&& (username.size() <= Ui::EditPeer::kMaxUsernameLength));
+	_usernameEditorFlow.setGood(_dataSavedValue
 		? !_dataSavedValue->username.isEmpty()
 		: (_peer->isChannel()
 			&& !_peer->asChannel()->editableUsername().isEmpty()));
@@ -299,14 +312,20 @@ EditPeerTypeData Controller::collectData() const {
 
 void Controller::submit(Fn<void(EditPeerTypeData)> done) {
 	const auto privacy = getPrivacy();
-	if ((privacy == Privacy::HasUsername) && !goodUsername()) {
+	auto data = collectData();
+	const auto savedUsername = (privacy != Privacy::HasUsername)
+		|| _usernameEditorFlow.trySave(
+			true,
+			[&](const QString &username) {
+				data.username = username;
+			});
+	if ((privacy == Privacy::HasUsername) && !savedUsername) {
 		if (!getUsernameInput().isEmpty() || usernamesOrder().empty()) {
 			setFocusUsername();
 			return;
 		}
 	}
 
-	const auto data = collectData();
 	if (!_dataSavedValue
 		|| !_peer->isChannel()
 		|| _originalRequestToJoin == data.requestToJoin) {
@@ -715,7 +734,7 @@ void Controller::privacyChanged(Privacy value) {
 		refreshVisibilities();
 		_controls.usernameInput->setDisplayFocused(true);
 	} else {
-		_usernameCheckState.inputChanged(getUsernameInput(), false);
+		_usernameEditorFlow.inputChanged(getUsernameInput(), false);
 		_api.request(base::take(_checkUsernameRequestId)).cancel();
 		_checkUsernameTimer.cancel();
 		refreshVisibilities();
@@ -732,89 +751,87 @@ void Controller::checkUsernameAvailability() {
 		return;
 	}
 	const auto initial = (_controls.privacy->current() != Privacy::HasUsername);
-	if (!_usernameCheckState.shouldCheck()) {
-		if (!initial) {
-			usernameChanged();
-		}
-		return;
-	}
 	const auto checking = initial
 		? u".bad."_q
 		: getUsernameInput();
 	if (checking.size() < Ui::EditPeer::kMinUsernameLength) {
 		return;
 	}
-	const auto request = _usernameCheckState.requestStarted();
-	if (_checkUsernameRequestId) {
-		_api.request(base::take(_checkUsernameRequestId)).cancel();
-	}
 	const auto channel = _peer->migrateToOrMe()->asChannel();
 	const auto username = channel ? channel->editableUsername() : QString();
-	_checkUsernameRequestId = _api.request(MTPchannels_CheckUsername(
-		channel ? channel->inputChannel() : MTP_inputChannelEmpty(),
-		MTP_string(checking)
-	)).done([=](const MTPBool &result) {
-		if (initial) {
-			if (!_usernameCheckState.isCurrent(request)) {
+	const auto started = _usernameEditorFlow.check(
+		checking,
+		initial,
+		!initial,
+		[=](
+				const QString &name,
+				auto done,
+				auto fail) {
+			if (_checkUsernameRequestId) {
+				_api.request(base::take(_checkUsernameRequestId)).cancel();
+			}
+			_checkUsernameRequestId = _api.request(MTPchannels_CheckUsername(
+				channel ? channel->inputChannel() : MTP_inputChannelEmpty(),
+				MTP_string(name)
+			)).done([=](const MTPBool &result) mutable {
+				done(mtpIsTrue(result) || name == username);
+			}).fail([=](const MTP::Error &error) mutable {
+				fail(error.type());
+			}).send();
+		},
+		[=](bool available) {
+			_checkUsernameRequestId = 0;
+			if (initial) {
 				return;
 			}
-			_checkUsernameRequestId = 0;
-			return;
-		}
-		const auto available = mtpIsTrue(result) || checking == username;
-		if (!_usernameCheckState.setAvailability(request, available)) {
-			return;
-		}
-		_checkUsernameRequestId = 0;
-		if (!available) {
-			showUsernameError(tr::lng_create_channel_link_occupied());
-		} else {
-			showUsernameGood();
-		}
-	}).fail([=](const MTP::Error &error) {
-		const auto &type = error.type();
-		const auto current = _usernameCheckState.isCurrent(request);
-		const auto failure = _usernameCheckState.availabilityFailed(
-			request,
-			type);
-		if (failure == Ui::EditPeer::UsernameCheckState::FailureResult::Ignored) {
-			return;
-		}
-		if (current) {
-			_checkUsernameRequestId = 0;
-		} else {
-			_api.request(base::take(_checkUsernameRequestId)).cancel();
-		}
-		_usernameState = UsernameState::Normal;
-		if (failure
-			== Ui::EditPeer::UsernameCheckState::FailureResult::Unavailable) {
-			_checkUsernameTimer.cancel();
-			if (_controls.privacy->current() == Privacy::HasUsername) {
-				usernameChanged();
+			if (!available) {
+				showUsernameError(tr::lng_create_channel_link_occupied());
+			} else {
+				showUsernameGood();
 			}
-		} else if (type == u"CHANNEL_PUBLIC_GROUP_NA"_q) {
-			_usernameState = UsernameState::NotAvailable;
-			_controls.privacy->setValue(Privacy::NoUsername);
-		} else if (type == u"CHANNELS_ADMIN_PUBLIC_TOO_MUCH"_q) {
-			_usernameState = UsernameState::TooMany;
-			if (_controls.privacy->current() == Privacy::HasUsername) {
-				askUsernameRevoke();
+		},
+		[=](
+				const QString &type,
+				Ui::EditPeer::UsernameEditorFlow::FailureResult failure,
+				bool current) {
+			if (current) {
+				_checkUsernameRequestId = 0;
+			} else {
+				_api.request(base::take(_checkUsernameRequestId)).cancel();
 			}
-		} else if (initial) {
-			if (_controls.privacy->current() == Privacy::HasUsername) {
-				showUsernameEmpty();
-				setFocusUsername();
+			_usernameState = UsernameState::Normal;
+			if (failure
+				== Ui::EditPeer::UsernameEditorFlow::FailureResult::Unavailable) {
+				_checkUsernameTimer.cancel();
+				if (_controls.privacy->current() == Privacy::HasUsername) {
+					usernameChanged();
+				}
+			} else if (type == u"CHANNEL_PUBLIC_GROUP_NA"_q) {
+				_usernameState = UsernameState::NotAvailable;
+				_controls.privacy->setValue(Privacy::NoUsername);
+			} else if (type == u"CHANNELS_ADMIN_PUBLIC_TOO_MUCH"_q) {
+				_usernameState = UsernameState::TooMany;
+				if (_controls.privacy->current() == Privacy::HasUsername) {
+					askUsernameRevoke();
+				}
+			} else if (initial) {
+				if (_controls.privacy->current() == Privacy::HasUsername) {
+					showUsernameEmpty();
+					setFocusUsername();
+				}
+			} else if (type == u"USERNAME_INVALID"_q) {
+				showUsernameError(tr::lng_create_channel_link_invalid());
+			} else if (type == u"USERNAME_PURCHASE_AVAILABLE"_q) {
+				_usernameEditorFlow.setGood(false);
+				_usernameCheckInfo.fire(
+					UsernameCheckInfo::PurchaseAvailable(checking, _peer));
+			} else if (type == u"USERNAME_OCCUPIED"_q && checking != username) {
+				showUsernameError(tr::lng_create_channel_link_occupied());
 			}
-		} else if (type == u"USERNAME_INVALID"_q) {
-			showUsernameError(tr::lng_create_channel_link_invalid());
-		} else if (type == u"USERNAME_PURCHASE_AVAILABLE"_q) {
-			_usernameCheckState.setGood(false);
-			_usernameCheckInfo.fire(
-				UsernameCheckInfo::PurchaseAvailable(checking, _peer));
-		} else if (type == u"USERNAME_OCCUPIED"_q && checking != username) {
-			showUsernameError(tr::lng_create_channel_link_occupied());
-		}
-	}).send();
+		});
+	if (!started && !initial && !_usernameEditorFlow.shouldCheck()) {
+		usernameChanged();
+	}
 }
 
 void Controller::askUsernameRevoke() {
@@ -838,7 +855,7 @@ void Controller::usernameChanged() {
 	const auto locallyValid = !username.isEmpty()
 		&& !bad
 		&& (username.size() >= Ui::EditPeer::kMinUsernameLength);
-	_usernameCheckState.inputChanged(username, locallyValid);
+	_usernameEditorFlow.inputChanged(username, locallyValid);
 	_api.request(base::take(_checkUsernameRequestId)).cancel();
 	_checkUsernameTimer.cancel();
 	if (username.isEmpty()) {
@@ -849,7 +866,7 @@ void Controller::usernameChanged() {
 		showUsernameError(tr::lng_create_channel_link_bad_symbols());
 	} else if (username.size() < Ui::EditPeer::kMinUsernameLength) {
 		showUsernameError(tr::lng_create_channel_link_too_short());
-	} else if (!_usernameCheckState.shouldCheck()) {
+	} else if (!_usernameEditorFlow.shouldCheck()) {
 		_usernameCheckInfoLifetime.destroy();
 		_usernameCheckInfo.fire({
 			.type = UsernameCheckInfo::Type::Default,
@@ -862,7 +879,7 @@ void Controller::usernameChanged() {
 }
 
 void Controller::showUsernameError(rpl::producer<QString> &&error) {
-	_usernameCheckState.setGood(false);
+	_usernameEditorFlow.setGood(false);
 	_usernameCheckInfoLifetime.destroy();
 	std::move(
 		error
@@ -875,7 +892,7 @@ void Controller::showUsernameError(rpl::producer<QString> &&error) {
 }
 
 void Controller::showUsernameGood() {
-	_usernameCheckState.setGood(true);
+	_usernameEditorFlow.setGood(true);
 	_usernameCheckInfoLifetime.destroy();
 	_usernameCheckInfo.fire({
 		.type = UsernameCheckInfo::Type::Good,
@@ -884,6 +901,8 @@ void Controller::showUsernameGood() {
 }
 
 void Controller::showUsernamePending() {
+	_usernameEditorFlow.setStatus(
+		Ui::EditPeer::UsernameEditorFlow::Status::Pending);
 	_usernameCheckInfoLifetime.destroy();
 	_usernameCheckInfo.fire({
 		.type = UsernameCheckInfo::Type::Default,
@@ -892,6 +911,8 @@ void Controller::showUsernamePending() {
 }
 
 void Controller::showUsernameEmpty() {
+	_usernameEditorFlow.setStatus(
+		Ui::EditPeer::UsernameEditorFlow::Status::Default);
 	_usernameCheckInfoLifetime.destroy();
 	_usernameCheckInfo.fire({ .type = UsernameCheckInfo::Type::Default });
 }
