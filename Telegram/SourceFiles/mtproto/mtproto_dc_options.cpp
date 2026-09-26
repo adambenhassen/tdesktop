@@ -215,6 +215,13 @@ std::optional<CustomServer> BuildCustomServerFromDiscovery(
 	auto connectionAddress = QHostAddress();
 	const auto connectionIsLiteral = connectionAddress.setAddress(
 		connectionHost);
+	auto selectionAddress = QHostAddress();
+	const auto localNameResolvedAddress = result.policy
+		== ServerDiscoveryPolicy::LocalDirect
+		&& !selectionAddress.setAddress(selection.host)
+		&& !result.resolvedAddress.isEmpty()
+		&& endpoint.normalizedSelection == selection.normalizedSelection
+		&& connectionIsLiteral;
 	const auto connectionHostText = connectionIsLiteral
 		? (connectionAddress.protocol() == QAbstractSocket::IPv6Protocol
 			? (u"["_q + connectionAddress.toString() + u"]"_q)
@@ -228,9 +235,10 @@ std::optional<CustomServer> BuildCustomServerFromDiscovery(
 		== ServerDiscoveryPolicy::PublicHttps)
 		? (connectionIsLiteral
 			&& IsPublicDiscoveryAddress(selection, connectionAddress))
-		: (connectionEndpoint
-			&& connectionEndpoint.policy
-				== ServerDiscoveryPolicy::LocalDirect);
+		: (localNameResolvedAddress
+			|| (connectionEndpoint
+				&& connectionEndpoint.policy
+					== ServerDiscoveryPolicy::LocalDirect));
 	if (!connectionSafe) {
 		return std::nullopt;
 	}

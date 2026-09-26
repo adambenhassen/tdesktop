@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "intro/intro_server_discovery.h"
+#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QEventLoop>
@@ -215,6 +216,31 @@ TEST_CASE(LocalSelectionRequiresExplicitPort) {
 	CHECK(withPort.valid());
 	CHECK(withPort.policy == ServerDiscoveryPolicy::LocalDirect);
 	CHECK_EQ(withPort.normalizedSelection, u"localhost:443"_q);
+}
+
+TEST_CASE(LocalNameDiscoveryBindsToItsResolvedSpecialUseAddress) {
+	const auto selection = CheckServerSelection(u"printer.local:2443"_q);
+	const auto nonce = QByteArray(32, '\x08');
+	auto result = ParseLocalDiscoveryResponse(
+		selection,
+		nonce,
+		LocalResponse(nonce));
+	CHECK(result.valid());
+	result.resolvedAddress = u"169.254.1.10"_q;
+
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+	CHECK_EQ(server->ip, "169.254.1.10");
+	CHECK_EQ(server->serverSelection, "printer.local:2443");
+	CHECK(server->discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+	CHECK_EQ(server->discoveryOrigin, "local:printer.local:2443");
+
+	const auto literal = CheckServerSelection(u"169.254.1.10:2443"_q);
+	CHECK(literal.status == ServerSelectionStatus::PublicIpLiteral);
+	CHECK(!BuildCustomServerFromDiscovery(literal, result).has_value());
 }
 
 TEST_CASE(LocalLiteralAllowListCoversNetworkBoundaries) {
