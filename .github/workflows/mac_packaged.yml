@@ -4,6 +4,12 @@ on:
   # Fork policy: per-push CI is Linux only. MacOS Packaged is deferred, not abandoned --
   # run it by hand from the Actions tab when it is needed again.
   workflow_dispatch:
+    inputs:
+      sandbox_denial_experiment:
+        description: Run the MAIN-917 sandbox-exec feasibility experiment.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
 
@@ -382,3 +388,21 @@ jobs:
           path: ${{ env.REPO_NAME }}/build/Telegramd-macOS-arm64-QA.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Run macOS sandbox denial experiment.
+        if: ${{ inputs.sandbox_denial_experiment }}
+        run: |
+          set -Eeuo pipefail
+          evidence_dir="$REPO_NAME/build/sandbox-denial-evidence"
+          mkdir -p "$evidence_dir"
+          "$REPO_NAME/Telegram/build/mac_sandbox_denial_experiment.sh" \
+            "$REPO_NAME/build/Telegramd.app" \
+            "$evidence_dir"
+
+      - name: Upload macOS sandbox denial evidence.
+        if: ${{ always() && inputs.sandbox_denial_experiment }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegramd-macOS-sandbox-denial-evidence
+          path: ${{ env.REPO_NAME }}/build/sandbox-denial-evidence/
+          if-no-files-found: warn
