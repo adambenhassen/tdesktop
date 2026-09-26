@@ -18,12 +18,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace details {
 
-bool UseTcpForProxy(
-		ProxyData::Type proxyType,
-		bool hasCustomServer) {
-	return (proxyType != ProxyData::Type::Http) || hasCustomServer;
-}
-
 SessionOptions::SessionOptions(
 	const QString &systemLangCode,
 	const QString &cloudLangCode,

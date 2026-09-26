@@ -220,12 +220,24 @@ TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
 	server.port = 2443;
 	CHECK(options.setCustomServer(server));
 
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.hasCustomServer());
+	const auto pin = restored.customServer();
+	CHECK_EQ(pin.ip, server.ip);
+	CHECK_EQ(pin.port, server.port);
+	CHECK(pin.key != nullptr);
+	if (pin.key) {
+		CHECK(pin.key->valid());
+		CHECK_EQ(qint64(pin.key->fingerprint()), kProductionKeyFingerprint);
+	}
+
 	CHECK(details::UseTcpForProxy(
 		ProxyData::Type::Http,
-		options.hasCustomServer()));
+		restored.hasCustomServer()));
 	CHECK(!details::UseTcpForProxy(ProxyData::Type::Http, false));
 
-	const auto proxied = options.lookup(server.dcId, DcType::Regular, true);
+	const auto proxied = restored.lookup(server.dcId, DcType::Regular, true);
 	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4]
 		[DcOptions::Variants::Tcp];
 	CHECK(proxiedTcp.size() == 1);
