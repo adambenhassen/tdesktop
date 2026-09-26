@@ -1063,7 +1063,9 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 	_cdnPublicKeys.clear();
 	applyOneGuarded(
 		server.dcId,
-		Flag::f_static | (server.ipv6 ? Flag::f_ipv6 : Flag(0)),
+		Flag::f_static
+		| Flag::f_tcpo_only
+		| (server.ipv6 ? Flag::f_ipv6 : Flag(0)),
 		server.ip,
 		server.port,
 		{});

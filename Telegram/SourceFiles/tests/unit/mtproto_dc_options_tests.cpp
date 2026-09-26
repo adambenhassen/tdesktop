@@ -179,6 +179,46 @@ TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
 	CHECK(got.key->valid());
 }
 
+TEST_CASE(PinnedNon80EndpointRestoresAsDirectTcpOnly) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "100.124.236.66";
+	server.port = 2443;
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+
+	const auto direct = restored.lookup(server.dcId, DcType::Regular, false);
+	const auto &directTcp = direct.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Tcp];
+	CHECK(directTcp.size() == 1);
+	if (directTcp.size() == 1) {
+		CHECK_EQ(directTcp.front().ip, server.ip);
+		CHECK_EQ(directTcp.front().port, 2443);
+	}
+	CHECK(direct.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+
+	const auto proxied = restored.lookup(server.dcId, DcType::Regular, true);
+	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Tcp];
+	CHECK(proxiedTcp.size() == 1);
+	if (proxiedTcp.size() == 1) {
+		CHECK_EQ(proxiedTcp.front().ip, server.ip);
+		CHECK_EQ(proxiedTcp.front().port, 2443);
+	}
+	CHECK(proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+}
+
+TEST_CASE(UnboundBuiltinDcRetainsHttpTransportCandidate) {
+	const auto options = DcOptions(Environment::Production);
+	const auto variants = options.lookup(2, DcType::Regular, false);
+	CHECK(!variants.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+}
+
 // An unpinned config must round-trip as unpinned rather than picking up
 // a half-written pin, and must keep its production fallback.
 TEST_CASE(UnpinnedConfigSurvivesSerialization) {
