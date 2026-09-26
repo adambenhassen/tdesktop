@@ -189,7 +189,7 @@ private:
 
 	void checkUsernameAvailability();
 	void askUsernameRevoke();
-	void usernameChanged();
+	void usernameChanged(bool flowStateAlreadyUpdated = false);
 	void showUsernameError(rpl::producer<QString> &&error);
 	void showUsernameGood();
 	void showUsernamePending();
@@ -718,7 +718,12 @@ void Controller::privacyChanged(Privacy value) {
 			toggleWhoSendWrap();
 
 			showUsernameEmpty();
-			checkUsernameAvailability();
+			const auto username = getUsernameInput();
+			_usernameEditorFlow.revalidatePublicUsername(
+				username,
+				Ui::EditPeer::IsValidPublicUsername(username),
+				[this] { usernameChanged(true); },
+				[this] { checkUsernameAvailability(); });
 		} else {
 			toggleWhoSendWrap();
 			toggleEditUsername();
@@ -845,7 +850,7 @@ void Controller::askUsernameRevoke() {
 	_show->showBox(Box(PublicLinksLimitBox, _navigation, revokeCallback));
 }
 
-void Controller::usernameChanged() {
+void Controller::usernameChanged(bool flowStateAlreadyUpdated) {
 	const auto username = getUsernameInput();
 	const auto bad = ranges::any_of(username, [](QChar ch) {
 		return (ch < 'A' || ch > 'Z')
@@ -856,7 +861,9 @@ void Controller::usernameChanged() {
 	const auto locallyValid = !username.isEmpty()
 		&& !bad
 		&& (username.size() >= Ui::EditPeer::kMinUsernameLength);
-	_usernameEditorFlow.inputChanged(username, locallyValid);
+	if (!flowStateAlreadyUpdated) {
+		_usernameEditorFlow.inputChanged(username, locallyValid);
+	}
 	_api.request(base::take(_checkUsernameRequestId)).cancel();
 	_checkUsernameTimer.cancel();
 	if (username.isEmpty()) {

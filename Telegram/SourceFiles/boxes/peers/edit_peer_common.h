@@ -22,6 +22,21 @@ constexpr auto kMaxUsernameLength = 32;
 constexpr auto kMinBotUsernameLength = 5;
 constexpr auto kUsernameCheckTimeout = crl::time(200);
 
+[[nodiscard]] inline bool IsValidPublicUsername(const QString &username) {
+	if (username.size() < kMinUsernameLength) {
+		return false;
+	}
+	for (const auto ch : username) {
+		if ((ch < 'A' || ch > 'Z')
+			&& (ch < 'a' || ch > 'z')
+			&& (ch < '0' || ch > '9')
+			&& (ch != '_')) {
+			return false;
+		}
+	}
+	return true;
+}
+
 class UsernameEditorFlow final {
 public:
 	enum class Mode {
@@ -61,6 +76,19 @@ public:
 		_status = locallyValid
 			? (_unavailable ? Status::Unavailable : Status::Default)
 			: Status::Error;
+	}
+
+	template <typename Refresh, typename Check>
+	void revalidatePublicUsername(
+			const QString &username,
+			bool locallyValid,
+			Refresh refresh,
+			Check check) {
+		inputChanged(username, locallyValid);
+		refresh();
+		if (locallyValid && shouldCheck()) {
+			check();
+		}
 	}
 
 	[[nodiscard]] std::optional<Request> requestStarted(bool force = false) {

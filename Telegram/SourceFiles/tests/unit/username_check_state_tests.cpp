@@ -218,6 +218,47 @@ TEST_CASE(GroupChannelFallbackRejectsShortAndSavesValidEdit) {
 	}
 }
 
+TEST_CASE(PublicUsernameCanBeRecheckedAfterPrivacyToggle) {
+	CHECK(Ui::EditPeer::IsValidPublicUsername(u"Ab"_q));
+	CHECK(!Ui::EditPeer::IsValidPublicUsername(u"A"_q));
+
+	for (const auto mode : { Mode::Group, Mode::Channel }) {
+		UsernameEditorFlow flow(mode);
+		ControlledUsernameApi api;
+
+		flow.inputChanged(u"Ab"_q, true);
+		flow.setGood(true);
+		if (!api.checkPeer(flow, u"Ab"_q)) {
+			CHECK(false);
+			continue;
+		}
+
+		flow.inputChanged(u"Ab"_q, false);
+		api.succeed(true);
+		CHECK(!flow.good());
+		CHECK(!api.updatePeer(flow, [](const QString &) {}));
+		CHECK_EQ(api.updates, 0);
+		auto wasRefreshed = false;
+		auto checkStarted = false;
+		flow.revalidatePublicUsername(
+			u"Ab"_q,
+			Ui::EditPeer::IsValidPublicUsername(u"Ab"_q),
+			[&] { wasRefreshed = true; },
+			[&] { checkStarted = api.checkPeer(flow, u"Ab"_q); });
+		CHECK(wasRefreshed);
+		CHECK(checkStarted);
+		CHECK_EQ(api.checks, 2);
+		CHECK_EQ(api.checkedUsername, u"Ab"_q);
+
+		api.succeed(true);
+		CHECK(flow.good());
+		CHECK(api.updatePeer(flow, [](const QString &) {}));
+		CHECK_EQ(api.updatedUsername, u"Ab"_q);
+		CHECK_EQ(api.updates, 1);
+		CHECK(api.updateRequestSent);
+	}
+}
+
 TEST_CASE(UsernameEditorFlowIgnoresStaleOrdinaryFailure) {
 	UsernameEditorFlow flow(Mode::Group);
 	ControlledUsernameApi api;
