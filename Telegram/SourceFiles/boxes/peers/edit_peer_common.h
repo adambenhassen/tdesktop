@@ -12,8 +12,9 @@ namespace Ui::EditPeer {
 constexpr auto kMaxGroupChannelTitle = 128;
 constexpr auto kMaxUserFirstLastName = 64;
 constexpr auto kMaxChannelDescription = 255;
-constexpr auto kMinUsernameLength = 5;
+constexpr auto kMinUsernameLength = 2;
 constexpr auto kMaxUsernameLength = 32;
+constexpr auto kMinBotUsernameLength = 5;
 constexpr auto kUsernameCheckTimeout = crl::time(200);
 
 } // namespace Ui::EditPeer

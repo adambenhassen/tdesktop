@@ -226,6 +226,7 @@ private:
 	bool _useLocationPhrases = false;
 	bool _isGroup = false;
 	bool _goodUsername = false;
+	bool _usernameCheckUnavailable = false;
 	bool _originalRequestToJoin = false;
 
 	base::unique_qptr<Ui::VerticalLayout> _wrap;
@@ -730,6 +731,12 @@ void Controller::checkUsernameAvailability() {
 		return;
 	}
 	const auto initial = (_controls.privacy->current() != Privacy::HasUsername);
+	if (_usernameCheckUnavailable) {
+		if (!initial) {
+			usernameChanged();
+		}
+		return;
+	}
 	const auto checking = initial
 		? u".bad."_q
 		: getUsernameInput();
@@ -758,7 +765,13 @@ void Controller::checkUsernameAvailability() {
 		_checkUsernameRequestId = 0;
 		const auto &type = error.type();
 		_usernameState = UsernameState::Normal;
-		if (type == u"CHANNEL_PUBLIC_GROUP_NA"_q) {
+		if (type == u"INPUT_METHOD_INVALID"_q) {
+			_usernameCheckUnavailable = true;
+			_checkUsernameTimer.cancel();
+			if (!initial) {
+				usernameChanged();
+			}
+		} else if (type == u"CHANNEL_PUBLIC_GROUP_NA"_q) {
 			_usernameState = UsernameState::NotAvailable;
 			_controls.privacy->setValue(Privacy::NoUsername);
 		} else if (type == u"CHANNELS_ADMIN_PUBLIC_TOO_MUCH"_q) {
@@ -811,6 +824,14 @@ void Controller::usernameChanged() {
 		showUsernameError(tr::lng_create_channel_link_bad_symbols());
 	} else if (username.size() < Ui::EditPeer::kMinUsernameLength) {
 		showUsernameError(tr::lng_create_channel_link_too_short());
+	} else if (_usernameCheckUnavailable) {
+		_checkUsernameTimer.cancel();
+		_goodUsername = true;
+		_usernameCheckInfoLifetime.destroy();
+		_usernameCheckInfo.fire({
+			.type = UsernameCheckInfo::Type::Default,
+			.text = { tr::lng_username_check_unavailable(tr::now) },
+		});
 	} else {
 		showUsernamePending();
 		_checkUsernameTimer.callOnce(Ui::EditPeer::kUsernameCheckTimeout);

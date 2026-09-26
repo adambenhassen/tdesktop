@@ -439,7 +439,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_username_ph"           = "Username";
 
 "lng_intro_username_empty"        = "Enter your username.";
-"lng_intro_username_bad"          = "Usernames are 5 to 32 characters: letters, digits and underscores, starting with a letter.";
+"lng_intro_username_bad"          = "Usernames are 2 to 32 characters: letters, digits and underscores, starting with a letter.";
 "lng_intro_username_unavailable"  = "That username can't be used on this server. Try another one.";
 "lng_intro_username_flood"        = "Too many sign-in attempts from this network. Try again in {duration}.";
 
@@ -559,8 +559,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_username_title" = "Username";
 "lng_username_description1" = "You can choose a username on Telegram. If you do, other people will be able to find you by this username and contact you without knowing your phone number.";
-"lng_username_description2" = "You can use **a-z**, **0-9** and **underscores**.\nMinimum length is **5 characters**.";
+"lng_username_description2" = "You can use **a-z**, **0-9** and **underscores**.\nLength is **2 to 32 characters**.";
 "lng_username_choose" = "Choose your username.";
+"lng_username_check_unavailable" = "Availability is checked when you save.";
 "lng_username_invalid" = "This username is invalid.";
 "lng_username_occupied" = "This username is already occupied.";
 "lng_username_too_short" = "This username is too short.";
@@ -2569,7 +2570,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_create_group_skip" = "Skip";
 
-"lng_create_channel_link_about" = "You can use a-z, 0-9 and underscores.\nMinimum length is 5 characters.";
+"lng_create_channel_link_about" = "You can use a-z, 0-9 and underscores.\nLength is 2 to 32 characters.";
 
 "lng_create_channel_link_invalid" = "This link is invalid";
 "lng_create_channel_link_occupied" = "Sorry, this link is already occupied";

@@ -278,7 +278,7 @@ void CreateManagedBotBox(
 		api->request(base::take(state->checkRequestId)).cancel();
 
 		const auto value = fullUsername();
-		if (value.size() < Ui::EditPeer::kMinUsernameLength) {
+		if (value.size() < Ui::EditPeer::kMinBotUsernameLength) {
 			return;
 		}
 		state->checkUsername = value;
@@ -331,7 +331,7 @@ void CreateManagedBotBox(
 			}
 		}
 
-		if (fullUsername().size() < Ui::EditPeer::kMinUsernameLength) {
+		if (fullUsername().size() < Ui::EditPeer::kMinBotUsernameLength) {
 			setError(tr::lng_create_bot_username_too_short(tr::now));
 			return;
 		}
