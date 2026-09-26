@@ -11,11 +11,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QReadWriteLock>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
-#include <map>
-#include <set>
-#include <memory>
 
 namespace MTP {
 namespace details {
@@ -42,6 +43,10 @@ struct CustomServer {
 		return !key;
 	}
 };
+
+[[nodiscard]] std::optional<CustomServer> BuildCustomServerFromDiscovery(
+	const ServerSelectionCheck &selection,
+	const ServerDiscoveryResult &result);
 
 // Authorization state is scoped to the complete verified pin, not merely to
 // an address or a DC id. Callers use this before reusing deferred key state.

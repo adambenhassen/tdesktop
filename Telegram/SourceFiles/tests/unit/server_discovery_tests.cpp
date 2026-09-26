@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "intro/intro_server_discovery.h"
+#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QEventLoop>
@@ -217,17 +218,204 @@ TEST_CASE(LocalSelectionRequiresExplicitPort) {
 	CHECK_EQ(withPort.normalizedSelection, u"localhost:443"_q);
 }
 
-TEST_CASE(EveryIpLiteralUsesLocalPreflight) {
-	const auto result = CheckServerSelection(u"203.0.113.10:443"_q);
+TEST_CASE(LocalNameDiscoveryBindsToItsResolvedSpecialUseAddress) {
+	const auto selection = CheckServerSelection(u"printer.local:2443"_q);
+	const auto nonce = QByteArray(32, '\x08');
+	auto result = ParseLocalDiscoveryResponse(
+		selection,
+		nonce,
+		LocalResponse(nonce));
 	CHECK(result.valid());
-	CHECK(result.policy == ServerDiscoveryPolicy::LocalDirect);
+	result.resolvedAddress = u"169.254.1.10"_q;
 
-	const auto global = CheckServerSelection(u"8.8.8.8:443"_q);
-	CHECK(global.valid());
-	CHECK(global.policy == ServerDiscoveryPolicy::LocalDirect);
-	CHECK(IsPublicAddress(QHostAddress(u"8.8.8.8"_q)));
-	CHECK(!IsPublicAddress(QHostAddress(u"203.0.113.10"_q)));
-	CHECK(!IsPublicAddress(QHostAddress(u"10.0.0.1"_q)));
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+	CHECK_EQ(server->ip, "169.254.1.10");
+	CHECK_EQ(server->serverSelection, "printer.local:2443");
+	CHECK(server->discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+	CHECK_EQ(server->discoveryOrigin, "local:printer.local:2443");
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK_EQ(restored.customServer().ip, "169.254.1.10");
+
+	const auto literal = CheckServerSelection(u"169.254.1.10:2443"_q);
+	CHECK(literal.status == ServerSelectionStatus::PublicIpLiteral);
+	CHECK(!BuildCustomServerFromDiscovery(literal, result).has_value());
+}
+
+TEST_CASE(LocalLiteralAllowListCoversNetworkBoundaries) {
+	const auto allowed = {
+		std::pair{ u"10.0.0.1:2443"_q, true },
+		std::pair{ u"172.16.0.1:2443"_q, true },
+		std::pair{ u"192.168.0.1:2443"_q, true },
+		std::pair{ u"100.64.0.1:2443"_q, true },
+		std::pair{ u"127.0.0.1:2443"_q, true },
+		std::pair{ u"[::1]:2443"_q, true },
+		std::pair{ u"[fc00::1]:2443"_q, true },
+		std::pair{ u"[fe80::1]:2443"_q, true },
+		std::pair{ u"11.0.0.1:2443"_q, false },
+		std::pair{ u"172.32.0.1:2443"_q, false },
+		std::pair{ u"192.169.0.1:2443"_q, false },
+		std::pair{ u"100.128.0.1:2443"_q, false },
+		std::pair{ u"128.0.0.1:2443"_q, false },
+		std::pair{ u"[::2]:2443"_q, false },
+		std::pair{ u"[fe00::1]:2443"_q, false },
+		std::pair{ u"[fec0::1]:2443"_q, false },
+		std::pair{ u"8.8.8.8:2443"_q, false },
+		std::pair{ u"169.254.1.1:2443"_q, false },
+		std::pair{ u"198.18.0.1:2443"_q, false },
+		std::pair{ u"203.0.113.1:2443"_q, false },
+		std::pair{ u"[64:ff9b::1]:2443"_q, false },
+	};
+	for (const auto &[value, shouldBeAllowed] : allowed) {
+		const auto selection = CheckServerSelection(value);
+		CHECK_EQ(selection.valid(), shouldBeAllowed);
+		if (shouldBeAllowed) {
+			CHECK(selection.policy == ServerDiscoveryPolicy::LocalDirect);
+		} else {
+			CHECK(selection.status == ServerSelectionStatus::PublicIpLiteral);
+		}
+	}
+}
+
+TEST_CASE(MappedIpv6LiteralUsesEmbeddedIpv4Policy) {
+	const auto privateAddress = CheckServerSelection(
+		u"[::ffff:192.168.1.5]:2443"_q);
+	CHECK(privateAddress.valid());
+	CHECK(privateAddress.policy == ServerDiscoveryPolicy::LocalDirect);
+
+	const auto publicAddress = CheckServerSelection(
+		u"[::ffff:8.8.8.8]:2443"_q);
+	CHECK(publicAddress.status == ServerSelectionStatus::PublicIpLiteral);
+}
+
+TEST_CASE(InetAtonNumericHostsAreRefusedBeforeLocalDiscovery) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
+	for (const auto &host : {
+		u"0x8080808"_q,
+		u"0X8080808"_q,
+		u"134744072"_q,
+		u"01002004010"_q,
+		u"１３４７４４０７２"_q,
+		u"０ｘ８０８０８０８"_q,
+	}) {
+		const auto selection = CheckServerSelection(
+			host + u":"_q + QString::number(listener.serverPort()));
+		CHECK(selection.status == ServerSelectionStatus::PublicIpLiteral);
+		CHECK(!selection.valid());
+		auto candidates = 0;
+		Intro::details::ServerWidgetDiscovery discovery(nullptr);
+		discovery.start(
+			selection,
+			QByteArray(32, '\0'),
+			{ QHostAddress(QHostAddress::LocalHost) },
+			{
+				.candidateStarted = [&] { ++candidates; },
+			});
+		CHECK(!discovery.running());
+		CHECK_EQ(candidates, 0);
+		CHECK(!listener.waitForNewConnection(100));
+	}
+}
+
+TEST_CASE(RefusedIpLiteralDoesNotStartLocalConnection) {
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	const auto selection = CheckServerSelection(
+		u"8.8.8.8:"_q + QString::number(server.serverPort()));
+	Intro::details::ServerWidgetDiscovery discovery(nullptr);
+	auto candidates = 0;
+	auto failed = false;
+	discovery.start(
+		selection,
+		QByteArray(32, '\0'),
+		{ QHostAddress(QHostAddress::LocalHost) },
+		{
+			.failed = [&](bool) { failed = true; },
+			.candidateStarted = [&] { ++candidates; },
+		});
+	CHECK(!discovery.running());
+	CHECK(failed);
+	CHECK_EQ(candidates, 0);
+	CHECK(!server.waitForNewConnection(100));
+}
+
+TEST_CASE(SubmitPathRefusesPublicIpv4AndIpv6BeforeNetwork) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
+	const auto port = QString::number(listener.serverPort());
+	for (const auto &selection : {
+		u"8.8.8.8:"_q + port,
+		u"[2001:4860::8888]:"_q + port,
+	}) {
+		auto attempts = 0;
+		auto rejected = ServerSelectionStatus::Valid;
+		const auto accepted = Intro::details::SubmitServerSelection(
+			selection,
+			[&](ServerSelectionStatus status) { rejected = status; },
+			[&](const ServerSelectionCheck &) {
+				++attempts;
+				QTcpSocket socket;
+				socket.connectToHost(
+					QHostAddress(QHostAddress::LocalHost),
+					listener.serverPort());
+				(void)socket.waitForConnected(100);
+			});
+		CHECK(!accepted);
+		CHECK(rejected == ServerSelectionStatus::PublicIpLiteral);
+		CHECK_EQ(attempts, 0);
+		CHECK(!listener.waitForNewConnection(100));
+	}
+}
+
+TEST_CASE(LocalLiteralRequiresPortWhileDottedAddressKeepsDomainRoute) {
+	CHECK(CheckServerSelection(u"10.0.0.1"_q).status
+		== ServerSelectionStatus::NoPort);
+	CHECK(CheckServerSelection(u"8.8.8.8"_q).status
+		== ServerSelectionStatus::PublicIpLiteral);
+	CHECK(CheckServerSelection(u"[::1]"_q).status
+		== ServerSelectionStatus::NoPort);
+	CHECK(CheckServerSelection(u"[2001:4860::8888]"_q).status
+		== ServerSelectionStatus::PublicIpLiteral);
+	const auto dotted = CheckServerSelection(u"8.8.8.8.:2443"_q);
+	CHECK(dotted.valid());
+	CHECK(dotted.policy == ServerDiscoveryPolicy::PublicHttps);
+}
+
+TEST_CASE(DomainAndLocalNameRoutesRemainUnchanged) {
+	for (const auto &domain : {
+		u"telegram-server.tailaa4918.ts.net"_q,
+		u"example.com"_q,
+	}) {
+		const auto selection = CheckServerSelection(domain);
+		CHECK(selection.valid());
+		CHECK(selection.policy == ServerDiscoveryPolicy::PublicHttps);
+	}
+	for (const auto &local : {
+		u"localhost:2443"_q,
+		u"server.local:2443"_q,
+		u"server.home.arpa:2443"_q,
+		u"intranet:2443"_q,
+	}) {
+		const auto selection = CheckServerSelection(local);
+		CHECK(selection.valid());
+		CHECK(selection.policy == ServerDiscoveryPolicy::LocalDirect);
+	}
 }
 
 TEST_CASE(PublicDiscoveryRejectsSpecialPurposeIpv6Addresses) {
@@ -1368,14 +1556,40 @@ TEST_CASE(DiscoveryJsonRejectsConstrainedPortConflict) {
 	CHECK(result.status == ServerDiscoveryResponseStatus::EndpointMismatch);
 }
 
-TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpoint) {
+TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpointWithoutFirstUseTrust) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
 	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	CHECK(selection.valid());
+	CHECK(selection.policy == ServerDiscoveryPolicy::PublicHttps);
+	const auto endpointText = u"8.8.8.8:"_q
+		+ QString::number(listener.serverPort());
+	const auto endpoint = CheckServerSelection(endpointText);
+	CHECK(endpoint.status == ServerSelectionStatus::PublicIpLiteral);
+	CHECK(!endpoint.valid());
+	CHECK(IsPublicDiscoveryEndpoint(endpoint, selection));
+	CHECK(PublicDiscoveryUrl(endpoint).isEmpty());
+	auto candidates = 0;
+	Intro::details::ServerWidgetDiscovery fallback(nullptr);
+	fallback.start(
+		endpoint,
+		QByteArray(32, '\0'),
+		{ QHostAddress(QHostAddress::LocalHost) },
+		{
+			.candidateStarted = [&] { ++candidates; },
+		});
+	CHECK(!fallback.running());
+	CHECK_EQ(candidates, 0);
+	CHECK(!listener.waitForNewConnection(100));
 	const auto key = TestKey();
 	const auto der = key.getSubjectPublicKeyInfo();
 	const auto json = QJsonDocument(QJsonObject{
 		{ u"version"_q, 1 },
 		{ u"mtproto"_q, QJsonObject{
-			{ u"endpoint"_q, u"8.8.8.8:443"_q },
+			{ u"endpoint"_q, endpointText },
 			{ u"dc_id"_q, 2 },
 			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
 				reinterpret_cast<const char *>(der.data()),
@@ -1384,7 +1598,9 @@ TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpoint) {
 	}).toJson(QJsonDocument::Compact);
 	const auto result = ParsePublicDiscoveryResponse(selection, json);
 	CHECK(result.valid());
-	CHECK_EQ(result.endpoint, u"8.8.8.8:443"_q);
+	CHECK_EQ(result.endpoint, endpointText);
+	CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
+	CHECK(result.key.valid());
 }
 
 TEST_CASE(DiscoveryJsonAcceptsTailnetIpForMagicDnsOrigin) {

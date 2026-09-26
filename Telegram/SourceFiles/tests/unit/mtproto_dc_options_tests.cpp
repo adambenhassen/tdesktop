@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <atomic>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
@@ -18,6 +19,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/session.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 
 namespace {
 
@@ -153,6 +156,138 @@ TEST_CASE(DiscoveredCustomServerMetadataSurvivesSerialization) {
 	CHECK_EQ(got.serverSelection, server.serverSelection);
 	CHECK(got.discoveryPolicy == server.discoveryPolicy);
 	CHECK_EQ(got.discoveryOrigin, server.discoveryOrigin);
+}
+
+TEST_CASE(StoredPublicLocalDirectPinLoadsButNewOneIsRefused) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.serverSelection = "10.4.1.7:8443";
+	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+	server.discoveryOrigin = "local:10.4.1.7:8443";
+	CHECK(options.setCustomServer(server));
+
+	auto serialized = options.serialize();
+	CHECK(serialized.contains("10.4.1.7"));
+	serialized.replace("10.4.1.7", "8.8.8.88");
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(serialized));
+	CHECK(restored.hasCustomServer());
+	CHECK(restored.refusesProductionFallback());
+	const auto got = restored.customServer();
+	CHECK_EQ(got.ip, "8.8.8.88");
+	CHECK_EQ(got.serverSelection, "8.8.8.88:8443");
+	CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+	CHECK_EQ(got.discoveryOrigin, "local:8.8.8.88:8443");
+	CHECK(got.key != nullptr);
+	if (got.key) {
+		CHECK_EQ(qint64(got.key->fingerprint()),
+			qint64(kProductionKeyFingerprint));
+	}
+
+	auto fresh = DcOptions(Environment::Production);
+	server.ip = "8.8.8.88";
+	server.serverSelection = "8.8.8.88:8443";
+	server.discoveryOrigin = "local:8.8.8.88:8443";
+	CHECK(!fresh.setCustomServer(server));
+}
+
+TEST_CASE(StoredSpecialUseLocalDirectPinsRemainLoadableButNewOnesAreRefused) {
+	const auto cases = {
+		std::pair{ "192.168.1.1", "169.254.1.1" },
+		std::pair{ "192.168.1.10", "203.0.113.10" },
+	};
+	for (const auto &[sourceAddress, address] : cases) {
+		auto source = DcOptions(Environment::Production);
+		auto server = MakeCustomServer();
+		server.ip = sourceAddress;
+		server.serverSelection = std::string(sourceAddress) + ":8443";
+		server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+		server.discoveryOrigin = std::string("local:") + sourceAddress + ":8443";
+		CHECK(source.setCustomServer(server));
+
+		auto serialized = source.serialize();
+		const auto serializedSize = serialized.size();
+		serialized.replace(sourceAddress, address);
+		CHECK_EQ(serialized.size(), serializedSize);
+
+		auto restored = DcOptions(Environment::Production);
+		CHECK(restored.constructFromSerialized(serialized));
+		CHECK(restored.hasCustomServer());
+		CHECK(restored.refusesProductionFallback());
+		const auto got = restored.customServer();
+		CHECK_EQ(got.ip, address);
+		CHECK_EQ(got.serverSelection, std::string(address) + ":8443");
+		CHECK_EQ(
+			got.discoveryOrigin,
+			std::string("local:") + address + ":8443");
+		CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+		CHECK(got.key != nullptr);
+		if (got.key) {
+			CHECK_EQ(qint64(got.key->fingerprint()),
+				qint64(kProductionKeyFingerprint));
+		}
+
+		auto fresh = DcOptions(Environment::Production);
+		server.ip = address;
+		server.serverSelection = std::string(address) + ":8443";
+		server.discoveryOrigin = std::string("local:") + address + ":8443";
+		CHECK(!fresh.setCustomServer(server));
+	}
+}
+
+TEST_CASE(PublicHttpsDiscoveryEnrollsWithPublicResolvedAddress) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	const auto key = MakeKey();
+	const auto der = key->getSubjectPublicKeyInfo();
+	const auto encoded = QString::fromLatin1(QByteArray(
+		reinterpret_cast<const char *>(der.data()),
+		int(der.size())).toBase64());
+	for (const auto &endpoint : {
+		u"8.8.8.88:8443"_q,
+		u"mtproto.example.com:8443"_q,
+	}) {
+		const auto json = QJsonDocument(QJsonObject{
+			{ u"version"_q, 1 },
+			{ u"mtproto"_q, QJsonObject{
+				{ u"endpoint"_q, endpoint },
+				{ u"dc_id"_q, 2 },
+				{ u"rsa_spki"_q, encoded }
+			} }
+		}).toJson(QJsonDocument::Compact);
+		auto result = ParsePublicDiscoveryResponse(selection, json);
+		CHECK(result.valid());
+		CHECK_EQ(result.endpoint, endpoint);
+		CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
+		result.resolvedAddress = u"8.8.8.88"_q;
+		const auto server = BuildCustomServerFromDiscovery(selection, result);
+		CHECK(server.has_value());
+		if (!server) {
+			continue;
+		}
+		CHECK_EQ(server->ip, "8.8.8.88");
+		CHECK_EQ(server->serverSelection, "server.example.com");
+		CHECK(server->discoveryPolicy == ServerDiscoveryPolicy::PublicHttps);
+		CHECK_EQ(
+			server->discoveryOrigin,
+			"https://server.example.com/.well-known/telegramd/client");
+
+		auto options = DcOptions(Environment::Production);
+		CHECK(options.setCustomServer(*server));
+
+		auto restored = DcOptions(Environment::Production);
+		CHECK(restored.constructFromSerialized(options.serialize()));
+		const auto got = restored.customServer();
+		CHECK_EQ(got.ip, "8.8.8.88");
+		CHECK_EQ(got.port, 8443);
+		CHECK(got.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps);
+		CHECK_EQ(got.discoveryOrigin, server->discoveryOrigin);
+		CHECK(got.key != nullptr);
+		if (got.key) {
+			CHECK_EQ(qint64(got.key->fingerprint()),
+				qint64(key->fingerprint()));
+		}
+	}
 }
 
 TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
