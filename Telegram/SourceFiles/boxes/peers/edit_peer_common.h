@@ -21,6 +21,12 @@ constexpr auto kUsernameCheckTimeout = crl::time(200);
 
 class UsernameCheckState final {
 public:
+	enum class FailureResult {
+		Ignored,
+		Handled,
+		Unavailable,
+	};
+
 	struct Request {
 		quint64 revision = 0;
 		QString username;
@@ -44,8 +50,17 @@ public:
 		return true;
 	}
 
-	void markUnavailable() {
-		_unavailable = true;
+	[[nodiscard]] FailureResult availabilityFailed(
+			Request request,
+			const QString &error) {
+		const auto unavailable = (error == u"INPUT_METHOD_INVALID"_q);
+		if (!isCurrent(request) && !unavailable) {
+			return FailureResult::Ignored;
+		} else if (unavailable) {
+			_unavailable = true;
+			return FailureResult::Unavailable;
+		}
+		return FailureResult::Handled;
 	}
 
 	[[nodiscard]] bool isCurrent(Request request) const {

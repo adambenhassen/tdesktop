@@ -49,7 +49,9 @@ protected:
 
 private:
 	void updateFail(const QString &error);
-	void checkFail(const QString &error);
+	void checkFail(
+		const QString &error,
+		Ui::EditPeer::UsernameCheckState::FailureResult result);
 
 	void checkInfoPurchaseAvailable();
 
@@ -202,14 +204,17 @@ void UsernameEditor::check() {
 	}).fail([=](const MTP::Error &error) {
 		const auto &type = error.type();
 		const auto current = _usernameCheckState.isCurrent(request);
-		const auto unavailable = (type == u"INPUT_METHOD_INVALID"_q);
-		if (!current && !unavailable) {
+		const auto failure = _usernameCheckState.availabilityFailed(
+			request,
+			type);
+		if (failure
+			== Ui::EditPeer::UsernameCheckState::FailureResult::Ignored) {
 			return;
 		}
 		if (current) {
 			_checkRequestId = 0;
 		}
-		checkFail(type);
+		checkFail(type, failure);
 	}).send();
 }
 
@@ -325,7 +330,9 @@ void UsernameEditor::updateFail(const QString &error) {
 	}
 }
 
-void UsernameEditor::checkFail(const QString &error) {
+void UsernameEditor::checkFail(
+		const QString &error,
+		Ui::EditPeer::UsernameCheckState::FailureResult result) {
 	if (error == u"USERNAME_INVALID"_q) {
 		_errorText = tr::lng_username_invalid(tr::now);
 		checkInfoChange();
@@ -335,8 +342,8 @@ void UsernameEditor::checkFail(const QString &error) {
 		checkInfoChange();
 	} else if (error == u"USERNAME_PURCHASE_AVAILABLE"_q) {
 		checkInfoPurchaseAvailable();
-	} else if (error == u"INPUT_METHOD_INVALID"_q) {
-		_usernameCheckState.markUnavailable();
+	} else if (result
+		== Ui::EditPeer::UsernameCheckState::FailureResult::Unavailable) {
 		_checkTimer.cancel();
 		changed();
 	} else {

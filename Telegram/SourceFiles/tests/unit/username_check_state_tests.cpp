@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace {
 
 using Ui::EditPeer::UsernameCheckState;
+using FailureResult = UsernameCheckState::FailureResult;
 
 TEST_CASE(UsernameCheckDiscardsLateAvailabilityAfterInputChanges) {
 	UsernameCheckState state;
@@ -30,12 +31,35 @@ TEST_CASE(UsernameCheckUnavailableAllowsValidEditsWithoutMoreRequests) {
 	const auto request = state.requestStarted();
 
 	CHECK(state.isCurrent(request));
-	state.markUnavailable();
+	CHECK(state.availabilityFailed(request, u"INPUT_METHOD_INVALID"_q)
+		== FailureResult::Unavailable);
 	CHECK(state.unavailable());
 
 	state.inputChanged(u"Ab"_q, true);
 	CHECK(state.good());
 	CHECK(!state.shouldCheck());
+
+	state.inputChanged(u"A"_q, false);
+	CHECK(!state.good());
+	CHECK(!state.shouldCheck());
+
+	state.inputChanged(u"Cd"_q, true);
+	CHECK(state.good());
+	CHECK(!state.shouldCheck());
+}
+
+TEST_CASE(UsernameCheckUnavailableResponseFromStaleRequestDisablesChecks) {
+	UsernameCheckState state;
+	state.inputChanged(u"Ab"_q, true);
+	const auto request = state.requestStarted();
+	state.inputChanged(u"A"_q, false);
+
+	CHECK(state.availabilityFailed(request, u"USERNAME_OCCUPIED"_q)
+		== FailureResult::Ignored);
+	CHECK(!state.unavailable());
+	CHECK(state.availabilityFailed(request, u"INPUT_METHOD_INVALID"_q)
+		== FailureResult::Unavailable);
+	CHECK(state.unavailable());
 
 	state.inputChanged(u"A"_q, false);
 	CHECK(!state.good());

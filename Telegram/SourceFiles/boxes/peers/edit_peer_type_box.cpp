@@ -774,8 +774,10 @@ void Controller::checkUsernameAvailability() {
 	}).fail([=](const MTP::Error &error) {
 		const auto &type = error.type();
 		const auto current = _usernameCheckState.isCurrent(request);
-		const auto unavailable = (type == u"INPUT_METHOD_INVALID"_q);
-		if (!current && !unavailable) {
+		const auto failure = _usernameCheckState.availabilityFailed(
+			request,
+			type);
+		if (failure == Ui::EditPeer::UsernameCheckState::FailureResult::Ignored) {
 			return;
 		}
 		if (current) {
@@ -784,8 +786,8 @@ void Controller::checkUsernameAvailability() {
 			_api.request(base::take(_checkUsernameRequestId)).cancel();
 		}
 		_usernameState = UsernameState::Normal;
-		if (unavailable) {
-			_usernameCheckState.markUnavailable();
+		if (failure
+			== Ui::EditPeer::UsernameCheckState::FailureResult::Unavailable) {
 			_checkUsernameTimer.cancel();
 			if (_controls.privacy->current() == Privacy::HasUsername) {
 				usernameChanged();
