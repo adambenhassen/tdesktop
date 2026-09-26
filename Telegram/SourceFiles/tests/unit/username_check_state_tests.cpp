@@ -239,14 +239,25 @@ TEST_CASE(PublicUsernameCanBeRecheckedAfterPrivacyToggle) {
 		CHECK(!api.updatePeer(flow, [](const QString &) {}));
 		CHECK_EQ(api.updates, 0);
 		auto wasRefreshed = false;
+		auto delayedCheckScheduled = false;
 		auto checkStarted = false;
 		flow.revalidatePublicUsername(
 			u"Ab"_q,
 			Ui::EditPeer::IsValidPublicUsername(u"Ab"_q),
-			[&] { wasRefreshed = true; },
+			[&] {
+				wasRefreshed = true;
+				delayedCheckScheduled = true;
+			},
+			[&] { delayedCheckScheduled = false; },
 			[&] { checkStarted = api.checkPeer(flow, u"Ab"_q); });
+		auto delayedCheckStarted = false;
+		if (delayedCheckScheduled) {
+			delayedCheckStarted = api.checkPeer(flow, u"Ab"_q);
+		}
 		CHECK(wasRefreshed);
 		CHECK(checkStarted);
+		CHECK(!delayedCheckStarted);
+		CHECK(!delayedCheckScheduled);
 		CHECK_EQ(api.checks, 2);
 		CHECK_EQ(api.checkedUsername, u"Ab"_q);
 

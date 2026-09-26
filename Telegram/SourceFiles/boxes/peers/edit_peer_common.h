@@ -78,15 +78,17 @@ public:
 			: Status::Error;
 	}
 
-	template <typename Refresh, typename Check>
+	template <typename Refresh, typename Cancel, typename Check>
 	void revalidatePublicUsername(
 			const QString &username,
 			bool locallyValid,
 			Refresh refresh,
+			Cancel cancel,
 			Check check) {
 		inputChanged(username, locallyValid);
 		refresh();
 		if (locallyValid && shouldCheck()) {
+			cancel();
 			check();
 		}
 	}

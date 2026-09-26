@@ -723,6 +723,7 @@ void Controller::privacyChanged(Privacy value) {
 				username,
 				Ui::EditPeer::IsValidPublicUsername(username),
 				[this] { usernameChanged(true); },
+				[this] { _checkUsernameTimer.cancel(); },
 				[this] { checkUsernameAvailability(); });
 		} else {
 			toggleWhoSendWrap();
