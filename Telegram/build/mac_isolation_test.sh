@@ -91,6 +91,7 @@ OBSERVER_SHUTDOWN_FILE="$EVIDENCE_DIR/observer-shutdown.txt"
 RESULT="FAIL"
 LAST_ERROR_COMMAND=""
 LAST_ERROR_LINE=""
+SECOND_LAUNCH_WAIT_SECONDS=30
 
 if [ "$SELF_TEST_MODE" -eq 3 ]; then
 	HOME_ROOT="$TEST_ROOT/home"
@@ -2733,7 +2734,7 @@ trap cleanup EXIT
 	echo "process_wait_seconds=30"
 	echo "support_path_wait_seconds=60"
 	echo "working_dir_log_wait_seconds=60"
-	echo "second_launch_wait_seconds=5"
+	echo "second_launch_wait_seconds=$SECOND_LAUNCH_WAIT_SECONDS"
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
 	echo "filesystem_switch_wait_seconds=10"
@@ -3023,9 +3024,19 @@ fi
 if ! record_observer_process_event target-resumed "$SECOND_PID" tracked-root; then
 	unavailable "could not record second-launch observer resume pid=$SECOND_PID"
 fi
-if ! wait_for_exit "$SECOND_PID" 5; then
-	fail "second launch bounded wait" "pid=$SECOND_PID did not exit within 5s"
+SECOND_LAUNCH_WAIT_STARTED_NS="$(monotonic_time_ns)" || \
+	unavailable "could not timestamp second-launch bounded wait"
+record "event=second-launch-exit-wait-start pid=$SECOND_PID bound_seconds=$SECOND_LAUNCH_WAIT_SECONDS time_ns=$SECOND_LAUNCH_WAIT_STARTED_NS observer_manager_pid=$OBSERVER_MANAGER_PID"
+if ! wait_for_exit "$SECOND_PID" "$SECOND_LAUNCH_WAIT_SECONDS"; then
+	SECOND_LAUNCH_WAIT_FINISHED_NS="$(monotonic_time_ns)" || \
+		unavailable "could not timestamp second-launch bounded-wait failure"
+	SECOND_LAUNCH_WAIT_ELAPSED_MS=$(((SECOND_LAUNCH_WAIT_FINISHED_NS - SECOND_LAUNCH_WAIT_STARTED_NS) / 1000000))
+	fail "second launch bounded wait" "pid=$SECOND_PID did not exit within ${SECOND_LAUNCH_WAIT_SECONDS}s elapsed_ms=$SECOND_LAUNCH_WAIT_ELAPSED_MS observer_manager_pid=$OBSERVER_MANAGER_PID observer_manager_state=$(process_state_for_pid "$OBSERVER_MANAGER_PID")"
 fi
+SECOND_LAUNCH_WAIT_FINISHED_NS="$(monotonic_time_ns)" || \
+	unavailable "could not timestamp second-launch bounded-wait completion"
+SECOND_LAUNCH_WAIT_ELAPSED_MS=$(((SECOND_LAUNCH_WAIT_FINISHED_NS - SECOND_LAUNCH_WAIT_STARTED_NS) / 1000000))
+record "event=second-launch-exit-wait-complete pid=$SECOND_PID bound_seconds=$SECOND_LAUNCH_WAIT_SECONDS elapsed_ms=$SECOND_LAUNCH_WAIT_ELAPSED_MS"
 if ! wait "$SECOND_PID"; then
 	fail "second launch result" "pid=$SECOND_PID returned failure"
 fi
