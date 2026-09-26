@@ -158,10 +158,11 @@ class ProbeEvidenceTests(unittest.TestCase):
     def test_uploaded_files_drop_raw_environment_and_process_fields(self):
         summary = self.analyze()
         fixture = dict(self.fixture, env=["CANARY_SECRET"], extra="CANARY_SECRET")
+        console = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
             summary_path = Path(directory) / "summary.json"
             fixture_path = Path(directory) / "fixture.json"
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(console):
                 probe.write_summary(summary_path, summary)
             fixture_path.write_text(
                 json.dumps(probe.public_fixture(fixture)),
@@ -176,6 +177,13 @@ class ProbeEvidenceTests(unittest.TestCase):
         self.assertNotIn('"args"', uploaded)
         self.assertNotIn('"cwd"', uploaded)
         self.assertNotIn('"fds"', uploaded)
+        logged = console.getvalue()
+        self.assertIn("telemetry_probe_summary=", logged)
+        self.assertNotIn("CANARY_SECRET", logged)
+        self.assertNotIn('"env"', logged)
+        self.assertNotIn('"args"', logged)
+        self.assertNotIn('"cwd"', logged)
+        self.assertNotIn('"fds"', logged)
         self.assertIn("/parent-access", uploaded)
         self.assertIn("outside_tree_event_counts", uploaded)
 

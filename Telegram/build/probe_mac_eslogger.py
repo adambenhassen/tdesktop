@@ -307,6 +307,10 @@ def write_summary(path, summary):
         encoding="utf-8",
     )
     print("telemetry_probe_result=" + summary["result"])
+    print(
+        "telemetry_probe_summary="
+        + json.dumps(summary, sort_keys=True, separators=(",", ":"))
+    )
 
 
 def public_fixture(fixture):
