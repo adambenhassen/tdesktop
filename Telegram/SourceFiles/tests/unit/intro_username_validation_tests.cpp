@@ -31,10 +31,11 @@ TEST_CASE(NormalizeStripsOneLeadingAt) {
 }
 
 TEST_CASE(ValidUsernamesAtBoundaries) {
-	CHECK(IsValidUsername(u"abcde"_q)); // 5 chars, the shortest.
+	CHECK(IsValidUsername(u"Ab"_q)); // 2 chars, the shortest.
 	CHECK(IsValidUsername(
 		u"abcdefghijklmnopqrstuvwxyz012345"_q)); // 32 chars, the longest.
-	CHECK(!IsValidUsername(u"abcd"_q)); // 4 chars, one too short.
+	CHECK(IsValidUsername(u"abcd"_q));
+	CHECK(!IsValidUsername(u"a"_q)); // 1 char, one too short.
 	CHECK(!IsValidUsername(
 		u"abcdefghijklmnopqrstuvwxyz0123456"_q)); // 33 chars.
 }

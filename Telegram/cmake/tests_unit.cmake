@@ -74,6 +74,7 @@ PRIVATE
     tests/unit/server_enrollment_tests.cpp
     tests/unit/storage_domain_restart_support.cpp
     tests/unit/update_policy_tests.cpp
+    tests/unit/username_check_state_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
 )
