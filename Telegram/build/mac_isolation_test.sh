@@ -14,6 +14,11 @@ elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-observer-coverage" ]; then
 	TEST_ROOT="$(mktemp -d /tmp/main793-observer-coverage.XXXXXX)"
 	APP_PATH=""
 	EVIDENCE_DIR="$TEST_ROOT/evidence"
+elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-home-startup-logs" ]; then
+	SELF_TEST_MODE=3
+	TEST_ROOT="$(mktemp -d /tmp/main858-home-log-self-test.XXXXXX)"
+	APP_PATH=""
+	EVIDENCE_DIR="$TEST_ROOT/evidence"
 elif [ "$#" -ne 2 ]; then
 	echo "usage: mac_isolation_test.sh TELEGRAMD_APP EVIDENCE_DIR" >&2
 	exit 2
@@ -86,6 +91,10 @@ OBSERVER_SHUTDOWN_FILE="$EVIDENCE_DIR/observer-shutdown.txt"
 RESULT="FAIL"
 LAST_ERROR_COMMAND=""
 LAST_ERROR_LINE=""
+
+if [ "$SELF_TEST_MODE" -eq 3 ]; then
+	HOME_ROOT="$TEST_ROOT/home"
+fi
 
 mkdir -p "$EVIDENCE_DIR"
 : > "$OBSERVER_SHUTDOWN_FILE"
@@ -312,6 +321,62 @@ capture_working_log() {
 	return 1
 }
 
+capture_home_startup_logs() {
+	local label="$1"
+	local support_root="$HOME_ROOT/Library/Application Support"
+	local destination="$EVIDENCE_DIR/home-startup-logs/$label"
+	local candidate
+	local relative
+	local copied=0
+	mkdir -p "$destination"
+	{
+		printf 'home=%s\n' "$HOME_ROOT"
+		printf 'support_root=%s\n' "$support_root"
+		printf 'expected_telegramd_log=%s/Telegramd/log.txt\n' "$support_root"
+	} > "$destination/index.txt"
+	: > "$destination/search-errors.txt"
+	if [ ! -d "$support_root" ]; then
+		echo "support_root=missing" >> "$destination/index.txt"
+		return 0
+	fi
+	while IFS= read -r candidate; do
+		[ -f "$candidate" ] || continue
+		relative="${candidate#"$support_root/"}"
+		relative="${relative//\//__}"
+		if cp "$candidate" "$destination/$relative" 2>> "$destination/search-errors.txt"; then
+			printf 'copied=%s\n' "$candidate" >> "$destination/index.txt"
+			copied=1
+		else
+			printf 'copy_failed=%s\n' "$candidate" >> "$destination/index.txt"
+		fi
+	done < <(find "$support_root" -maxdepth 3 -type f \( -name 'log.txt' -o -name 'log_start*.txt' \) -print 2> "$destination/search-errors.txt")
+	if [ "$copied" -eq 0 ]; then
+		echo 'startup_logs=none' >> "$destination/index.txt"
+	fi
+}
+
+run_home_startup_log_self_test() {
+	local support_root="$HOME_ROOT/Library/Application Support"
+	local telegramd_root="$support_root/Telegramd"
+	local desktop_root="$support_root/Telegram Desktop"
+	local captured="$EVIDENCE_DIR/home-startup-logs/self-test"
+	mkdir -p "$telegramd_root" "$desktop_root"
+	printf 'Working dir: %s/Telegramd/\n' "$support_root" > "$telegramd_root/log.txt"
+	printf 'startup-in-progress\n' > "$telegramd_root/log_start0.txt"
+	printf 'official-client-log\n' > "$desktop_root/log.txt"
+	capture_home_startup_logs self-test
+	if ! cmp -s "$telegramd_root/log.txt" "$captured/Telegramd__log.txt" || \
+		! cmp -s "$telegramd_root/log_start0.txt" "$captured/Telegramd__log_start0.txt" || \
+		! cmp -s "$desktop_root/log.txt" "$captured/Telegram Desktop__log.txt" || \
+		! grep -F "copied=$telegramd_root/log.txt" "$captured/index.txt" >/dev/null; then
+		rm -rf "$TEST_ROOT"
+		printf '%s\n' 'FAIL: HOME startup log snapshot omitted or changed an input log' >&2
+		return 1
+	fi
+	rm -rf "$TEST_ROOT"
+	printf '%s\n' 'home-startup-log-capture=PASS'
+}
+
 wait_for_trace_marker() {
 	local pid="$1"
 	local path="$2"
@@ -327,6 +392,35 @@ wait_for_trace_marker() {
 		fi
 		sleep 0.1
 	done
+	return 1
+}
+
+wait_for_child_resume() {
+	local pid="$1"
+	local parent_pid="$2"
+	local trace="$3"
+	local seconds="$4"
+	local state
+	local i
+	for i in $(seq 1 $((seconds * 10))); do
+		state="$(process_state_for_pid "$pid")"
+		case "$state" in
+			T*) ;;
+			Z*|missing)
+				if grep -E "^fork-child-exit parent=$parent_pid child=$pid exit_time_ns=[0-9]+$" \
+					"$trace" >/dev/null 2>&1; then
+					printf '%s\n' exited
+					return 0
+				fi
+				;;
+			*)
+				printf '%s\n' "$state"
+				return 0
+				;;
+		esac
+		sleep 0.1
+	done
+	process_state_for_pid "$pid"
 	return 1
 }
 
@@ -851,6 +945,7 @@ run_lifecycle_observer_control() {
 	local child_pid
 	local child_ppid
 	local child_state
+	local child_stop_count
 	local readiness_attempt
 	local readiness_attempts=3
 	local ready=0
@@ -900,7 +995,7 @@ PY
 	fi
 	# Darwin SIGSTOP is 17; raise it from the child probe and still verify the
 	# child is observably stopped before allowing the control helper to continue.
-	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $CONTROL_PID/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; printf(\"fork-child-event parent=%d child=%d event_time_ns=%llu\\n\", args[0]->pr_ppid, args[0]->pr_pid, timestamp); } proc:::start /fork_child_parent[pid] == $CONTROL_PID/ { printf(\"fork-child-stop parent=%d child=%d stop_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); raise(17); } proc:::exit /fork_child_parent[pid] == $CONTROL_PID/ { printf(\"fork-child-exit parent=%d child=%d exit_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); fork_child_parent[pid] = 0; }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $CONTROL_PID/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_stopped[args[0]->pr_pid] = 0; printf(\"fork-child-event parent=%d child=%d event_time_ns=%llu\\n\", args[0]->pr_ppid, args[0]->pr_pid, timestamp); } proc:::start /fork_child_parent[pid] == $CONTROL_PID && fork_child_stopped[pid] == 0/ { fork_child_stopped[pid] = 1; printf(\"fork-child-stop parent=%d child=%d stop_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); raise(17); } proc:::exit /fork_child_parent[pid] == $CONTROL_PID/ { printf(\"fork-child-exit parent=%d child=%d exit_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); fork_child_parent[pid] = 0; fork_child_stopped[pid] = 0; }"
 	{
 		echo "parent_pid=$CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
@@ -987,6 +1082,10 @@ PY
 	if ! stop_lifecycle_observer_control; then
 		control_observer_unavailable "fork observer shutdown or flush failed"
 	fi
+	child_stop_count="$(grep -c "^fork-child-stop parent=$CONTROL_PID child=$child_pid " "$CONTROL_TRACE" || true)"
+	if [ "$child_stop_count" -ne 1 ]; then
+		control_observer_unavailable "fork observer control stop count=$child_stop_count expected=1"
+	fi
 	if ! grep -F -- "observer-ready" "$CONTROL_TRACE" >/dev/null 2>&1 || \
 		! grep -F -- "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1 || \
 		! grep -F -- "fork-child-event parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1 || \
@@ -999,6 +1098,7 @@ PY
 		echo "child_pid=$child_pid"
 		echo "child_ppid=$child_ppid"
 		echo "child_stopped_state=$child_state"
+		echo "child_stop_event_count=$child_stop_count"
 		grep -E "^fork-child-(event|stop|exit) parent=$CONTROL_PID child=$child_pid " "$CONTROL_TRACE"
 		echo "resumed_before_user_code=yes"
 		echo "result=PASS"
@@ -1202,7 +1302,7 @@ start_pid_observer() {
 	# kernel ktrace facility rejects overlapping fs_usage sessions.
 	exec_observer_pid="$observer_pid"
 	# Use the same explicit Darwin SIGSTOP action as the control probe above.
-	fork_program="BEGIN { printf(\"observer-ready target=$target_pid ready_time_ns=%llu\\n\", timestamp); } syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; printf(\"fork-child-event parent=%d child=%d event_time_ns=%llu\\n\", args[0]->pr_ppid, args[0]->pr_pid, timestamp); } proc:::start /fork_child_parent[pid] == $target_pid/ { printf(\"fork-child-stop parent=%d child=%d stop_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); raise(17); } proc:::exit /fork_child_parent[pid] == $target_pid/ { printf(\"fork-child-exit parent=%d child=%d exit_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); fork_child_parent[pid] = 0; }"
+	fork_program="BEGIN { printf(\"observer-ready target=$target_pid ready_time_ns=%llu\\n\", timestamp); } syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_stopped[args[0]->pr_pid] = 0; printf(\"fork-child-event parent=%d child=%d event_time_ns=%llu\\n\", args[0]->pr_ppid, args[0]->pr_pid, timestamp); } proc:::start /fork_child_parent[pid] == $target_pid && fork_child_stopped[pid] == 0/ { fork_child_stopped[pid] = 1; printf(\"fork-child-stop parent=%d child=%d stop_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); raise(17); } proc:::exit /fork_child_parent[pid] == $target_pid/ { printf(\"fork-child-exit parent=%d child=%d exit_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); fork_child_parent[pid] = 0; fork_child_stopped[pid] = 0; }"
 	observer_launch_time_ns="$(monotonic_time_ns)" || {
 		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
 			"$fork_event_time_ns" "$stop_time_ns" unknown unknown observer_launch_timestamp_failed || true
@@ -1281,6 +1381,7 @@ observe_fork_children() {
 	local event_time_ns
 	local child_pid
 	local child_state
+	local resume_state
 	local stop_line
 	local stop_time_ns
 	local exit_line
@@ -1413,8 +1514,14 @@ observe_fork_children() {
 					"$OBSERVER_READY_TIME_NS" child_resume_failed || true
 				return 1
 			fi
+			if ! resume_state="$(wait_for_child_resume "$child_pid" "$target_pid" "$fork_trace" 5)"; then
+				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
+					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
+					"$OBSERVER_READY_TIME_NS" child_remained_stopped_after_continue || true
+				return 1
+			fi
 			if ! record_observer_timeline_event \
-				"event=fork-child-resumed pid=$child_pid parent=$target_pid relationship=fork-child process_state=$(process_state_for_pid "$child_pid") time_ns=$(monotonic_time_ns) fork_event_time_ns=$event_time_ns stop_time_ns=$stop_time_ns observer_launch_time_ns=$OBSERVER_LAUNCH_TIME_NS observer_ready_time_ns=$OBSERVER_READY_TIME_NS"; then
+				"event=fork-child-resumed pid=$child_pid parent=$target_pid relationship=fork-child process_state=$resume_state time_ns=$(monotonic_time_ns) fork_event_time_ns=$event_time_ns stop_time_ns=$stop_time_ns observer_launch_time_ns=$OBSERVER_LAUNCH_TIME_NS observer_ready_time_ns=$OBSERVER_READY_TIME_NS"; then
 				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
 					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
 					"$OBSERVER_READY_TIME_NS" resume_evidence_failed || true
@@ -2509,6 +2616,9 @@ cleanup() {
 	local exit_code=$?
 	local cleanup_failed=0
 	set +e
+	if [ -n "$HOME_ROOT" ]; then
+		capture_home_startup_logs cleanup || cleanup_failed=1
+	fi
 	if [ -n "$CONTROL_RELEASE" ]; then
 		touch "$CONTROL_RELEASE" 2>/dev/null || true
 	fi
@@ -2606,6 +2716,10 @@ if [ "$SELF_TEST_MODE" -eq 2 ]; then
 	run_observer_coverage_self_test
 	exit $?
 fi
+if [ "$SELF_TEST_MODE" -eq 3 ]; then
+	run_home_startup_log_self_test
+	exit $?
+fi
 
 capture_error() {
 	LAST_ERROR_COMMAND="$BASH_COMMAND"
@@ -2628,6 +2742,8 @@ trap cleanup EXIT
 	echo "filesystem_observer_policy=one-ktrace-owner-at-a-time; manager-reaped-SIGINT-flush-before-each-PID-switch"
 	echo "observer_readiness=tracked-row-after-dtrace-ready-marker-and-live-process-check"
 	echo "descendant_policy=independent-observer-ready-before-each-fork-child-resumes"
+	echo "fork_child_resume=confirm-not-stopped-or-observed-exit-within-5s"
+	echo "fork_child_stop_probe=one-SIGSTOP-per-child-PID"
 	echo "fork_observer=proc-create-to-proc-start-in-kernel-stop-before-child-user-code"
 	echo "fork_observer_control=readiness-gated-dtrace-write-and-child-stopped-before-user-code"
 	echo "spawn_observer_control=readiness-gated-dtrace-write-and-posix_spawn-parent-child-attribution"
@@ -2857,8 +2973,10 @@ if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd namespace creation" "missing path=$NEW/tdata"
 fi
 if ! WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-working-dir.log")"; then
+	capture_home_startup_logs primary
 	fail "Telegramd startup log" "working-directory record did not appear"
 fi
+capture_home_startup_logs primary
 record "captured Telegramd startup log path=$WORKING_LOG"
 assert_grep "Telegramd startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-working-dir.log"
 process_command "$FORK_PID" > "$EVIDENCE_DIR/telegramd-command.txt"
@@ -2972,8 +3090,10 @@ if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd relaunch namespace" "missing path=$NEW/tdata"
 fi
 if ! RELAUNCH_WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log")"; then
+	capture_home_startup_logs relaunch
 	fail "Telegramd relaunch startup log" "working-directory record did not appear"
 fi
+capture_home_startup_logs relaunch
 record "captured Telegramd relaunch startup log path=$RELAUNCH_WORKING_LOG"
 assert_grep "Telegramd relaunch startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log"
 wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt" "official relaunch endpoint" 30
