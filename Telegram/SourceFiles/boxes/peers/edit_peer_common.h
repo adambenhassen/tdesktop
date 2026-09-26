@@ -24,6 +24,12 @@ constexpr auto kUsernameCheckTimeout = crl::time(200);
 
 class UsernameEditorFlow final {
 public:
+	enum class Mode {
+		Profile,
+		Group,
+		Channel,
+	};
+
 	enum class Status {
 		Default,
 		Pending,
@@ -43,14 +49,18 @@ public:
 		QString username;
 	};
 
+	explicit UsernameEditorFlow(Mode mode = Mode::Profile)
+	: _mode(mode) {
+	}
+
 	void inputChanged(const QString &username, bool locallyValid) {
 		++_revision;
 		_username = username;
 		_locallyValid = locallyValid;
 		_good = _unavailable && locallyValid;
-		_status = _unavailable
-			? Status::Unavailable
-			: (locallyValid ? Status::Default : Status::Error);
+		_status = locallyValid
+			? (_unavailable ? Status::Unavailable : Status::Default)
+			: Status::Error;
 	}
 
 	[[nodiscard]] std::optional<Request> requestStarted(bool force = false) {
@@ -59,6 +69,55 @@ public:
 		}
 		_status = Status::Pending;
 		return Request{ ++_revision, _username };
+	}
+
+	template <typename Send, typename Done, typename Fail>
+	[[nodiscard]] bool checkAccount(
+			const QString &checking,
+			Send send,
+			Done done,
+			Fail fail) {
+		if (_mode != Mode::Profile) {
+			return false;
+		}
+		return check(
+			checking,
+			false,
+			true,
+			std::move(send),
+			std::move(done),
+			std::move(fail));
+	}
+
+	template <typename Send, typename Done, typename Fail>
+	[[nodiscard]] bool checkPublicPeer(
+			const QString &checking,
+			bool initial,
+			Send send,
+			Done done,
+			Fail fail) {
+		if (_mode == Mode::Profile) {
+			return false;
+		}
+		return check(
+			checking,
+			initial,
+			!initial,
+			std::move(send),
+			std::move(done),
+			std::move(fail));
+	}
+
+	template <typename Update>
+	[[nodiscard]] bool saveAccount(Update update) const {
+		return (_mode == Mode::Profile)
+			&& trySave(false, std::move(update));
+	}
+
+	template <typename Update>
+	[[nodiscard]] bool savePublicPeer(Update update) const {
+		return (_mode != Mode::Profile)
+			&& trySave(true, std::move(update));
 	}
 
 	template <typename Send, typename Done, typename Fail>
@@ -165,6 +224,7 @@ public:
 	}
 
 private:
+	const Mode _mode;
 	quint64 _revision = 0;
 	QString _username;
 	bool _good = false;

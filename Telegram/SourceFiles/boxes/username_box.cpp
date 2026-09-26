@@ -142,8 +142,7 @@ rpl::producer<> UsernameEditor::save() {
 		return _saved.events();
 	}
 
-	const auto sent = _usernameEditorFlow.trySave(
-		false,
+	const auto sent = _usernameEditorFlow.saveAccount(
 		[=](const QString &username) {
 			_sentUsername = username;
 			_saveRequestId = _api.request(MTPaccount_UpdateUsername(
@@ -181,10 +180,8 @@ void UsernameEditor::check() {
 		return;
 	}
 	_checkUsername = name;
-	if (!_usernameEditorFlow.check(
+	if (!_usernameEditorFlow.checkAccount(
 		name,
-		false,
-		true,
 		[=](
 				const QString &checking,
 				auto done,

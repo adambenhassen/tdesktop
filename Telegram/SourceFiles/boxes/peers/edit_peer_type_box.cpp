@@ -256,6 +256,9 @@ Controller::Controller(
 , _originalRequestToJoin(_dataSavedValue
 	? _dataSavedValue->requestToJoin
 	: false)
+, _usernameEditorFlow(_isGroup
+	? Ui::EditPeer::UsernameEditorFlow::Mode::Group
+	: Ui::EditPeer::UsernameEditorFlow::Mode::Channel)
 , _wrap(container)
 , _checkUsernameTimer([=] { checkUsernameAvailability(); }) {
 	const auto username = _dataSavedValue
@@ -314,8 +317,7 @@ void Controller::submit(Fn<void(EditPeerTypeData)> done) {
 	const auto privacy = getPrivacy();
 	auto data = collectData();
 	const auto savedUsername = (privacy != Privacy::HasUsername)
-		|| _usernameEditorFlow.trySave(
-			true,
+		|| _usernameEditorFlow.savePublicPeer(
 			[&](const QString &username) {
 				data.username = username;
 			});
@@ -759,10 +761,9 @@ void Controller::checkUsernameAvailability() {
 	}
 	const auto channel = _peer->migrateToOrMe()->asChannel();
 	const auto username = channel ? channel->editableUsername() : QString();
-	const auto started = _usernameEditorFlow.check(
+	const auto started = _usernameEditorFlow.checkPublicPeer(
 		checking,
 		initial,
-		!initial,
 		[=](
 				const QString &name,
 				auto done,
