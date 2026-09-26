@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_enrollment.h"
+#include "mtproto/session.h"
 
 #include <QtCore/QByteArray>
 
@@ -201,6 +202,30 @@ TEST_CASE(PinnedNon80EndpointRestoresAsDirectTcpOnly) {
 		[DcOptions::Variants::Http].empty());
 
 	const auto proxied = restored.lookup(server.dcId, DcType::Regular, true);
+	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Tcp];
+	CHECK(proxiedTcp.size() == 1);
+	if (proxiedTcp.size() == 1) {
+		CHECK_EQ(proxiedTcp.front().ip, server.ip);
+		CHECK_EQ(proxiedTcp.front().port, 2443);
+	}
+	CHECK(proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+}
+
+TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "100.124.236.66";
+	server.port = 2443;
+	CHECK(options.setCustomServer(server));
+
+	CHECK(details::UseTcpForProxy(
+		ProxyData::Type::Http,
+		options.hasCustomServer()));
+	CHECK(!details::UseTcpForProxy(ProxyData::Type::Http, false));
+
+	const auto proxied = options.lookup(server.dcId, DcType::Regular, true);
 	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4]
 		[DcOptions::Variants::Tcp];
 	CHECK(proxiedTcp.size() == 1);

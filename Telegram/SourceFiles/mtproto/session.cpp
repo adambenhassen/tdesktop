@@ -18,6 +18,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace details {
 
+bool UseTcpForProxy(
+		ProxyData::Type proxyType,
+		bool hasCustomServer) {
+	return (proxyType != ProxyData::Type::Http) || hasCustomServer;
+}
+
 SessionOptions::SessionOptions(
 	const QString &systemLangCode,
 	const QString &cloudLangCode,
@@ -299,7 +305,9 @@ void Session::refreshOptions() {
 	const auto &proxy = settings.selected();
 	const auto isEnabled = settings.isEnabled();
 	const auto proxyType = (isEnabled ? proxy.type : ProxyData::Type::None);
-	const auto useTcp = (proxyType != ProxyData::Type::Http);
+	const auto useTcp = UseTcpForProxy(
+		proxyType,
+		_instance->dcOptions().hasCustomServer());
 	const auto useHttp = (proxyType != ProxyData::Type::Mtproto);
 	const auto useIPv4 = true;
 	const auto useIPv6 = settings.tryIPv6();
