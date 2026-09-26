@@ -1,0 +1,33 @@
+name: macOS Endpoint Security probe
+
+on:
+  pull_request:
+    paths:
+      - Telegram/build/probe_mac_eslogger.py
+      - .github/workflows/mac_eslogger_probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  telemetry-probe:
+    name: Endpoint Security sensitivity probe
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run non-gating telemetry probe
+        run: python3 Telegram/build/probe_mac_eslogger.py --evidence-dir "$RUNNER_TEMP/mac-eslogger-probe"
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-eslogger-probe
+          path: ${{ runner.temp }}/mac-eslogger-probe
+          if-no-files-found: error
