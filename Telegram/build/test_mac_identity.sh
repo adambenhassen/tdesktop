@@ -18,6 +18,7 @@ bash -n "$LAUNCH_CONTROLS_FILE"
 "$ISOLATION_FILE" --self-test-cleanup
 "$ISOLATION_FILE" --self-test-observer-coverage
 "$ISOLATION_FILE" --self-test-home-startup-logs
+"$ISOLATION_FILE" --self-test-delayed-trace-marker
 python3 - "$PLIST_FILE" <<'PY'
 import sys
 import xml.etree.ElementTree as ElementTree

@@ -19,6 +19,11 @@ elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-home-startup-logs" ]; then
 	TEST_ROOT="$(mktemp -d /tmp/main858-home-log-self-test.XXXXXX)"
 	APP_PATH=""
 	EVIDENCE_DIR="$TEST_ROOT/evidence"
+elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-delayed-trace-marker" ]; then
+	SELF_TEST_MODE=4
+	TEST_ROOT="$(mktemp -d /tmp/main858-delayed-marker-self-test.XXXXXX)"
+	APP_PATH=""
+	EVIDENCE_DIR="$TEST_ROOT/evidence"
 elif [ "$#" -ne 2 ]; then
 	echo "usage: mac_isolation_test.sh TELEGRAMD_APP EVIDENCE_DIR" >&2
 	exit 2
@@ -384,16 +389,53 @@ wait_for_trace_marker() {
 	local marker="$3"
 	local seconds="$4"
 	local i
+	# The launcher PID can be absent from a process snapshot while DTrace is
+	# starting or flushing its BEGIN marker. The marker is authoritative; wait
+	# its full finite window instead of treating launcher visibility as readiness.
 	for i in $(seq 1 $((seconds * 10))); do
 		if grep -F -- "$marker" "$path" >/dev/null 2>&1; then
 			return 0
 		fi
-		if ! process_alive "$pid"; then
-			return 1
-		fi
 		sleep 0.1
 	done
+	record "observer readiness marker timed out pid=$pid state=$(process_state_for_pid "$pid") marker=$marker"
 	return 1
+}
+
+run_delayed_trace_marker_self_test() {
+	local trace="$EVIDENCE_DIR/delayed-trace-marker.txt"
+	local owner_pid
+	mkdir -p "$EVIDENCE_DIR"
+	: > "$trace"
+	python3 - "$trace" <<'PY' &
+import os
+import sys
+import time
+
+trace = sys.argv[1]
+writer = os.fork()
+if writer == 0:
+    time.sleep(0.25)
+    with open(trace, "w", encoding="utf-8") as output:
+        output.write("observer-ready target=orphaned-child\n")
+    os._exit(0)
+os._exit(0)
+PY
+	owner_pid=$!
+	wait "$owner_pid" || true
+	if process_alive "$owner_pid"; then
+		rm -rf "$TEST_ROOT"
+		printf '%s\n' 'FAIL: observer launcher remained alive in delayed readiness fixture' >&2
+		return 1
+	fi
+	if ! wait_for_trace_marker "$owner_pid" "$trace" \
+		'observer-ready target=orphaned-child' 3; then
+		rm -rf "$TEST_ROOT"
+		printf '%s\n' 'FAIL: delayed observer readiness marker was discarded after launcher exit' >&2
+		return 1
+	fi
+	rm -rf "$TEST_ROOT"
+	printf '%s\n' 'delayed-trace-marker-after-launcher-exit=PASS'
 }
 
 wait_for_child_resume() {
@@ -2719,6 +2761,10 @@ if [ "$SELF_TEST_MODE" -eq 2 ]; then
 fi
 if [ "$SELF_TEST_MODE" -eq 3 ]; then
 	run_home_startup_log_self_test
+	exit $?
+fi
+if [ "$SELF_TEST_MODE" -eq 4 ]; then
+	run_delayed_trace_marker_self_test
 	exit $?
 fi
 
