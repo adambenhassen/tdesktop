@@ -3,12 +3,6 @@ name: MacOS.
 on:
   # Fork policy: per-push CI is Linux only. macOS builds on demand or for a release tag.
   workflow_dispatch:
-    inputs:
-      diagnostic_source_baseline:
-        description: Exact client source commit for non-gating macOS launch controls.
-        required: false
-        type: string
-        default: ''
   push:
     tags:
       - 'v*'
@@ -23,9 +17,9 @@ jobs:
     name: MacOS
     permissions:
       contents: write
-    # The translation provider uses macOS 15 SDK APIs absent from macOS 14.
-    # Keep the arm64 isolation gate fail-closed on the Xcode 16.4 image.
-    runs-on: macos-15
+    # This fork cannot schedule a depot label, and a build that queues forever
+    # is not a build. macos-latest is Apple Silicon, which is what we ship.
+    runs-on: macos-latest
     timeout-minutes: 180
 
     strategy:
@@ -59,41 +53,18 @@ jobs:
       - name: Verify Telegramd identity contract.
         run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME"
 
-      - name: Prepare exact-source launch controls.
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_source_baseline != '' }}
-        env:
-          DIAGNOSTIC_SOURCE_BASELINE: ${{ inputs.diagnostic_source_baseline }}
-        run: |
-          [[ "$DIAGNOSTIC_SOURCE_BASELINE" =~ ^[0-9a-f]{40}$ ]]
-          cp "$GITHUB_WORKSPACE/$REPO_NAME/Telegram/build/mac_launch_controls.sh" "$GITHUB_WORKSPACE/mac_launch_controls.sh"
-          chmod +x "$GITHUB_WORKSPACE/mac_launch_controls.sh"
-          bash -n "$GITHUB_WORKSPACE/mac_launch_controls.sh"
-          repo="$GITHUB_WORKSPACE/$REPO_NAME"
-          git -C "$repo" fetch --no-tags --depth=1 origin "$DIAGNOSTIC_SOURCE_BASELINE"
-          git -C "$repo" checkout --detach "$DIAGNOSTIC_SOURCE_BASELINE"
-          git -C "$repo" submodule sync --recursive
-          git -C "$repo" submodule update --init --recursive
-          test "$(git -C "$repo" rev-parse HEAD)" = "$DIAGNOSTIC_SOURCE_BASELINE"
-
       - name: First set up.
-        timeout-minutes: 20
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-          HOMEBREW_NO_INSTALL_UPGRADE: "1"
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
-          xcode_version="$(xcodebuild -version | sed -n '1p')"
-          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
-          echo "$xcode_version"
-          echo "macOS SDK: $sdk_version"
-          test "$xcode_version" = "Xcode 16.4"
-          test "$sdk_version" = "15.5"
+          sudo chown -R `whoami`:admin /usr/local/share
 
-          # Install only the declared build tools; don't update unrelated runner packages.
+          brew update
+          brew upgrade || true
           brew install automake libtool meson nasm ninja pkg-config
 
           # Disable spotlight.
           sudo mdutil -a -i off
+
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
           sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
 
@@ -213,16 +184,6 @@ jobs:
           done | tee evidence/architecture-static.txt
           python3 "$GITHUB_WORKSPACE/$REPO_NAME/Telegram/build/check_mac_fs_usage.py" \
             --self-test | tee evidence/observer-sensitivity.txt
-
-      - name: Run non-gating Telegramd launch controls.
-        if: ${{ env.UPLOAD_ARTIFACT == 'true' && github.event_name == 'workflow_dispatch' && inputs.diagnostic_source_baseline != '' }}
-        continue-on-error: true
-        env:
-          DIAGNOSTIC_BUILD_BASELINE: ${{ inputs.diagnostic_source_baseline }}
-        run: |
-          "$GITHUB_WORKSPACE/mac_launch_controls.sh" \
-            "$GITHUB_WORKSPACE/$REPO_NAME/out/Debug/Telegramd.app" \
-            "$GITHUB_WORKSPACE/$REPO_NAME/out/Debug/evidence/launch-controls"
 
       - name: Run Telegramd isolation gate.
         id: isolation

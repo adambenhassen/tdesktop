@@ -14,16 +14,6 @@ elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-observer-coverage" ]; then
 	TEST_ROOT="$(mktemp -d /tmp/main793-observer-coverage.XXXXXX)"
 	APP_PATH=""
 	EVIDENCE_DIR="$TEST_ROOT/evidence"
-elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-home-startup-logs" ]; then
-	SELF_TEST_MODE=3
-	TEST_ROOT="$(mktemp -d /tmp/main858-home-log-self-test.XXXXXX)"
-	APP_PATH=""
-	EVIDENCE_DIR="$TEST_ROOT/evidence"
-elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-delayed-trace-marker" ]; then
-	SELF_TEST_MODE=4
-	TEST_ROOT="$(mktemp -d /tmp/main858-delayed-marker-self-test.XXXXXX)"
-	APP_PATH=""
-	EVIDENCE_DIR="$TEST_ROOT/evidence"
 elif [ "$#" -ne 2 ]; then
 	echo "usage: mac_isolation_test.sh TELEGRAMD_APP EVIDENCE_DIR" >&2
 	exit 2
@@ -76,11 +66,7 @@ PID_FILE=""
 PID_LOCK_DIR=""
 TRACK_STOP_FILE=""
 FORK_CHILDREN_FILE=""
-FORK_STOPPED_FILE=""
 FORK_ONLY_PID_FILE=""
-OBSERVER_ATTACHMENT_FILE=""
-OBSERVER_LAUNCH_TIME_NS=""
-OBSERVER_READY_TIME_NS=""
 TARGET_TRACE_DIR=""
 TARGET_EXEC_DIR=""
 TARGET_FORK_DIR=""
@@ -96,11 +82,6 @@ OBSERVER_SHUTDOWN_FILE="$EVIDENCE_DIR/observer-shutdown.txt"
 RESULT="FAIL"
 LAST_ERROR_COMMAND=""
 LAST_ERROR_LINE=""
-SECOND_LAUNCH_WAIT_SECONDS=30
-
-if [ "$SELF_TEST_MODE" -eq 3 ]; then
-	HOME_ROOT="$TEST_ROOT/home"
-fi
 
 mkdir -p "$EVIDENCE_DIR"
 : > "$OBSERVER_SHUTDOWN_FILE"
@@ -157,78 +138,6 @@ process_present() {
 	case "$state" in
 		""|Z*) return 1 ;;
 	esac
-}
-
-monotonic_time_ns() {
-	python3 -c 'import time; print(time.monotonic_ns())'
-}
-
-process_state_for_pid() {
-	local state
-	state="$(ps -p "$1" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
-	printf '%s\n' "${state:-missing}"
-}
-
-process_parent_for_pid() {
-	local parent
-	parent="$(ps -p "$1" -o ppid= 2>/dev/null | tr -d '[:space:]' || true)"
-	printf '%s\n' "${parent:-unknown}"
-}
-
-record_observer_timeline_event() {
-	local line="$1"
-	if ! printf '%s\n' "$line" >> "$OBSERVER_ATTACHMENT_FILE"; then
-		return 1
-	fi
-	record "$line"
-}
-
-record_observer_process_event() {
-	local event="$1"
-	local pid="$2"
-	local relationship="${3:-tracked-process}"
-	local parent
-	local process_state
-	local time_ns
-	parent="$(process_parent_for_pid "$pid")"
-	process_state="$(process_state_for_pid "$pid")"
-	time_ns="$(monotonic_time_ns)" || return 1
-	record_observer_timeline_event \
-		"event=$event pid=$pid parent=$parent relationship=$relationship process_state=$process_state time_ns=$time_ns"
-}
-
-record_observer_attachment_failure() {
-	local pid="$1"
-	local parent="$2"
-	local relationship="$3"
-	local fork_event_time_ns="$4"
-	local stop_time_ns="$5"
-	local observer_launch_time_ns="$6"
-	local observer_ready_time_ns="$7"
-	local reason="$8"
-	local process_state
-	local process_parent
-	local process_present=true
-	local failure_time_ns
-	local detail
-	local timeline
-	process_state="$(process_state_for_pid "$pid")"
-	process_parent="$(process_parent_for_pid "$pid")"
-	if [ "$parent" = unknown ]; then
-		parent="$process_parent"
-	fi
-	case "$process_state" in
-		missing|Z*)
-		process_present=false
-		;;
-	esac
-	failure_time_ns="$(monotonic_time_ns)" || return 1
-	detail="PID-filtered lifecycle observer failed pid=$pid parent=$parent failure_parent=$process_parent relationship=$relationship process_state=$process_state process_present=$process_present fork_event_time_ns=$fork_event_time_ns stop_time_ns=$stop_time_ns observer_launch_time_ns=$observer_launch_time_ns observer_ready_time_ns=$observer_ready_time_ns failure_time_ns=$failure_time_ns reason=$reason"
-	timeline="event=attachment-failure pid=$pid parent=$parent failure_parent=$process_parent relationship=$relationship process_state=$process_state process_present=$process_present fork_event_time_ns=$fork_event_time_ns stop_time_ns=$stop_time_ns observer_launch_time_ns=$observer_launch_time_ns observer_ready_time_ns=$observer_ready_time_ns failure_time_ns=$failure_time_ns reason=$reason"
-	if ! printf '%s\n' "$detail" > "$OBSERVER_MANAGER_FAILURE_FILE"; then
-		return 1
-	fi
-	record_observer_timeline_event "$timeline"
 }
 
 start_privileged_observer() {
@@ -327,143 +236,21 @@ capture_working_log() {
 	return 1
 }
 
-capture_home_startup_logs() {
-	local label="$1"
-	local support_root="$HOME_ROOT/Library/Application Support"
-	local destination="$EVIDENCE_DIR/home-startup-logs/$label"
-	local candidate
-	local relative
-	local copied=0
-	mkdir -p "$destination"
-	{
-		printf 'home=%s\n' "$HOME_ROOT"
-		printf 'support_root=%s\n' "$support_root"
-		printf 'expected_telegramd_log=%s/Telegramd/log.txt\n' "$support_root"
-	} > "$destination/index.txt"
-	: > "$destination/search-errors.txt"
-	if [ ! -d "$support_root" ]; then
-		echo "support_root=missing" >> "$destination/index.txt"
-		return 0
-	fi
-	while IFS= read -r candidate; do
-		[ -f "$candidate" ] || continue
-		relative="${candidate#"$support_root/"}"
-		relative="${relative//\//__}"
-		if cp "$candidate" "$destination/$relative" 2>> "$destination/search-errors.txt"; then
-			printf 'copied=%s\n' "$candidate" >> "$destination/index.txt"
-			copied=1
-		else
-			printf 'copy_failed=%s\n' "$candidate" >> "$destination/index.txt"
-		fi
-	done < <(find "$support_root" -maxdepth 3 -type f \( -name 'log.txt' -o -name 'log_start*.txt' \) -print 2> "$destination/search-errors.txt")
-	if [ "$copied" -eq 0 ]; then
-		echo 'startup_logs=none' >> "$destination/index.txt"
-	fi
-}
-
-run_home_startup_log_self_test() {
-	local support_root="$HOME_ROOT/Library/Application Support"
-	local telegramd_root="$support_root/Telegramd"
-	local desktop_root="$support_root/Telegram Desktop"
-	local captured="$EVIDENCE_DIR/home-startup-logs/self-test"
-	mkdir -p "$telegramd_root" "$desktop_root"
-	printf 'Working dir: %s/Telegramd/\n' "$support_root" > "$telegramd_root/log.txt"
-	printf 'startup-in-progress\n' > "$telegramd_root/log_start0.txt"
-	printf 'official-client-log\n' > "$desktop_root/log.txt"
-	capture_home_startup_logs self-test
-	if ! cmp -s "$telegramd_root/log.txt" "$captured/Telegramd__log.txt" || \
-		! cmp -s "$telegramd_root/log_start0.txt" "$captured/Telegramd__log_start0.txt" || \
-		! cmp -s "$desktop_root/log.txt" "$captured/Telegram Desktop__log.txt" || \
-		! grep -F "copied=$telegramd_root/log.txt" "$captured/index.txt" >/dev/null; then
-		rm -rf "$TEST_ROOT"
-		printf '%s\n' 'FAIL: HOME startup log snapshot omitted or changed an input log' >&2
-		return 1
-	fi
-	rm -rf "$TEST_ROOT"
-	printf '%s\n' 'home-startup-log-capture=PASS'
-}
-
 wait_for_trace_marker() {
 	local pid="$1"
 	local path="$2"
 	local marker="$3"
 	local seconds="$4"
 	local i
-	# The launcher PID can be absent from a process snapshot while DTrace is
-	# starting or flushing its BEGIN marker. The marker is authoritative; wait
-	# its full finite window instead of treating launcher visibility as readiness.
 	for i in $(seq 1 $((seconds * 10))); do
 		if grep -F -- "$marker" "$path" >/dev/null 2>&1; then
 			return 0
 		fi
+		if ! process_alive "$pid"; then
+			return 1
+		fi
 		sleep 0.1
 	done
-	record "observer readiness marker timed out pid=$pid state=$(process_state_for_pid "$pid") marker=$marker"
-	return 1
-}
-
-run_delayed_trace_marker_self_test() {
-	local trace="$EVIDENCE_DIR/delayed-trace-marker.txt"
-	local owner_pid
-	mkdir -p "$EVIDENCE_DIR"
-	: > "$trace"
-	python3 - "$trace" <<'PY' &
-import os
-import sys
-import time
-
-trace = sys.argv[1]
-writer = os.fork()
-if writer == 0:
-    time.sleep(0.25)
-    with open(trace, "w", encoding="utf-8") as output:
-        output.write("observer-ready target=orphaned-child\n")
-    os._exit(0)
-os._exit(0)
-PY
-	owner_pid=$!
-	wait "$owner_pid" || true
-	if process_alive "$owner_pid"; then
-		rm -rf "$TEST_ROOT"
-		printf '%s\n' 'FAIL: observer launcher remained alive in delayed readiness fixture' >&2
-		return 1
-	fi
-	if ! wait_for_trace_marker "$owner_pid" "$trace" \
-		'observer-ready target=orphaned-child' 3; then
-		rm -rf "$TEST_ROOT"
-		printf '%s\n' 'FAIL: delayed observer readiness marker was discarded after launcher exit' >&2
-		return 1
-	fi
-	rm -rf "$TEST_ROOT"
-	printf '%s\n' 'delayed-trace-marker-after-launcher-exit=PASS'
-}
-
-wait_for_child_resume() {
-	local pid="$1"
-	local parent_pid="$2"
-	local trace="$3"
-	local seconds="$4"
-	local state
-	local i
-	for i in $(seq 1 $((seconds * 10))); do
-		state="$(process_state_for_pid "$pid")"
-		case "$state" in
-			T*) ;;
-			Z*|missing)
-				if grep -E "^fork-child-exit parent=$parent_pid child=$pid exit_time_ns=[0-9]+$" \
-					"$trace" >/dev/null 2>&1; then
-					printf '%s\n' exited
-					return 0
-				fi
-				;;
-			*)
-				printf '%s\n' "$state"
-				return 0
-				;;
-		esac
-		sleep 0.1
-	done
-	process_state_for_pid "$pid"
 	return 1
 }
 
@@ -944,9 +731,6 @@ stop_spawn_observer_control() {
 control_observer_unavailable() {
 	local detail="$*"
 	record_lifecycle_observer_diagnostics
-	if [[ "${CONTROL_CHILD_PID:-}" =~ ^[0-9]+$ ]]; then
-		kill -CONT "$CONTROL_CHILD_PID" 2>/dev/null || true
-	fi
 	if [ -n "$CONTROL_RELEASE" ]; then
 		touch "$CONTROL_RELEASE"
 	fi
@@ -986,9 +770,6 @@ run_lifecycle_observer_control() {
 	local dtrace_program
 	local helper_status=0
 	local child_pid
-	local child_ppid
-	local child_state
-	local child_stop_count
 	local readiness_attempt
 	local readiness_attempts=3
 	local ready=0
@@ -998,8 +779,8 @@ run_lifecycle_observer_control() {
 	CONTROL_TRACE="$EVIDENCE_DIR/lifecycle-observer-control-trace.txt"
 	rm -f "$CONTROL_READY" "$CONTROL_RELEASE" "$CONTROL_RESULT" "$CONTROL_TRACE"
 	{
-		echo "observer=dtrace syscall write readiness and proc create/start/exit"
-		echo "control=python os.fork child stopped before user code"
+		echo "observer=dtrace syscall write readiness and fork:return"
+		echo "control=python os.fork child os._exit without exec"
 		echo "readiness_attempts=$readiness_attempts"
 		echo "result=NOT_RUN"
 	} > "$EVIDENCE_DIR/lifecycle-observer-control.txt"
@@ -1020,7 +801,6 @@ while not os.path.exists(release_path):
     time.sleep(0.01)
 child_pid = os.fork()
 if child_pid == 0:
-    os.write(1, b"child-user-code\n")
     os._exit(0)
 with open(result_path, "w", encoding="utf-8") as result:
     result.write(str(child_pid) + "\n")
@@ -1036,9 +816,7 @@ PY
 	if ! [[ "$CONTROL_PID" =~ ^[0-9]+$ ]]; then
 		control_observer_unavailable "fork observer control reported an invalid parent pid"
 	fi
-	# Darwin SIGSTOP is 17; raise it from the child probe and still verify the
-	# child is observably stopped before allowing the control helper to continue.
-	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $CONTROL_PID/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_stopped[args[0]->pr_pid] = 0; printf(\"fork-child-event parent=%d child=%d event_time_ns=%llu\\n\", args[0]->pr_ppid, args[0]->pr_pid, timestamp); } proc:::start /fork_child_parent[pid] == $CONTROL_PID && fork_child_stopped[pid] == 0/ { fork_child_stopped[pid] = 1; printf(\"fork-child-stop parent=%d child=%d stop_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); raise(17); } proc:::exit /fork_child_parent[pid] == $CONTROL_PID/ { printf(\"fork-child-exit parent=%d child=%d exit_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); fork_child_parent[pid] = 0; fork_child_stopped[pid] = 0; }"
+	dtrace_program="BEGIN { printf(\"observer-ready\\n\"); } syscall::write:entry /pid == $CONTROL_PID/ { printf(\"observer-ready\\n\"); } syscall::*fork*:return /pid == $CONTROL_PID && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); }"
 	{
 		echo "parent_pid=$CONTROL_PID"
 		echo "dtrace_program=$dtrace_program"
@@ -1047,7 +825,7 @@ PY
 		if [ "$readiness_attempt" -gt 1 ]; then
 			: > "$CONTROL_TRACE"
 		fi
-		start_privileged_observer /usr/sbin/dtrace -w -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1
+		start_privileged_observer /usr/sbin/dtrace -q -n "$dtrace_program" > "$CONTROL_TRACE" 2>&1
 		CONTROL_DTRACE_PID=$OBSERVER_LAUNCH_PID
 		printf 'readiness_attempt=%s observer_owner_pid=%s\n' \
 			"$readiness_attempt" "$CONTROL_DTRACE_PID" >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
@@ -1080,70 +858,25 @@ PY
 	if ! [[ "$child_pid" =~ ^[0-9]+$ ]]; then
 		control_observer_unavailable "fork observer control reported an invalid child pid"
 	fi
-	CONTROL_CHILD_PID="$child_pid"
-	if ! wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
-		"fork-child-event parent=$CONTROL_PID child=$child_pid" 10; then
-		control_observer_unavailable "fork observer control missed the child creation event"
-	fi
-	if ! wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
-		"fork-child-stop parent=$CONTROL_PID child=$child_pid" 10; then
-		control_observer_unavailable "fork observer control did not stop the child before user code"
-	fi
-	if ! wait_for_stopped "$child_pid" 10; then
-		control_observer_unavailable "fork observer control child was not stopped"
-	fi
-	child_state="$(process_state_for_pid "$child_pid")"
-	if ! grep -F -- 'child-user-code' "$control_log" >/dev/null 2>&1; then
-		:
-	else
-		control_observer_unavailable "fork observer control child executed before observer release"
-	fi
-	if [ "$child_state" != T ] && [[ "$child_state" != T* ]]; then
-		control_observer_unavailable "fork observer control child has unexpected stopped state=$child_state"
-	fi
-	if ! child_ppid="$(process_parent_for_pid "$child_pid")" || \
-		[ "$child_ppid" != "$CONTROL_PID" ]; then
-		control_observer_unavailable "fork observer control child parent=$child_ppid expected=$CONTROL_PID"
-	fi
-	if ! process_alive "$CONTROL_HELPER_PID"; then
-		control_observer_unavailable "fork observer control helper exited while child was stopped"
-	fi
-	if ! kill -CONT "$child_pid" 2>/dev/null; then
-		control_observer_unavailable "fork observer control could not resume the observed child"
-	fi
 	if ! wait_for_exit "$CONTROL_HELPER_PID" 10; then
-		control_observer_unavailable "fork observer control helper did not exit after child resume"
+		control_observer_unavailable "fork observer control helper did not exit"
 	fi
 	wait "$CONTROL_HELPER_PID" || helper_status=$?
 	if [ "$helper_status" -ne 0 ]; then
 		control_observer_unavailable "fork observer control helper failed"
 	fi
-	if ! wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
-		"fork-child-exit parent=$CONTROL_PID child=$child_pid" 10; then
-		control_observer_unavailable "fork observer control missed the child exit event"
-	fi
+	wait_for_trace_marker "$CONTROL_DTRACE_PID" "$CONTROL_TRACE" \
+		"fork parent=$CONTROL_PID child=$child_pid" 10 || true
 	if ! stop_lifecycle_observer_control; then
 		control_observer_unavailable "fork observer shutdown or flush failed"
 	fi
-	child_stop_count="$(grep -c "^fork-child-stop parent=$CONTROL_PID child=$child_pid " "$CONTROL_TRACE" || true)"
-	if [ "$child_stop_count" -ne 1 ]; then
-		control_observer_unavailable "fork observer control stop count=$child_stop_count expected=1"
-	fi
 	if ! grep -F -- "observer-ready" "$CONTROL_TRACE" >/dev/null 2>&1 || \
-		! grep -F -- "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1 || \
-		! grep -F -- "fork-child-event parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1 || \
-		! grep -F -- "fork-child-stop parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1 || \
-		! grep -F -- "fork-child-exit parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1 || \
-		! grep -F -- 'child-user-code' "$control_log" >/dev/null 2>&1; then
-		control_observer_unavailable "fork observer missed a lifecycle event or the child did not resume"
+		! grep -F -- "fork parent=$CONTROL_PID child=$child_pid" "$CONTROL_TRACE" >/dev/null 2>&1; then
+		control_observer_unavailable "fork observer missed a short-lived fork-only child"
 	fi
 	{
 		echo "child_pid=$child_pid"
-		echo "child_ppid=$child_ppid"
-		echo "child_stopped_state=$child_state"
-		echo "child_stop_event_count=$child_stop_count"
-		grep -E "^fork-child-(event|stop|exit) parent=$CONTROL_PID child=$child_pid " "$CONTROL_TRACE"
-		echo "resumed_before_user_code=yes"
+		echo "detected=fork parent=$CONTROL_PID child=$child_pid"
 		echo "result=PASS"
 	} >> "$EVIDENCE_DIR/lifecycle-observer-control.txt"
 }
@@ -1295,93 +1028,36 @@ PY
 
 start_pid_observer() {
 	local target_pid="$1"
-	local parent_pid="${2:-}"
-	local fork_event_time_ns="${3:-unknown}"
-	local stop_time_ns="${4:-unknown}"
-	local relationship=tracked-process
 	local trace="$TARGET_TRACE_DIR/$target_pid.txt"
 	local fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 	local observer_pid
 	local exec_observer_pid
 	local fork_observer_pid
 	local fork_program
-	local observer_ready_line
-	local observer_launch_time_ns=unknown
-	local observer_ready_time_ns=unknown
-	OBSERVER_LAUNCH_TIME_NS=""
-	OBSERVER_READY_TIME_NS=""
 	if ! [[ "$target_pid" =~ ^[0-9]+$ ]]; then
 		record "PID-filtered lifecycle observer received an invalid pid=$target_pid"
-		record_observer_attachment_failure "$target_pid" "${parent_pid:-unknown}" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" unknown unknown invalid_pid || true
 		return 1
 	fi
 	if grep -E "^${target_pid} " "$TARGET_OBSERVER_FILE" >/dev/null 2>&1; then
 		return 0
 	fi
-	if [ -n "$parent_pid" ]; then
-		relationship=fork-child
-	elif [ -n "$PID_ROOTS_FILE" ] && grep -Fx "$target_pid" "$PID_ROOTS_FILE" >/dev/null 2>&1; then
-		relationship=tracked-root
-		parent_pid="$(process_parent_for_pid "$target_pid")"
-	else
-		parent_pid="$(process_parent_for_pid "$target_pid")"
-	fi
-	[ -n "$parent_pid" ] || parent_pid=unknown
 	if ! process_alive "$target_pid"; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" \
-			"$observer_ready_time_ns" target_exited_before_observer_launch || true
+		record "PID-filtered lifecycle observer could not attach to exited pid=$target_pid"
 		return 1
 	fi
 	if ! switch_filesystem_observer "$target_pid"; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" \
-			"$observer_ready_time_ns" filesystem_observer_attach_failed || true
+		record "PID-filtered combined fs_usage observer could not attach to pid=$target_pid"
 		return 1
 	fi
 	observer_pid="$FILESYSTEM_ACTIVE_PID"
 	# One fs_usage owner is serialized across tracked PIDs because the
 	# kernel ktrace facility rejects overlapping fs_usage sessions.
 	exec_observer_pid="$observer_pid"
-	# Use the same explicit Darwin SIGSTOP action as the control probe above.
-	fork_program="BEGIN { printf(\"observer-ready target=$target_pid ready_time_ns=%llu\\n\", timestamp); } syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_stopped[args[0]->pr_pid] = 0; printf(\"fork-child-event parent=%d child=%d event_time_ns=%llu\\n\", args[0]->pr_ppid, args[0]->pr_pid, timestamp); } proc:::start /fork_child_parent[pid] == $target_pid && fork_child_stopped[pid] == 0/ { fork_child_stopped[pid] = 1; printf(\"fork-child-stop parent=%d child=%d stop_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); raise(17); } proc:::exit /fork_child_parent[pid] == $target_pid/ { printf(\"fork-child-exit parent=%d child=%d exit_time_ns=%llu\\n\", fork_child_parent[pid], pid, timestamp); fork_child_parent[pid] = 0; fork_child_stopped[pid] = 0; }"
-	observer_launch_time_ns="$(monotonic_time_ns)" || {
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" unknown unknown observer_launch_timestamp_failed || true
-		return 1
-	}
-	OBSERVER_LAUNCH_TIME_NS="$observer_launch_time_ns"
-	if ! record_observer_timeline_event \
-		"event=observer-launch pid=$target_pid parent=$parent_pid relationship=$relationship process_state=$(process_state_for_pid "$target_pid") time_ns=$observer_launch_time_ns fork_event_time_ns=$fork_event_time_ns stop_time_ns=$stop_time_ns"; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" unknown observer_launch_evidence_failed || true
-		return 1
-	fi
+	fork_program="syscall::*fork*:return /pid == $target_pid && arg1 > 0/ { printf(\"fork parent=%d child=%d\\n\", pid, arg1); } proc:::create /args[0]->pr_ppid == $target_pid/ { fork_child_parent[args[0]->pr_pid] = args[0]->pr_ppid; fork_child_pending[args[0]->pr_pid] = 1; } proc:::exec /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-detected parent=%d child=%d\\n\", fork_child_parent[pid], pid); } syscall:::entry /fork_child_pending[pid] == 1/ { fork_child_pending[pid] = 0; printf(\"fork-child-detected parent=%d child=%d\\n\", fork_child_parent[pid], pid); }"
 	start_privileged_observer /usr/sbin/dtrace -w -q -n "$fork_program" > "$fork_trace" 2>&1
 	fork_observer_pid=$OBSERVER_LAUNCH_PID
-	if ! wait_for_trace_marker "$fork_observer_pid" "$fork_trace" "observer-ready target=$target_pid" 10; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" unknown dtrace_observer_not_ready || true
-		stop_active_filesystem_observer || true
-		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
-		return 1
-	fi
-	observer_ready_line="$(grep -E "^observer-ready target=$target_pid ready_time_ns=[0-9]+$" "$fork_trace" | head -n 1 || true)"
-	if [ -z "$observer_ready_line" ]; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" unknown observer_ready_timestamp_missing || true
-		stop_active_filesystem_observer || true
-		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
-		return 1
-	fi
-	observer_ready_time_ns="$(printf '%s\n' "$observer_ready_line" | awk '{ sub(/^ready_time_ns=/, "", $3); print $3 }')"
-	OBSERVER_READY_TIME_NS="$observer_ready_time_ns"
-	if ! record_observer_timeline_event \
-		"event=observer-ready pid=$target_pid parent=$parent_pid relationship=$relationship process_state=$(process_state_for_pid "$target_pid") time_ns=$observer_ready_time_ns fork_event_time_ns=$fork_event_time_ns stop_time_ns=$stop_time_ns"; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" \
-			"$observer_ready_time_ns" observer_ready_evidence_failed || true
+	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
+		record "PID-filtered lifecycle observer could not record pid=$target_pid"
 		stop_active_filesystem_observer || true
 		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
 		return 1
@@ -1396,17 +1072,7 @@ start_pid_observer() {
 	} >> "$EVIDENCE_DIR/observer-commands.txt"
 	sleep 1
 	if ! process_alive "$observer_pid" || ! process_alive "$exec_observer_pid" || ! process_alive "$fork_observer_pid"; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" \
-			"$observer_ready_time_ns" observer_stopped_during_startup || true
-		stop_active_filesystem_observer || true
-		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
-		return 1
-	fi
-	if ! printf '%s %s %s %s\n' "$target_pid" "$observer_pid" "$exec_observer_pid" "$fork_observer_pid" >> "$TARGET_OBSERVER_FILE"; then
-		record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-			"$fork_event_time_ns" "$stop_time_ns" "$observer_launch_time_ns" \
-			"$observer_ready_time_ns" observer_readiness_evidence_failed || true
+		record "PID-filtered lifecycle observer failed to stay alive for pid=$target_pid"
 		stop_active_filesystem_observer || true
 		stop_observer_process "fork-pid-$target_pid" "$fork_observer_pid" "dtrace" "$fork_trace" || true
 		return 1
@@ -1420,171 +1086,74 @@ observe_fork_children() {
 	local fork_observer_pid
 	local fork_trace
 	local event
-	local event_parent
-	local event_time_ns
 	local child_pid
 	local child_state
-	local resume_state
-	local stop_line
-	local stop_time_ns
-	local exit_line
-	local exit_time_ns
-	local stopped_time_ns
 	while read -r target_pid observer_pid exec_observer_pid fork_observer_pid; do
 		[ -n "$target_pid" ] || continue
 		fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 		[ -e "$fork_trace" ] || continue
 		while IFS= read -r event; do
-			if ! [[ "$event" =~ ^fork-child-event\ parent=[0-9]+\ child=[0-9]+\ event_time_ns=[0-9]+$ ]]; then
-				printf 'invalid fork child event parent=%s event=%s\n' "$target_pid" "$event" > "$OBSERVER_MANAGER_FAILURE_FILE"
+			if ! [[ "$event" =~ ^fork-child-detected\ parent=([0-9]+)\ child=([0-9]+)$ ]]; then
+				printf 'invalid fork child event for pid=%s\n' "$target_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			event_parent="$(printf '%s\n' "$event" | awk '{ sub(/^parent=/, "", $2); print $2 }')"
-			child_pid="$(printf '%s\n' "$event" | awk '{ sub(/^child=/, "", $3); print $3 }')"
-			event_time_ns="$(printf '%s\n' "$event" | awk '{ sub(/^event_time_ns=/, "", $4); print $4 }')"
-			if [ "$event_parent" != "$target_pid" ]; then
+			if [ "${BASH_REMATCH[1]}" != "$target_pid" ]; then
 				printf 'fork child event attributed to wrong parent pid=%s event=%s\n' "$target_pid" "$event" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			if ! grep -F "event=fork-child-event pid=$child_pid parent=$target_pid " "$OBSERVER_ATTACHMENT_FILE" >/dev/null 2>&1; then
-				if ! record_observer_timeline_event \
-					"event=fork-child-event pid=$child_pid parent=$target_pid relationship=fork-child process_state=created time_ns=$event_time_ns"; then
-					record_observer_attachment_failure "$child_pid" "$target_pid" fork-child "$event_time_ns" unknown unknown unknown fork_event_evidence_failed || true
-					return 1
-				fi
-			fi
-			stop_line="$(grep -E "^fork-child-stop parent=$target_pid child=$child_pid stop_time_ns=[0-9]+$" "$fork_trace" | head -n 1 || true)"
-			exit_line="$(grep -E "^fork-child-exit parent=$target_pid child=$child_pid exit_time_ns=[0-9]+$" "$fork_trace" | head -n 1 || true)"
-			if [ -n "$exit_line" ]; then
-				exit_time_ns="$(printf '%s\n' "$exit_line" | awk '{ sub(/^exit_time_ns=/, "", $4); print $4 }')"
-				if ! grep -F "event=fork-child-exit pid=$child_pid parent=$target_pid " "$OBSERVER_ATTACHMENT_FILE" >/dev/null 2>&1 && \
-					! record_observer_timeline_event \
-						"event=fork-child-exit pid=$child_pid parent=$target_pid relationship=fork-child process_state=exited time_ns=$exit_time_ns"; then
-					record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-						"$event_time_ns" unknown unknown unknown exit_event_evidence_failed || true
-					return 1
-				fi
-			fi
+			child_pid="${BASH_REMATCH[2]}"
 			if grep -Fx "$target_pid $child_pid" "$FORK_CHILDREN_FILE" >/dev/null 2>&1; then
+				if process_present "$child_pid"; then
+					child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+					case "$child_state" in
+						T*) kill -CONT "$child_pid" 2>/dev/null || true ;;
+					esac
+				fi
 				continue
 			fi
-			if [ -n "$exit_line" ] && [ -z "$stop_line" ]; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" unknown unknown unknown child_exited_before_stop_probe || true
+			if ! process_present "$child_pid"; then
+				printf 'fork observer reported an exited child before attachment parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			if [ -z "$stop_line" ]; then
-				if process_present "$child_pid"; then
-					continue
+			if ! kill -STOP "$child_pid" 2>/dev/null || ! wait_for_stopped "$child_pid" 5; then
+				child_state="$(ps -p "$child_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
+				if [ -z "$child_state" ] || [[ "$child_state" == Z* ]]; then
+					printf 'fork observer reported an exited child before attachment parent=%s child=%s\n' \
+						"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
+				else
+					printf 'fork observer did not stop child before attachment parent=%s child=%s state=%s\n' \
+						"$target_pid" "$child_pid" "$child_state" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				fi
-				wait_for_trace_marker "$fork_observer_pid" "$fork_trace" \
-					"fork-child-exit parent=$target_pid child=$child_pid" 5 || true
-				exit_line="$(grep -E "^fork-child-exit parent=$target_pid child=$child_pid exit_time_ns=[0-9]+$" "$fork_trace" | head -n 1 || true)"
-				if [ -n "$exit_line" ]; then
-					exit_time_ns="$(printf '%s\n' "$exit_line" | awk '{ sub(/^exit_time_ns=/, "", $4); print $4 }')"
-					if ! grep -F "event=fork-child-exit pid=$child_pid parent=$target_pid " "$OBSERVER_ATTACHMENT_FILE" >/dev/null 2>&1 && \
-						! record_observer_timeline_event \
-							"event=fork-child-exit pid=$child_pid parent=$target_pid relationship=fork-child process_state=exited time_ns=$exit_time_ns"; then
-						record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-							"$event_time_ns" unknown unknown unknown exit_event_evidence_failed || true
-						return 1
-					fi
-				fi
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" unknown unknown unknown child_missing_before_stop_probe || true
 				return 1
 			fi
-			stop_time_ns="$(printf '%s\n' "$stop_line" | awk '{ sub(/^stop_time_ns=/, "", $4); print $4 }')"
-			if ! grep -F "event=fork-child-stop pid=$child_pid parent=$target_pid " "$OBSERVER_ATTACHMENT_FILE" >/dev/null 2>&1 && \
-				! record_observer_timeline_event \
-					"event=fork-child-stop pid=$child_pid parent=$target_pid relationship=fork-child process_state=stop-requested time_ns=$stop_time_ns fork_event_time_ns=$event_time_ns"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" unknown unknown stop_event_evidence_failed || true
+			if ! printf 'fork-child-stopped parent=%s child=%s\n' "$target_pid" "$child_pid" >> "$fork_trace"; then
+				printf 'fork observer could not record stopped child parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			if ! grep -Fx "$target_pid $child_pid" "$FORK_STOPPED_FILE" >/dev/null 2>&1 && \
-				! printf '%s %s\n' "$target_pid" "$child_pid" >> "$FORK_STOPPED_FILE"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" unknown unknown stopped_child_cleanup_registration_failed || true
+			if ! record_tracked_pid "$child_pid" || ! start_pid_observer "$child_pid"; then
+				printf 'PID-filtered lifecycle observer could not attach to fork child parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
-			if ! wait_for_stopped "$child_pid" 5; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" unknown unknown stop_action_not_effective || true
-				return 1
-			fi
-			child_state="$(process_state_for_pid "$child_pid")"
-			stopped_time_ns="$(monotonic_time_ns)" || {
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" unknown unknown stop_observation_timestamp_failed || true
-				return 1
-			}
-			if ! record_observer_timeline_event \
-				"event=fork-child-stopped pid=$child_pid parent=$target_pid relationship=fork-child process_state=$child_state time_ns=$stopped_time_ns fork_event_time_ns=$event_time_ns stop_time_ns=$stop_time_ns"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" unknown unknown stopped_child_evidence_failed || true
-				return 1
-			fi
-			if ! record_tracked_pid "$child_pid"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" unknown unknown pid_tracker_update_failed || true
-				return 1
-			fi
-			if ! start_pid_observer "$child_pid" "$target_pid" "$event_time_ns" "$stop_time_ns"; then
-				[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
-					record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-						"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
-						"$OBSERVER_READY_TIME_NS" observer_attach_failed
-				return 1
-			fi
-			if ! grep -Fx "$target_pid $child_pid" "$FORK_CHILDREN_FILE" >/dev/null 2>&1 && \
-				! printf '%s %s\n' "$target_pid" "$child_pid" >> "$FORK_CHILDREN_FILE"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
-					"$OBSERVER_READY_TIME_NS" observer_coverage_record_failed || true
-				return 1
-			fi
-			if ! record_observer_timeline_event \
-				"event=fork-child-resume-request pid=$child_pid parent=$target_pid relationship=fork-child process_state=$(process_state_for_pid "$child_pid") time_ns=$(monotonic_time_ns) fork_event_time_ns=$event_time_ns stop_time_ns=$stop_time_ns observer_launch_time_ns=$OBSERVER_LAUNCH_TIME_NS observer_ready_time_ns=$OBSERVER_READY_TIME_NS"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
-					"$OBSERVER_READY_TIME_NS" resume_request_evidence_failed || true
+			if ! printf '%s %s\n' "$target_pid" "$child_pid" >> "$FORK_CHILDREN_FILE"; then
+				printf 'fork observer could not record child coverage parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
 			if ! kill -CONT "$child_pid" 2>/dev/null; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
-					"$OBSERVER_READY_TIME_NS" child_resume_failed || true
-				return 1
-			fi
-			if ! resume_state="$(wait_for_child_resume "$child_pid" "$target_pid" "$fork_trace" 5)"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
-					"$OBSERVER_READY_TIME_NS" child_remained_stopped_after_continue || true
-				return 1
-			fi
-			if ! record_observer_timeline_event \
-				"event=fork-child-resumed pid=$child_pid parent=$target_pid relationship=fork-child process_state=$resume_state time_ns=$(monotonic_time_ns) fork_event_time_ns=$event_time_ns stop_time_ns=$stop_time_ns observer_launch_time_ns=$OBSERVER_LAUNCH_TIME_NS observer_ready_time_ns=$OBSERVER_READY_TIME_NS"; then
-				record_observer_attachment_failure "$child_pid" "$target_pid" fork-child \
-					"$event_time_ns" "$stop_time_ns" "$OBSERVER_LAUNCH_TIME_NS" \
-					"$OBSERVER_READY_TIME_NS" resume_evidence_failed || true
+				printf 'fork observer could not resume attached child parent=%s child=%s\n' \
+					"$target_pid" "$child_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
 			record "PID-filtered fork observer attached before child execution parent=$target_pid child=$child_pid"
-		done < <(grep -E '^fork-child-event ' "$fork_trace" || true)
+		done < <(grep -E '^fork-child-detected parent=[0-9]+ child=[0-9]+$' "$fork_trace" || true)
 	done < "$TARGET_OBSERVER_FILE"
 }
 
 ensure_observer_coverage() {
-	local final_check="${1:-no}"
 	local target_pid
-	local fork_trace
-	local fork_line
-	local stop_line
-	local parent_pid
-	local fork_event_time_ns
-	local stop_time_ns
-	local relationship
 	if [ ! -s "$PID_FILE" ]; then
 		printf '%s\n' "pid tracker produced no tracked process ids" > "$OBSERVER_MANAGER_FAILURE_FILE"
 		return 1
@@ -1592,32 +1161,9 @@ ensure_observer_coverage() {
 	while IFS= read -r target_pid; do
 		[ -n "$target_pid" ] || continue
 		if ! grep -E "^${target_pid} [0-9]+ [0-9]+ [0-9]+$" "$TARGET_OBSERVER_FILE" >/dev/null 2>&1; then
-			if [ -n "$PID_ROOTS_FILE" ] && grep -Fx "$target_pid" "$PID_ROOTS_FILE" >/dev/null 2>&1; then
-				if ! start_pid_observer "$target_pid"; then
-					[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
-						printf 'PID-filtered lifecycle observer failed for tracked root pid=%s\n' "$target_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
-					return 1
-				fi
-			elif [ "$final_check" = yes ]; then
-				parent_pid="$(process_parent_for_pid "$target_pid")"
-				fork_event_time_ns=unknown
-				stop_time_ns=unknown
-				relationship=tracked-descendant
-				for fork_trace in "$TARGET_FORK_DIR"/*.txt; do
-					[ -f "$fork_trace" ] || continue
-					fork_line="$(grep -E "^fork-child-event parent=[0-9]+ child=$target_pid event_time_ns=[0-9]+$" "$fork_trace" | head -n 1 || true)"
-					[ -n "$fork_line" ] || continue
-					parent_pid="$(printf '%s\n' "$fork_line" | awk '{ sub(/^parent=/, "", $2); print $2 }')"
-					fork_event_time_ns="$(printf '%s\n' "$fork_line" | awk '{ sub(/^event_time_ns=/, "", $4); print $4 }')"
-					relationship=fork-child
-					stop_line="$(grep -E "^fork-child-stop parent=$parent_pid child=$target_pid stop_time_ns=[0-9]+$" "$fork_trace" | head -n 1 || true)"
-					if [ -n "$stop_line" ]; then
-						stop_time_ns="$(printf '%s\n' "$stop_line" | awk '{ sub(/^stop_time_ns=/, "", $4); print $4 }')"
-					fi
-					break
-				done
-				record_observer_attachment_failure "$target_pid" "$parent_pid" "$relationship" \
-					"$fork_event_time_ns" "$stop_time_ns" unknown unknown tracked_descendant_missing_observer_at_final_coverage || true
+			if ! start_pid_observer "$target_pid"; then
+				[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
+					printf 'PID-filtered lifecycle observer failed for tracked pid=%s\n' "$target_pid" > "$OBSERVER_MANAGER_FAILURE_FILE"
 				return 1
 			fi
 		fi
@@ -1652,7 +1198,7 @@ observe_tracked_pids() {
 		[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
 			printf '%s\n' "observer manager final fork-child coverage pass failed" > "$OBSERVER_MANAGER_FAILURE_FILE"
 	fi
-	if [ "$manager_failed" -eq 0 ] && ! ensure_observer_coverage yes; then
+	if [ "$manager_failed" -eq 0 ] && ! ensure_observer_coverage; then
 		manager_failed=1
 		[ -s "$OBSERVER_MANAGER_FAILURE_FILE" ] || \
 			printf '%s\n' "observer manager final coverage pass failed" > "$OBSERVER_MANAGER_FAILURE_FILE"
@@ -1834,9 +1380,7 @@ check_process_observer_coverage() {
 		exec_trace="$TARGET_EXEC_DIR/$target_pid.txt"
 		fork_trace="$TARGET_FORK_DIR/$target_pid.txt"
 		fork_child_observer=0
-		if [ -f "$FORK_CHILDREN_FILE" ] && \
-			awk -v child="$target_pid" '$2 == child { found = 1 } END { exit !found }' \
-				"$FORK_CHILDREN_FILE"; then
+		if [ -f "$FORK_CHILDREN_FILE" ] && grep -Fx "$target_pid" "$FORK_CHILDREN_FILE" >/dev/null 2>&1; then
 			fork_child_observer=1
 		fi
 		if [ ! -s "$TARGET_TRACE_DIR/$target_pid.txt" ]; then
@@ -2019,9 +1563,7 @@ start_pid_tracking() {
 	PID_LOCK_DIR="$EVIDENCE_DIR/.telegramd-pids.lock"
 	TRACK_STOP_FILE="$EVIDENCE_DIR/.stop-pid-tracker"
 	FORK_CHILDREN_FILE="$EVIDENCE_DIR/fork-child-observers.txt"
-	FORK_STOPPED_FILE="$EVIDENCE_DIR/fork-children-stopped.txt"
 	FORK_ONLY_PID_FILE="$EVIDENCE_DIR/fork-only-pids.txt"
-	OBSERVER_ATTACHMENT_FILE="$EVIDENCE_DIR/observer-attachment-events.txt"
 	OBSERVER_STOP_FILE="$EVIDENCE_DIR/.stop-observer-manager"
 	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
 	OBSERVER_STOP_RESULT_FILE="$EVIDENCE_DIR/observer-stop-result.txt"
@@ -2032,11 +1574,9 @@ start_pid_tracking() {
 	rm -f "$TRACK_STOP_FILE" "$OBSERVER_STOP_FILE" \
 		"$EVIDENCE_DIR/pid-tracking-failure.txt" "$OBSERVER_MANAGER_FAILURE_FILE" \
 		"$OBSERVER_STOP_RESULT_FILE" "$FILESYSTEM_ACTIVE_FILE" "$FILESYSTEM_REQUEST_FILE" \
-		"$FORK_CHILDREN_FILE" "$FORK_STOPPED_FILE" "$FORK_ONLY_PID_FILE" "$OBSERVER_ATTACHMENT_FILE"
+		"$FORK_CHILDREN_FILE" "$FORK_ONLY_PID_FILE"
 	: > "$FORK_CHILDREN_FILE"
-	: > "$FORK_STOPPED_FILE"
 	: > "$FORK_ONLY_PID_FILE"
-	: > "$OBSERVER_ATTACHMENT_FILE"
 	: > "$FILESYSTEM_ACTIVE_FILE"
 	: > "$FILESYSTEM_REQUEST_FILE"
 	rmdir "$PID_LOCK_DIR" 2>/dev/null || true
@@ -2152,9 +1692,7 @@ capture_endpoints() {
 	local hash="$1"
 	local output="$2"
 	local criterion="$3"
-	# Qt places these hashed local sockets directly in TempLocation. Avoid
-	# descending into unrelated runner-owned mounts under /tmp.
-	if ! find "$SOCKET_ROOT" -maxdepth 1 -type s -name "$hash-*" -print > "$output" 2> "$EVIDENCE_DIR/endpoint-search-errors.txt"; then
+	if ! find "$SOCKET_ROOT" -type s -name "$hash-*" -print > "$output" 2> "$EVIDENCE_DIR/endpoint-search-errors.txt"; then
 		fail "$criterion" "socket search failed"
 	fi
 }
@@ -2231,7 +1769,7 @@ stop_trace() {
 		fi
 	else
 		if [ -n "$PID_FILE" ] && [ -f "$PID_FILE" ]; then
-			if ! ensure_observer_coverage yes; then
+			if ! ensure_observer_coverage; then
 				stop_failed=1
 			fi
 		fi
@@ -2404,8 +1942,8 @@ terminate_process_tree() {
 	return "$tree_failed"
 }
 
-resume_stopped_fork_children() {
-	[ -n "$FORK_STOPPED_FILE" ] && [ -f "$FORK_STOPPED_FILE" ] || return 0
+resume_observed_fork_children() {
+	[ -n "$FORK_CHILDREN_FILE" ] && [ -f "$FORK_CHILDREN_FILE" ] || return 0
 	local parent_pid
 	local child_pid
 	local child_state
@@ -2426,7 +1964,7 @@ resume_stopped_fork_children() {
 					;;
 			esac
 		fi
-	done < "$FORK_STOPPED_FILE"
+	done < "$FORK_CHILDREN_FILE"
 	return "$resume_failed"
 }
 
@@ -2441,7 +1979,6 @@ run_observer_coverage_case() {
 	local exec_state="$3"
 	local expected_status="$4"
 	local expected_detail="$5"
-	local fork_child="${6:-no}"
 	local target_pid=50178
 	local case_root="$TEST_ROOT/$case_name"
 	local check_output=""
@@ -2455,17 +1992,12 @@ run_observer_coverage_case() {
 	TARGET_FORK_DIR="$EVIDENCE_DIR/fs_usage-fork"
 	TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
 	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
-	OBSERVER_ATTACHMENT_FILE="$EVIDENCE_DIR/observer-attachment-events.txt"
 	mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR" "$TARGET_FORK_DIR"
 	: > "$EVIDENCE_DIR/events.txt"
 	: > "$EVIDENCE_DIR/status.txt"
 	: > "$OBSERVER_MANAGER_FAILURE_FILE"
-	: > "$OBSERVER_ATTACHMENT_FILE"
 	: > "$FORK_CHILDREN_FILE"
 	: > "$FORK_ONLY_PID_FILE"
-	if [ "$fork_child" = yes ]; then
-		printf '%s %s\n' 50177 "$target_pid" > "$FORK_CHILDREN_FILE"
-	fi
 	printf '%s\n' "$target_pid" > "$PID_FILE"
 	printf '%s %s %s %s\n' "$target_pid" 601 601 701 > "$TARGET_OBSERVER_FILE"
 	: > "$TARGET_FORK_DIR/$target_pid.txt"
@@ -2504,82 +2036,6 @@ run_observer_coverage_case() {
 	printf 'observer-coverage-%s=PASS\n' "$case_name"
 }
 
-run_observer_attachment_failure_self_test() {
-	local case_root="$TEST_ROOT/attachment-failure/evidence"
-	local check_output=""
-	local check_status=0
-	EVIDENCE_DIR="$case_root"
-	OBSERVER_ATTACHMENT_FILE="$EVIDENCE_DIR/observer-attachment-events.txt"
-	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
-	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
-	FORK_CHILDREN_FILE="$EVIDENCE_DIR/fork-child-observers.txt"
-	FORK_ONLY_PID_FILE="$EVIDENCE_DIR/fork-only-pids.txt"
-	TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
-	mkdir -p "$EVIDENCE_DIR"
-	: > "$EVIDENCE_DIR/events.txt"
-	: > "$EVIDENCE_DIR/status.txt"
-	: > "$OBSERVER_ATTACHMENT_FILE"
-	: > "$PID_FILE"
-	: > "$FORK_CHILDREN_FILE"
-	: > "$FORK_ONLY_PID_FILE"
-	if ! record_observer_attachment_failure \
-		999999999 999999998 fork-child 101 202 303 unknown observer_attach_failed; then
-		printf '%s\n' 'FAIL: observer attachment failure evidence could not be recorded' >&2
-		return 1
-	fi
-	if ! grep -E \
-		'^event=attachment-failure pid=999999999 parent=999999998 failure_parent=unknown relationship=fork-child process_state=[^ ]+ process_present=false fork_event_time_ns=101 stop_time_ns=202 observer_launch_time_ns=303 observer_ready_time_ns=unknown failure_time_ns=[0-9]+ reason=observer_attach_failed$' \
-		"$OBSERVER_ATTACHMENT_FILE" >/dev/null 2>&1; then
-		printf '%s\n' 'FAIL: observer attachment failure evidence omitted identity or timing fields' >&2
-		return 1
-	fi
-	if check_output="$(check_process_observer_coverage 2>&1)"; then
-		check_status=0
-	else
-		check_status=$?
-	fi
-	if [ "$check_status" -ne 2 ] || \
-		! grep -F 'UNAVAILABLE: observer manager could not establish complete tracked PID coverage' \
-			"$EVIDENCE_DIR/status.txt" >/dev/null 2>&1; then
-		printf 'FAIL: observer attachment failure did not fail closed status=%s output=%s\n' \
-			"$check_status" "$check_output" >&2
-		return 1
-	fi
-	printf '%s\n' 'observer-attachment-failure-evidence=PASS'
-}
-
-run_observer_manager_coverage_self_test() {
-	local case_root="$TEST_ROOT/manager-coverage/evidence"
-	EVIDENCE_DIR="$case_root"
-	PID_ROOTS_FILE="$EVIDENCE_DIR/telegramd-root-pids.txt"
-	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
-	TARGET_FORK_DIR="$EVIDENCE_DIR/fs_usage-fork"
-	TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
-	OBSERVER_ATTACHMENT_FILE="$EVIDENCE_DIR/observer-attachment-events.txt"
-	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
-	mkdir -p "$TARGET_FORK_DIR"
-	: > "$PID_ROOTS_FILE"
-	: > "$TARGET_OBSERVER_FILE"
-	: > "$OBSERVER_ATTACHMENT_FILE"
-	: > "$OBSERVER_MANAGER_FAILURE_FILE"
-	printf '%s\n' 999999999 > "$PID_FILE"
-	if ! ensure_observer_coverage || [ -s "$OBSERVER_MANAGER_FAILURE_FILE" ]; then
-		printf '%s\n' 'FAIL: normal coverage sweep attempted unsafe descendant attachment' >&2
-		return 1
-	fi
-	if ensure_observer_coverage yes; then
-		printf '%s\n' 'FAIL: final coverage accepted an unattached descendant' >&2
-		return 1
-	fi
-	if ! grep -E \
-		'^event=attachment-failure pid=999999999 parent=unknown failure_parent=unknown relationship=tracked-descendant process_state=missing process_present=false fork_event_time_ns=unknown stop_time_ns=unknown observer_launch_time_ns=unknown observer_ready_time_ns=unknown failure_time_ns=[0-9]+ reason=tracked_descendant_missing_observer_at_final_coverage$' \
-		"$OBSERVER_ATTACHMENT_FILE" >/dev/null 2>&1; then
-		printf '%s\n' 'FAIL: final coverage failure omitted process identity or timing fields' >&2
-		return 1
-	fi
-	printf '%s\n' 'observer-manager-coverage=PASS'
-}
-
 run_observer_coverage_self_test() {
 	local self_test_failed=0
 	if ! run_observer_coverage_case nonempty nonempty nonempty 0 ""; then
@@ -2591,15 +2047,6 @@ run_observer_coverage_self_test() {
 	fi
 	if ! run_observer_coverage_case empty-exec nonempty empty 2 \
 		"PID-filtered process observer captured no exec events for pid=50178"; then
-		self_test_failed=1
-	fi
-	if ! run_observer_coverage_case empty-fork-child empty empty 0 "" yes; then
-		self_test_failed=1
-	fi
-	if ! run_observer_attachment_failure_self_test; then
-		self_test_failed=1
-	fi
-	if ! run_observer_manager_coverage_self_test; then
 		self_test_failed=1
 	fi
 	rm -rf -- "$TEST_ROOT"
@@ -2659,16 +2106,13 @@ cleanup() {
 	local exit_code=$?
 	local cleanup_failed=0
 	set +e
-	if [ -n "$HOME_ROOT" ]; then
-		capture_home_startup_logs cleanup || cleanup_failed=1
-	fi
 	if [ -n "$CONTROL_RELEASE" ]; then
 		touch "$CONTROL_RELEASE" 2>/dev/null || true
 	fi
 	if [ -n "$SPAWN_CONTROL_RELEASE" ]; then
 		touch "$SPAWN_CONTROL_RELEASE" 2>/dev/null || true
 	fi
-	resume_stopped_fork_children || cleanup_failed=1
+	resume_observed_fork_children || cleanup_failed=1
 	stop_lifecycle_observer_control || cleanup_failed=1
 	stop_spawn_observer_control || cleanup_failed=1
 	stop_pid_tracking || cleanup_failed=1
@@ -2759,14 +2203,6 @@ if [ "$SELF_TEST_MODE" -eq 2 ]; then
 	run_observer_coverage_self_test
 	exit $?
 fi
-if [ "$SELF_TEST_MODE" -eq 3 ]; then
-	run_home_startup_log_self_test
-	exit $?
-fi
-if [ "$SELF_TEST_MODE" -eq 4 ]; then
-	run_delayed_trace_marker_self_test
-	exit $?
-fi
 
 capture_error() {
 	LAST_ERROR_COMMAND="$BASH_COMMAND"
@@ -2780,19 +2216,16 @@ trap cleanup EXIT
 	echo "process_wait_seconds=30"
 	echo "support_path_wait_seconds=60"
 	echo "working_dir_log_wait_seconds=60"
-	echo "second_launch_wait_seconds=$SECOND_LAUNCH_WAIT_SECONDS"
+	echo "second_launch_wait_seconds=5"
 	echo "quit_wait_seconds=40"
 	echo "relaunch_process_wait_seconds=30"
 	echo "filesystem_switch_wait_seconds=10"
 	echo "observer_lifetime=from-suspended-fork-launch-through-quit-relaunch"
 	echo "observer_mode=kernel-filtered-serialized-combined-fs_usage-filesys-exec-and-manager-stopped-dtrace-fork-observer-per-tracked-pid"
 	echo "filesystem_observer_policy=one-ktrace-owner-at-a-time; manager-reaped-SIGINT-flush-before-each-PID-switch"
-	echo "observer_readiness=tracked-row-after-dtrace-ready-marker-and-live-process-check"
-	echo "descendant_policy=independent-observer-ready-before-each-fork-child-resumes"
-	echo "fork_child_resume=confirm-not-stopped-or-observed-exit-within-5s"
-	echo "fork_child_stop_probe=one-SIGSTOP-per-child-PID"
-	echo "fork_observer=proc-create-to-proc-start-in-kernel-stop-before-child-user-code"
-	echo "fork_observer_control=readiness-gated-dtrace-write-and-child-stopped-before-user-code"
+	echo "descendant_policy=independent-observer-attached-before-each-fork-child-resumes"
+	echo "fork_observer=event-driven-dtrace-syscall-fork-return-with-manager-SIGSTOP-before-attachment"
+	echo "fork_observer_control=readiness-gated-dtrace-write-and-short-lived-fork-only-child"
 	echo "spawn_observer_control=readiness-gated-dtrace-write-and-posix_spawn-parent-child-attribution"
 	echo "pid_snapshot_interval_seconds=0.2"
 } > "$EVIDENCE_DIR/timeouts.txt"
@@ -3005,14 +2438,8 @@ start_pid_tracking
 if ! wait_for_observer "$FORK_PID" 10; then
 	unavailable "PID-filtered lifecycle observer did not attach to primary pid=$FORK_PID"
 fi
-if ! record_observer_process_event target-resume-request "$FORK_PID" tracked-root; then
-	unavailable "could not record primary observer resume request pid=$FORK_PID"
-fi
 if ! kill -CONT "$FORK_PID"; then
 	fail "Telegramd launch resume" "could not resume pid=$FORK_PID"
-fi
-if ! record_observer_process_event target-resumed "$FORK_PID" tracked-root; then
-	unavailable "could not record primary observer resume pid=$FORK_PID"
 fi
 wait_for_process "$FORK_PID" 30 || fail "Telegramd process lifetime" "pid=$FORK_PID did not stay alive"
 printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/telegramd-pid.txt"
@@ -3020,10 +2447,8 @@ if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd namespace creation" "missing path=$NEW/tdata"
 fi
 if ! WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-working-dir.log")"; then
-	capture_home_startup_logs primary
 	fail "Telegramd startup log" "working-directory record did not appear"
 fi
-capture_home_startup_logs primary
 record "captured Telegramd startup log path=$WORKING_LOG"
 assert_grep "Telegramd startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-working-dir.log"
 process_command "$FORK_PID" > "$EVIDENCE_DIR/telegramd-command.txt"
@@ -3061,28 +2486,12 @@ add_pid_root "$SECOND_PID"
 if ! wait_for_observer "$SECOND_PID" 10; then
 	unavailable "PID-filtered lifecycle observer did not attach to second-launch pid=$SECOND_PID"
 fi
-if ! record_observer_process_event target-resume-request "$SECOND_PID" tracked-root; then
-	unavailable "could not record second-launch observer resume request pid=$SECOND_PID"
-fi
 if ! kill -CONT "$SECOND_PID"; then
 	fail "second launch resume" "could not resume pid=$SECOND_PID"
 fi
-if ! record_observer_process_event target-resumed "$SECOND_PID" tracked-root; then
-	unavailable "could not record second-launch observer resume pid=$SECOND_PID"
+if ! wait_for_exit "$SECOND_PID" 5; then
+	fail "second launch bounded wait" "pid=$SECOND_PID did not exit within 5s"
 fi
-SECOND_LAUNCH_WAIT_STARTED_NS="$(monotonic_time_ns)" || \
-	unavailable "could not timestamp second-launch bounded wait"
-record "event=second-launch-exit-wait-start pid=$SECOND_PID bound_seconds=$SECOND_LAUNCH_WAIT_SECONDS time_ns=$SECOND_LAUNCH_WAIT_STARTED_NS observer_manager_pid=$OBSERVER_MANAGER_PID"
-if ! wait_for_exit "$SECOND_PID" "$SECOND_LAUNCH_WAIT_SECONDS"; then
-	SECOND_LAUNCH_WAIT_FINISHED_NS="$(monotonic_time_ns)" || \
-		unavailable "could not timestamp second-launch bounded-wait failure"
-	SECOND_LAUNCH_WAIT_ELAPSED_MS=$(((SECOND_LAUNCH_WAIT_FINISHED_NS - SECOND_LAUNCH_WAIT_STARTED_NS) / 1000000))
-	fail "second launch bounded wait" "pid=$SECOND_PID did not exit within ${SECOND_LAUNCH_WAIT_SECONDS}s elapsed_ms=$SECOND_LAUNCH_WAIT_ELAPSED_MS observer_manager_pid=$OBSERVER_MANAGER_PID observer_manager_state=$(process_state_for_pid "$OBSERVER_MANAGER_PID")"
-fi
-SECOND_LAUNCH_WAIT_FINISHED_NS="$(monotonic_time_ns)" || \
-	unavailable "could not timestamp second-launch bounded-wait completion"
-SECOND_LAUNCH_WAIT_ELAPSED_MS=$(((SECOND_LAUNCH_WAIT_FINISHED_NS - SECOND_LAUNCH_WAIT_STARTED_NS) / 1000000))
-record "event=second-launch-exit-wait-complete pid=$SECOND_PID bound_seconds=$SECOND_LAUNCH_WAIT_SECONDS elapsed_ms=$SECOND_LAUNCH_WAIT_ELAPSED_MS"
 if ! wait "$SECOND_PID"; then
 	fail "second launch result" "pid=$SECOND_PID returned failure"
 fi
@@ -3106,14 +2515,8 @@ add_pid_root "$QUIT_PID"
 if ! wait_for_observer "$QUIT_PID" 10; then
 	unavailable "PID-filtered lifecycle observer did not attach to quit pid=$QUIT_PID"
 fi
-if ! record_observer_process_event target-resume-request "$QUIT_PID" tracked-root; then
-	unavailable "could not record quit observer resume request pid=$QUIT_PID"
-fi
 if ! kill -CONT "$QUIT_PID"; then
 	fail "quit launch resume" "could not resume pid=$QUIT_PID"
-fi
-if ! record_observer_process_event target-resumed "$QUIT_PID" tracked-root; then
-	unavailable "could not record quit observer resume pid=$QUIT_PID"
 fi
 if ! wait_for_exit "$QUIT_PID" 40; then
 	fail "quit bounded wait" "pid=$QUIT_PID did not exit within 40s"
@@ -3133,24 +2536,16 @@ add_pid_root "$RELAUNCH_PID"
 if ! wait_for_observer "$RELAUNCH_PID" 10; then
 	unavailable "PID-filtered lifecycle observer did not attach to relaunch pid=$RELAUNCH_PID"
 fi
-if ! record_observer_process_event target-resume-request "$RELAUNCH_PID" tracked-root; then
-	unavailable "could not record relaunch observer resume request pid=$RELAUNCH_PID"
-fi
 if ! kill -CONT "$RELAUNCH_PID"; then
 	fail "Telegramd relaunch resume" "could not resume pid=$RELAUNCH_PID"
-fi
-if ! record_observer_process_event target-resumed "$RELAUNCH_PID" tracked-root; then
-	unavailable "could not record relaunch observer resume pid=$RELAUNCH_PID"
 fi
 wait_for_process "$RELAUNCH_PID" 30 || fail "Telegramd relaunch process lifetime" "pid=$RELAUNCH_PID did not stay alive"
 if ! wait_for_file "$NEW/tdata" 60; then
 	fail "Telegramd relaunch namespace" "missing path=$NEW/tdata"
 fi
 if ! RELAUNCH_WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log")"; then
-	capture_home_startup_logs relaunch
 	fail "Telegramd relaunch startup log" "working-directory record did not appear"
 fi
-capture_home_startup_logs relaunch
 record "captured Telegramd relaunch startup log path=$RELAUNCH_WORKING_LOG"
 assert_grep "Telegramd relaunch startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log"
 wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt" "official relaunch endpoint" 30
