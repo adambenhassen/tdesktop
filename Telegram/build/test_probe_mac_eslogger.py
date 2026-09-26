@@ -157,6 +157,7 @@ class ProbeEvidenceTests(unittest.TestCase):
 
     def test_uploaded_files_drop_raw_environment_and_process_fields(self):
         summary = self.analyze()
+        summary["tracked_process_events"] *= 100
         fixture = dict(self.fixture, env=["CANARY_SECRET"], extra="CANARY_SECRET")
         console = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
@@ -179,6 +180,16 @@ class ProbeEvidenceTests(unittest.TestCase):
         self.assertNotIn('"fds"', uploaded)
         logged = console.getvalue()
         self.assertIn("telemetry_probe_summary=", logged)
+        diagnostic_line = next(
+            line
+            for line in logged.splitlines()
+            if line.startswith("telemetry_probe_summary=")
+        )
+        diagnostics = json.loads(diagnostic_line.split("=", 1)[1])
+        self.assertIn("global_sequence", diagnostics)
+        self.assertIn("logger_shutdown_pass", diagnostics)
+        self.assertNotIn("tracked_process_events", diagnostics)
+        self.assertLess(len(diagnostic_line), 4096)
         self.assertNotIn("CANARY_SECRET", logged)
         self.assertNotIn('"env"', logged)
         self.assertNotIn('"args"', logged)

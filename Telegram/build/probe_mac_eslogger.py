@@ -63,6 +63,35 @@ SUMMARY_FIELDS = {
     "fixture_result",
     "limitations",
 }
+DIAGNOSTIC_FIELDS = {
+    "runner_architecture",
+    "result",
+    "reason",
+    "eslogger_present",
+    "eslogger_has_endpoint_security_entitlement",
+    "events_requested",
+    "sentinel_event_observed_before_fixture",
+    "fixture_exit_code",
+    "logger_started",
+    "logger_alive_at_parent_exit",
+    "logger_exit_code",
+    "logger_group_exited",
+    "no_eslogger_process_remains",
+    "private_data_removed",
+    "fixture_files_removed",
+    "event_count",
+    "malformed_record_count",
+    "outside_tree_event_counts",
+    "global_sequence",
+    "parent_exec_observed",
+    "parent_exit_observed",
+    "child_exit_observed",
+    "fork_event_identified_child",
+    "fixture_attribution_pass",
+    "process_identity_pass",
+    "logger_shutdown_pass",
+    "sequence_gap_detection_available",
+}
 EVENT_FIELDS = {
     "event",
     "global_seq_num",
@@ -309,7 +338,15 @@ def write_summary(path, summary):
     print("telemetry_probe_result=" + summary["result"])
     print(
         "telemetry_probe_summary="
-        + json.dumps(summary, sort_keys=True, separators=(",", ":"))
+        + json.dumps(
+            {
+                key: value
+                for key, value in summary.items()
+                if key in DIAGNOSTIC_FIELDS
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     )
 
 
