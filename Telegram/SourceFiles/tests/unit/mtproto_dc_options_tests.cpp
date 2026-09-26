@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_enrollment.h"
+#include "mtproto/proxy_check.h"
+#include "mtproto/session.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QJsonDocument>
@@ -312,6 +314,84 @@ TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
 	CHECK_EQ(got.dcId, server.dcId);
 	CHECK(got.key != nullptr);
 	CHECK(got.key->valid());
+}
+
+TEST_CASE(PinnedNon80EndpointRestoresAsDirectTcpOnly) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "100.124.236.66";
+	server.port = 2443;
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+
+	const auto direct = restored.lookup(server.dcId, DcType::Regular, false);
+	const auto &directTcp = direct.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Tcp];
+	CHECK(directTcp.size() == 1);
+	if (directTcp.size() == 1) {
+		CHECK_EQ(directTcp.front().ip, server.ip);
+		CHECK_EQ(directTcp.front().port, 2443);
+	}
+	CHECK(direct.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+
+	const auto proxied = restored.lookup(server.dcId, DcType::Regular, true);
+	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Tcp];
+	CHECK(proxiedTcp.size() == 1);
+	if (proxiedTcp.size() == 1) {
+		CHECK_EQ(proxiedTcp.front().ip, server.ip);
+		CHECK_EQ(proxiedTcp.front().port, 2443);
+	}
+	CHECK(proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+}
+
+TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "100.124.236.66";
+	server.port = 2443;
+	CHECK(options.setCustomServer(server));
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK(restored.hasCustomServer());
+	const auto pin = restored.customServer();
+	CHECK_EQ(pin.ip, server.ip);
+	CHECK_EQ(pin.port, server.port);
+	CHECK(pin.key != nullptr);
+	if (pin.key) {
+		CHECK(pin.key->valid());
+		CHECK_EQ(qint64(pin.key->fingerprint()), kProductionKeyFingerprint);
+	}
+
+	const auto checkProtocol = ProxyCheckProtocol(
+		ProxyData::Type::Http,
+		restored.hasCustomServer());
+	CHECK(checkProtocol == DcOptions::Variants::Tcp);
+	CHECK(ProxyCheckProtocol(
+		ProxyData::Type::Http,
+		false) == DcOptions::Variants::Http);
+
+	const auto proxied = restored.lookup(server.dcId, DcType::Regular, true);
+	const auto &proxiedTcp = proxied.data[DcOptions::Variants::IPv4][checkProtocol];
+	CHECK(proxiedTcp.size() == 1);
+	if (proxiedTcp.size() == 1) {
+		CHECK_EQ(proxiedTcp.front().ip, server.ip);
+		CHECK_EQ(proxiedTcp.front().port, 2443);
+	}
+	CHECK(proxied.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
+}
+
+TEST_CASE(UnboundBuiltinDcRetainsHttpTransportCandidate) {
+	const auto options = DcOptions(Environment::Production);
+	const auto variants = options.lookup(2, DcType::Regular, false);
+	CHECK(!variants.data[DcOptions::Variants::IPv4]
+		[DcOptions::Variants::Http].empty());
 }
 
 // An unpinned config must round-trip as unpinned rather than picking up

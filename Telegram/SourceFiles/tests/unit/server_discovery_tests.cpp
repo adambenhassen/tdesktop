@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QList>
+#include <QtCore/QSocketNotifier>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostInfo>
@@ -24,9 +25,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #if defined Q_OS_WIN
 #include <winsock2.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
-#include <sys/time.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -111,26 +115,6 @@ void CloseNativeTestSocket(NativeTestSocket socket) {
 	::closesocket(socket);
 #else
 	::close(socket);
-#endif
-}
-
-[[nodiscard]] bool SetNativeTestReceiveTimeout(NativeTestSocket socket) {
-#if defined Q_OS_WIN
-	DWORD timeout = 1000;
-	return ::setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		reinterpret_cast<const char *>(&timeout),
-		int(sizeof(timeout))) == 0;
-#else
-	const timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
-	return ::setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		&timeout,
-		socklen_t(sizeof(timeout))) == 0;
 #endif
 }
 
@@ -655,108 +639,6 @@ TEST_CASE(LocalDiscoveryStartsSocketForLiteralAndLocalName) {
 	}
 }
 
-TEST_CASE(LocalDiscoveryRequestHalfClosesBeforeResponse) {
-	QByteArray received;
-	QTcpServer server;
-	CHECK(server.listen(QHostAddress::LocalHost));
-	if (!server.isListening()) {
-		return;
-	}
-	server.pauseAccepting();
-
-	const auto selection = CheckServerSelection(
-		u"127.0.0.1:"_q + QString::number(server.serverPort()));
-	const auto nonce = QByteArray(32, '\x04');
-	const auto request = BuildLocalDiscoveryRequest(nonce);
-	const auto response = LocalResponse(nonce);
-	QTcpSocket client;
-	CHECK(StartLocalDiscoverySocket(
-		client,
-		selection,
-		server.serverAddress()));
-	CHECK(client.waitForConnected(1000));
-	const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-#if defined Q_OS_WIN
-	const auto invalidPeer = INVALID_SOCKET;
-#else
-	const auto invalidPeer = -1;
-#endif
-	CHECK(peer != invalidPeer);
-	if (peer == invalidPeer) {
-		return;
-	}
-
-	CHECK(SetNativeTestReceiveTimeout(peer));
-	auto writeOffset = 0;
-	auto writeClosed = false;
-	auto writeSucceeded = true;
-	while (!writeClosed && writeSucceeded) {
-		writeSucceeded = SendLocalDiscoveryRequest(
-			client,
-			request,
-			writeOffset,
-			writeClosed);
-		CHECK(writeSucceeded);
-		if (!writeClosed) {
-			const auto bytesWritten = client.waitForBytesWritten(1000);
-			CHECK(bytesWritten);
-			if (!bytesWritten) {
-				break;
-			}
-		}
-	}
-	CHECK(writeClosed);
-	CHECK_EQ(writeOffset, request.size());
-
-	QByteArray peerRequest;
-	auto peerSawEof = false;
-	while (peerRequest.size() <= request.size()) {
-		char buffer[256];
-		const auto read = ReceiveNativeTestSocket(
-			peer,
-			buffer,
-			int(sizeof(buffer)));
-		if (read > 0) {
-			peerRequest.append(buffer, int(read));
-			continue;
-		}
-		if (read == 0) {
-			peerSawEof = true;
-		}
-		if (read <= 0) {
-			break;
-		}
-	}
-	CHECK(peerSawEof);
-	CHECK_EQ(peerRequest, request);
-	if (!peerSawEof || peerRequest != request) {
-		CloseNativeTestSocket(peer);
-		return;
-	}
-
-	auto responseOffset = 0;
-	while (responseOffset < response.size()) {
-		const auto written = SendNativeTestSocket(
-			peer,
-			response.constData() + responseOffset,
-			response.size() - responseOffset);
-		CHECK(written > 0);
-		if (written <= 0) {
-			break;
-		}
-		responseOffset += int(written);
-	}
-	CHECK_EQ(responseOffset, response.size());
-	CloseNativeTestSocket(peer);
-	while (client.state() != QAbstractSocket::UnconnectedState
-		&& client.waitForReadyRead(1000)) {
-		received += client.readAll();
-	}
-	received += client.readAll();
-	CHECK(IsCompleteLocalDiscoveryResponse(received));
-	CHECK(ParseLocalDiscoveryResponse(selection, nonce, received).valid());
-}
-
 TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	QTcpServer server;
 	CHECK(server.listen(QHostAddress::LocalHost));
@@ -772,9 +654,6 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 		return;
 	}
 
-	const auto nonce = QByteArray(32, '\x05');
-	const auto request = BuildLocalDiscoveryRequest(nonce);
-	const auto response = LocalResponse(nonce);
 	const QList<QHostAddress> addresses{
 		QHostAddress(u"127.0.0.2"_q),
 		server.serverAddress(),
@@ -811,76 +690,258 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	if (peer == invalidPeer) {
 		return;
 	}
-	const auto hasReceiveTimeout = SetNativeTestReceiveTimeout(peer);
-	CHECK(hasReceiveTimeout);
-	if (!hasReceiveTimeout) {
-		CloseNativeTestSocket(peer);
+	CloseNativeTestSocket(peer);
+	client.waitForDisconnected(1000);
+}
+
+#if !defined Q_OS_WIN
+TEST_CASE(NativeDiscoverySenderSurvivesEpipe) {
+	int sockets[2] = { -1, -1 };
+	const auto pairOpened = (::socketpair(
+		AF_UNIX,
+		SOCK_STREAM,
+		0,
+		sockets) == 0);
+	CHECK(pairOpened);
+	if (!pairOpened) {
+		return;
+	}
+	auto error = 0;
+	const auto configured =
+		Intro::details::internal::ConfigureNativeSocketForSend(
+			qintptr(sockets[0]),
+			error);
+	CHECK(configured);
+	if (!configured) {
+		CloseNativeTestSocket(sockets[0]);
+		CloseNativeTestSocket(sockets[1]);
+		return;
+	}
+	CloseNativeTestSocket(sockets[1]);
+
+	const auto child = ::fork();
+	CHECK(child >= 0);
+	if (child == 0) {
+		struct sigaction action = {};
+		action.sa_handler = SIG_DFL;
+		sigemptyset(&action.sa_mask);
+		if (::sigaction(SIGPIPE, &action, nullptr) != 0) {
+			::_exit(2);
+		}
+		auto unblockedSignals = sigset_t();
+		if (sigemptyset(&unblockedSignals) != 0
+			|| sigaddset(&unblockedSignals, SIGPIPE) != 0
+			|| ::sigprocmask(SIG_UNBLOCK, &unblockedSignals, nullptr) != 0) {
+			::_exit(2);
+		}
+		auto sendError = 0;
+		const auto byte = 'x';
+		const auto sent = Intro::details::internal::SendNativeSocket(
+			qintptr(sockets[0]),
+			&byte,
+			1,
+			sendError);
+		::_exit((sent == -1 && sendError == EPIPE) ? 0 : 1);
+	}
+	if (child < 0) {
+		CloseNativeTestSocket(sockets[0]);
+		return;
+	}
+	auto status = 0;
+	auto waited = pid_t(-1);
+	do {
+		waited = ::waitpid(child, &status, 0);
+	} while (waited < 0 && errno == EINTR);
+	CHECK_EQ(waited, child);
+	if (waited == child) {
+		const auto exited = WIFEXITED(status);
+		CHECK(exited);
+		if (exited) {
+			CHECK_EQ(WEXITSTATUS(status), 0);
+		}
+	}
+	CloseNativeTestSocket(sockets[0]);
+}
+
+TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	server.pauseAccepting();
+	const auto listenerNonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(listenerNonBlocking);
+	if (!listenerNonBlocking) {
 		return;
 	}
 
-	auto writeOffset = 0;
-	auto writeClosed = false;
-	while (!writeClosed) {
-		CHECK(SendLocalDiscoveryRequest(
-			client,
-			request,
-			writeOffset,
-			writeClosed));
-		if (!writeClosed) {
-			CHECK(client.waitForBytesWritten(1000));
-		}
-	}
-	CHECK_EQ(writeOffset, request.size());
-
-	QByteArray receivedRequest;
-	auto peerSawEof = false;
-	while (receivedRequest.size() <= request.size()) {
-		char buffer[256];
-		const auto read = ReceiveNativeTestSocket(
-			peer,
-			buffer,
-			int(sizeof(buffer)));
-		if (read > 0) {
-			receivedRequest.append(buffer, int(read));
-			continue;
-		}
-		if (read == 0) {
-			peerSawEof = true;
-		}
-		break;
-	}
-	CHECK(peerSawEof);
-	CHECK_EQ(receivedRequest, request);
-	if (!peerSawEof || receivedRequest != request) {
-		CloseNativeTestSocket(peer);
+	const auto selection = CheckServerSelection(
+		u"127.0.0.1:"_q + QString::number(server.serverPort()));
+	CHECK(selection.valid());
+	if (!selection) {
 		return;
 	}
-	auto responseOffset = 0;
-	while (responseOffset < response.size()) {
-		const auto written = SendNativeTestSocket(
-			peer,
-			response.constData() + responseOffset,
-			response.size() - responseOffset);
-		CHECK(written > 0);
-		if (written <= 0) {
+	const auto nonce = QByteArray(32, '\x09');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+	NativeTestSocket responsePeer = -1;
+	auto candidatesStarted = 0;
+	auto peersAccepted = 0;
+	auto firstPeerClosed = false;
+	auto resetReachedClientBeforeSend = false;
+	auto responseSent = false;
+	auto finished = false;
+	auto failed = false;
+	auto receivedRequest = QByteArray();
+	QTimer poll;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (responsePeer == -1) {
+			responsePeer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (responsePeer == -1) {
+				return;
+			}
+			++peersAccepted;
+			const auto peerNonBlocking = SetNativeTestNonBlocking(
+				qintptr(responsePeer));
+			CHECK(peerNonBlocking);
+			if (!peerNonBlocking) {
+				CloseNativeTestSocket(responsePeer);
+				responsePeer = -1;
+				return;
+			}
+		}
+
+		while (true) {
+			char buffer[256];
+			const auto read = ReceiveNativeTestSocket(
+				responsePeer,
+				buffer,
+				int(sizeof(buffer)));
+			if (read > 0) {
+				receivedRequest.append(buffer, int(read));
+				continue;
+			}
+			if (read != 0) {
+				return;
+			}
 			break;
 		}
-		responseOffset += int(written);
-	}
-	CHECK_EQ(responseOffset, response.size());
-	CloseNativeTestSocket(peer);
-	QByteArray receivedResponse;
-	while (client.state() != QAbstractSocket::UnconnectedState
-		&& client.waitForReadyRead(1000)) {
-		receivedResponse += client.readAll();
-	}
-	receivedResponse += client.readAll();
-	CHECK(IsCompleteLocalDiscoveryResponse(receivedResponse));
-	CHECK(ParseLocalDiscoveryResponse(
+		CHECK_EQ(receivedRequest, request);
+		auto responseOffset = 0;
+		while (responseOffset < response.size()) {
+			const auto written = SendNativeTestSocket(
+				responsePeer,
+				response.constData() + responseOffset,
+				response.size() - responseOffset);
+			CHECK(written > 0);
+			if (written <= 0) {
+				break;
+			}
+			responseOffset += int(written);
+		}
+		CHECK_EQ(responseOffset, response.size());
+		responseSent = (responseOffset == response.size());
+		CloseNativeTestSocket(responsePeer);
+		responsePeer = -1;
+	});
+	poll.start(1);
+
+	discovery.start(
 		selection,
 		nonce,
-		receivedResponse).valid());
+		{ server.serverAddress(), server.serverAddress() },
+		{
+			.finished = [&](ServerDiscoveryResult result) {
+				finished = true;
+				CHECK(result.valid());
+				loop.quit();
+			},
+			.failed = [&](bool) {
+				failed = true;
+				loop.quit();
+			},
+			.candidateStarted = [&] {
+				++candidatesStarted;
+			},
+			.beforeRequestSend = [&] {
+				if (firstPeerClosed) {
+					return;
+				}
+				const auto peer = AcceptNativeTestSocket(
+					server.socketDescriptor());
+				CHECK(peer != -1);
+				if (peer == -1) {
+					return;
+				}
+				++peersAccepted;
+				const auto abortiveClose = linger{ 1, 0 };
+				const auto lingerSet = (::setsockopt(
+					peer,
+					SOL_SOCKET,
+					SO_LINGER,
+					&abortiveClose,
+					socklen_t(sizeof(abortiveClose))) == 0);
+				CHECK(lingerSet);
+				CloseNativeTestSocket(peer);
+				if (!lingerSet) {
+					return;
+				}
+				firstPeerClosed = true;
+
+				auto clientDescriptor = qintptr(-1);
+				const auto notifiers =
+					discovery.findChildren<QSocketNotifier*>();
+				for (const auto notifier : notifiers) {
+					if (notifier->type() == QSocketNotifier::Write) {
+						clientDescriptor = notifier->socket();
+						break;
+					}
+				}
+				CHECK(clientDescriptor != -1);
+				if (clientDescriptor == -1) {
+					return;
+				}
+				pollfd resetReady = {
+					int(clientDescriptor),
+					POLLIN,
+					0,
+				};
+				auto ready = 0;
+				do {
+					ready = ::poll(&resetReady, 1, 1000);
+				} while (ready < 0 && errno == EINTR);
+				CHECK(ready == 1);
+				resetReachedClientBeforeSend = (ready == 1)
+					&& (resetReady.revents & (POLLERR | POLLHUP));
+				CHECK(resetReachedClientBeforeSend);
+			},
+		});
+	loop.exec();
+	poll.stop();
+	if (responsePeer != -1) {
+		CloseNativeTestSocket(responsePeer);
+	}
+
+	CHECK_EQ(candidatesStarted, 2);
+	CHECK_EQ(peersAccepted, 2);
+	CHECK(firstPeerClosed);
+	CHECK(resetReachedClientBeforeSend);
+	CHECK_EQ(receivedRequest, request);
+	CHECK(responseSent);
+	CHECK(finished);
+	CHECK(!failed);
 }
+#endif
 
 TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	using Intro::details::ServerWidgetDiscovery;
@@ -919,43 +980,54 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	QEventLoop loop;
 	QTimer poll;
 	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+	constexpr auto kPendingConnectDeadline = 1000;
 
 	auto started = 0;
 	auto accepted = 0;
 	auto finished = false;
 	auto failed = false;
-	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
 #if defined Q_OS_WIN
-		const auto invalidPeer = INVALID_SOCKET;
+	const auto invalidPeer = INVALID_SOCKET;
 #else
-		const auto invalidPeer = -1;
+	const auto invalidPeer = -1;
 #endif
-		const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-		if (peer == invalidPeer) {
+	NativeTestSocket responsePeer = invalidPeer;
+	QByteArray receivedRequest;
+	auto peerSawEof = false;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (responsePeer == invalidPeer && accepted < 3) {
+			const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (peer == invalidPeer) {
+				return;
+			}
+			++accepted;
+			if (accepted == 1) {
+				CloseNativeTestSocket(peer);
+				return;
+			}
+			if (accepted == 2) {
+				CHECK(discovery.timeout());
+				CloseNativeTestSocket(peer);
+				return;
+			}
+			responsePeer = peer;
+			const auto nonBlocking = SetNativeTestNonBlocking(
+				qintptr(responsePeer));
+			CHECK(nonBlocking);
+			if (!nonBlocking) {
+				CloseNativeTestSocket(responsePeer);
+				responsePeer = invalidPeer;
+				loop.quit();
+				return;
+			}
+		}
+		if (responsePeer == invalidPeer || peerSawEof) {
 			return;
 		}
-		++accepted;
-		if (accepted == 1) {
-			CloseNativeTestSocket(peer);
-			return;
-		}
-		if (accepted == 2) {
-			CHECK(discovery.timeout());
-			CloseNativeTestSocket(peer);
-			return;
-		}
-		if (accepted != 3) {
-			CloseNativeTestSocket(peer);
-			return;
-		}
-
-		CHECK(SetNativeTestReceiveTimeout(peer));
-		QByteArray receivedRequest;
-		auto peerSawEof = false;
-		while (receivedRequest.size() <= request.size()) {
+		while (true) {
 			char buffer[256];
 			const auto read = ReceiveNativeTestSocket(
-				peer,
+				responsePeer,
 				buffer,
 				int(sizeof(buffer)));
 			if (read > 0) {
@@ -967,12 +1039,15 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			}
 			break;
 		}
+		if (!peerSawEof) {
+			return;
+		}
 		CHECK(peerSawEof);
 		CHECK_EQ(receivedRequest, request);
 		auto responseOffset = 0;
 		while (responseOffset < response.size()) {
 			const auto written = SendNativeTestSocket(
-				peer,
+				responsePeer,
 				response.constData() + responseOffset,
 				response.size() - responseOffset);
 			CHECK(written > 0);
@@ -982,7 +1057,8 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			responseOffset += int(written);
 		}
 		CHECK_EQ(responseOffset, response.size());
-		CloseNativeTestSocket(peer);
+		CloseNativeTestSocket(responsePeer);
+		responsePeer = invalidPeer;
 	});
 	poll.start(1);
 
@@ -1005,15 +1081,155 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			},
 			.candidateStarted = [&] {
 				++started;
+				if (started == 1) {
+					QTimer::singleShot(kPendingConnectDeadline, &owner, [&] {
+						if (discovery.running() && started == 1) {
+							CHECK(discovery.timeout());
+						}
+					});
+				}
 			},
 		});
 	loop.exec();
 	poll.stop();
+	if (responsePeer != invalidPeer) {
+		CloseNativeTestSocket(responsePeer);
+	}
 
 	CHECK_EQ(started, 4);
 	CHECK_EQ(accepted, 3);
+	CHECK(peerSawEof);
 	CHECK(finished);
 	CHECK(!failed);
+}
+
+TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	server.pauseAccepting();
+	const auto listenerNonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(listenerNonBlocking);
+	if (!listenerNonBlocking) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"127.0.0.1:"_q + QString::number(server.serverPort()));
+	const auto nonce = QByteArray(32, '\x08');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+#if defined Q_OS_WIN
+	const auto invalidPeer = INVALID_SOCKET;
+#else
+	const auto invalidPeer = -1;
+#endif
+	NativeTestSocket peer = invalidPeer;
+	auto receivedRequest = QByteArray();
+	auto responseScheduled = false;
+	auto responseSent = false;
+	auto finished = false;
+	auto failed = false;
+	auto discoveryWaitingAfterRequestEof = false;
+	QTimer poll;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (peer == invalidPeer) {
+			peer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (peer == invalidPeer) {
+				return;
+			}
+			const auto peerNonBlocking = SetNativeTestNonBlocking(
+				qintptr(peer));
+			CHECK(peerNonBlocking);
+			if (!peerNonBlocking) {
+				CloseNativeTestSocket(peer);
+				peer = invalidPeer;
+				return;
+			}
+		}
+
+		auto peerSawEof = false;
+		while (!peerSawEof) {
+			char buffer[256];
+			const auto read = ReceiveNativeTestSocket(
+				peer,
+				buffer,
+				int(sizeof(buffer)));
+			if (read > 0) {
+				receivedRequest.append(buffer, int(read));
+				continue;
+			}
+			peerSawEof = (read == 0);
+			break;
+		}
+		if (!peerSawEof || responseScheduled) {
+			return;
+		}
+		responseScheduled = true;
+		CHECK_EQ(receivedRequest, request);
+		discoveryWaitingAfterRequestEof = discovery.running();
+
+		const auto responsePeer = peer;
+		QTimer::singleShot(100, &owner, [&, responsePeer] {
+			auto responseOffset = 0;
+			while (responseOffset < response.size()) {
+				const auto written = SendNativeTestSocket(
+					responsePeer,
+					response.constData() + responseOffset,
+					response.size() - responseOffset);
+				CHECK(written > 0);
+				if (written <= 0) {
+					break;
+				}
+				responseOffset += int(written);
+			}
+			CHECK_EQ(responseOffset, response.size());
+			responseSent = (responseOffset == response.size());
+			CloseNativeTestSocket(responsePeer);
+			peer = invalidPeer;
+		});
+	});
+	poll.start(1);
+
+	discovery.start(
+		selection,
+		nonce,
+		{ server.serverAddress() },
+		{
+			.finished = [&](ServerDiscoveryResult result) {
+				finished = true;
+				CHECK(result.valid());
+				loop.quit();
+			},
+			.failed = [&](bool connectionFailure) {
+				failed = true;
+				CHECK(!connectionFailure);
+				loop.quit();
+		},
+	});
+	loop.exec();
+	poll.stop();
+	if (peer != invalidPeer) {
+		CloseNativeTestSocket(peer);
+	}
+
+	CHECK_EQ(receivedRequest, request);
+	CHECK(responseScheduled);
+	CHECK(responseSent);
+	CHECK(finished);
+	CHECK(!failed);
+	CHECK(discoveryWaitingAfterRequestEof);
 }
 
 TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
