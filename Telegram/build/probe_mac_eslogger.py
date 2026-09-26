@@ -50,6 +50,10 @@ SUMMARY_FIELDS = {
     "event_count",
     "malformed_record_count",
     "outside_tree_event_counts",
+    "tracked_identity_missing_count",
+    "tracked_identity_missing_by_event",
+    "tracked_identity_conflicts_count",
+    "unresolved_tracked_open_count",
     "tracked_process_events",
     "global_sequence",
     "parent_exec_observed",
@@ -82,6 +86,10 @@ DIAGNOSTIC_FIELDS = {
     "event_count",
     "malformed_record_count",
     "outside_tree_event_counts",
+    "tracked_identity_missing_count",
+    "tracked_identity_missing_by_event",
+    "tracked_identity_conflicts_count",
+    "unresolved_tracked_open_count",
     "global_sequence",
     "parent_exec_observed",
     "parent_exit_observed",
@@ -253,18 +261,77 @@ def canonical(path):
     return os.path.normcase(os.path.realpath(path))
 
 
-def stop_process_group(process):
+def signal_named_processes_in_group(process, name, signal_number):
+    if process is None:
+        return False
+    result = subprocess.run(
+        ["/usr/bin/pgrep", "-g", str(process.pid), "-x", name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 1:
+        return False
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        try:
+            os.kill(int(line), signal_number)
+        except (ProcessLookupError, ValueError):
+            pass
+    return True
+
+
+def stop_process_group(process, child_process_name=None):
     if process is None:
         return
     if process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGINT)
-        except ProcessLookupError:
-            pass
+        signalled_child = (
+            signal_named_processes_in_group(
+                process,
+                child_process_name,
+                signal.SIGINT,
+            )
+            if child_process_name
+            else False
+        )
+        if not signalled_child:
+            try:
+                os.killpg(process.pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
+    if child_process_name:
+        remaining_child = signal_named_processes_in_group(
+            process,
+            child_process_name,
+            signal.SIGTERM,
+        )
+        if remaining_child and process.poll() is None:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+    if process.poll() is None and process_group_exists(process):
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+    if child_process_name:
+        signal_named_processes_in_group(
+            process,
+            child_process_name,
+            signal.SIGKILL,
+        )
     if process_group_exists(process):
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -272,7 +339,7 @@ def stop_process_group(process):
             pass
     if process.poll() is None:
         process.wait(timeout=5)
-    deadline = time.monotonic() + 1
+    deadline = time.monotonic() + 2
     while process_group_exists(process) and time.monotonic() < deadline:
         time.sleep(0.05)
 
@@ -442,6 +509,8 @@ def analyze_records(records, malformed, fixture, old_root, checks):
     child_exit = False
     fork_child = False
     unresolved_identity = False
+    identity_missing_by_event = {}
+    unresolved_tracked_open_count = 0
 
     for record in records:
         kind, details = event_kind(record)
@@ -458,6 +527,9 @@ def analyze_records(records, malformed, fixture, old_root, checks):
             identities.setdefault(pid, set()).add(json.dumps(identity, sort_keys=True))
         else:
             unresolved_identity = True
+            identity_missing_by_event[kind] = (
+                identity_missing_by_event.get(kind, 0) + 1
+            )
 
         if kind == "exec" and expected[pid] == "parent":
             parent_exec = True
@@ -479,14 +551,21 @@ def analyze_records(records, malformed, fixture, old_root, checks):
                 pass
         if kind == "open" and expected[pid] in ("parent", "child"):
             path = event_file_path(details)
-            if path and canonical(path).startswith(old_root_path + os.sep):
+            if path is None:
+                unresolved_tracked_open_count += 1
+            elif canonical(path).startswith(old_root_path + os.sep):
                 accesses.add(expected[pid])
 
+    identity_conflicts = sum(
+        max(0, len(values) - 1)
+        for values in identities.values()
+    )
     identity_complete = (
         set(identities) == set(expected)
         and len(expected) == 2
         and all(len(values) == 1 for values in identities.values())
         and not unresolved_identity
+        and identity_conflicts == 0
     )
     attribution_complete = accesses == {"parent", "child"}
     sequence_complete = (
@@ -505,6 +584,7 @@ def analyze_records(records, malformed, fixture, old_root, checks):
         and fixture.get("child_exit_status") == 0
         and fixture.get("parent_access_count", 0) > 1
         and attribution_complete
+        and unresolved_tracked_open_count == 0
         and identity_complete
         and fork_child
         and parent_exec
@@ -523,6 +603,10 @@ def analyze_records(records, malformed, fixture, old_root, checks):
         "event_count": len(records),
         "malformed_record_count": len(malformed),
         "outside_tree_event_counts": outside_counts,
+        "tracked_identity_missing_count": sum(identity_missing_by_event.values()),
+        "tracked_identity_missing_by_event": identity_missing_by_event,
+        "tracked_identity_conflicts_count": identity_conflicts,
+        "unresolved_tracked_open_count": unresolved_tracked_open_count,
         "tracked_process_events": tracked_events,
         "global_sequence": sequence,
         "parent_exec_observed": parent_exec,
@@ -676,7 +760,7 @@ def run_macos_probe(eslogger, selected):
         except Exception:
             reason = reason or "fixture process did not stop cleanly"
         try:
-            stop_process_group(logger)
+            stop_process_group(logger, "eslogger")
         except Exception:
             reason = reason or "eslogger process did not stop cleanly"
         checks["logger_exit_code"] = (

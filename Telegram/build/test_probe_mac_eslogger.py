@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from Telegram.build import probe_mac_eslogger as probe
 
@@ -137,6 +138,45 @@ class ProbeEvidenceTests(unittest.TestCase):
                 else:
                     self.assertFalse(summary["parent_exit_observed"])
 
+    def test_tracked_open_without_path_fails_closed(self):
+        records = self.records + [self.record(8, "open", 101, {})]
+
+        summary = self.analyze(records)
+
+        self.assertTrue(summary["fixture_attribution_pass"])
+        self.assertEqual(summary["unresolved_tracked_open_count"], 1)
+        self.assertEqual(summary["fixture_result"], "UNAVAILABLE")
+
+    def test_eslogger_is_interrupted_before_its_process_group(self):
+        class Process:
+            pid = 123
+
+            def __init__(self):
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout):
+                self.returncode = 0
+                return 0
+
+        no_match = mock.Mock(returncode=1, stdout="")
+        eslogger = mock.Mock(returncode=0, stdout="456\n")
+        process = Process()
+        with (
+            mock.patch.object(
+                probe.subprocess,
+                "run",
+                side_effect=[eslogger, no_match, no_match],
+            ),
+            mock.patch.object(probe.os, "kill") as kill,
+            mock.patch.object(probe, "process_group_exists", return_value=False),
+        ):
+            probe.stop_process_group(process, "eslogger")
+
+        kill.assert_called_once_with(456, probe.signal.SIGINT)
+
     def test_logger_liveness_and_shutdown_are_required(self):
         self.assertFalse(probe.probe_step_failed(self.analyze()))
         failure_cases = (
@@ -188,6 +228,7 @@ class ProbeEvidenceTests(unittest.TestCase):
         diagnostics = json.loads(diagnostic_line.split("=", 1)[1])
         self.assertIn("global_sequence", diagnostics)
         self.assertIn("logger_shutdown_pass", diagnostics)
+        self.assertIn("unresolved_tracked_open_count", diagnostics)
         self.assertNotIn("tracked_process_events", diagnostics)
         self.assertLess(len(diagnostic_line), 4096)
         self.assertNotIn("CANARY_SECRET", logged)
