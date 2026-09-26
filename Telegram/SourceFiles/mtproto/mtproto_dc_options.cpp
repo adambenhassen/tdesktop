@@ -121,6 +121,16 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 			&& server.ipv6
 				== (address.protocol() == QAbstractSocket::IPv6Protocol);
 	}
+	auto selectionAddress = QHostAddress();
+	const auto localNameResolvedAddress = server.discoveryPolicy
+		== ServerDiscoveryPolicy::LocalDirect
+		&& !selectionAddress.setAddress(selection.host)
+		&& selection.explicitPort
+		&& selection.requestedPort == server.port
+		&& address.setAddress(host)
+		&& host == address.toString().toLower()
+		&& server.ipv6
+			== (address.protocol() == QAbstractSocket::IPv6Protocol);
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps) {
 		return address.setAddress(host)
 			&& server.ipv6
@@ -133,9 +143,10 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 				? (u"["_q + host + u"]"_q)
 				: host) + u":"_q + QString::number(server.port)
 			: host + u":"_q + QString::number(server.port));
-	return endpoint
+	return (endpoint
 		&& endpoint.policy == server.discoveryPolicy
-		&& endpoint.ipv6 == server.ipv6;
+		&& endpoint.ipv6 == server.ipv6)
+		|| localNameResolvedAddress;
 }
 
 // A pin is all-or-nothing. Every one of these leaves an account that

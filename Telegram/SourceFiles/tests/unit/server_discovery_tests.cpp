@@ -237,6 +237,11 @@ TEST_CASE(LocalNameDiscoveryBindsToItsResolvedSpecialUseAddress) {
 	CHECK_EQ(server->serverSelection, "printer.local:2443");
 	CHECK(server->discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
 	CHECK_EQ(server->discoveryOrigin, "local:printer.local:2443");
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK_EQ(restored.customServer().ip, "169.254.1.10");
 
 	const auto literal = CheckServerSelection(u"169.254.1.10:2443"_q);
 	CHECK(literal.status == ServerSelectionStatus::PublicIpLiteral);
