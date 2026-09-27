@@ -525,13 +525,13 @@ TEST_CASE(PinnedHostnameAddressFilteringPreservesOrderAndCapsAnswers) {
 	const auto ipv4 = FilterPinnedServerAddresses(hostname, addresses, false);
 	CHECK_EQ(int(ipv4.size()), 1);
 	if (ipv4.size() == 1) {
-		CHECK_EQ(ipv4.front(), QHostAddress(u"100.124.236.66"_q));
+		CHECK(ipv4.front() == QHostAddress(u"100.124.236.66"_q));
 	}
 
 	const auto ipv6 = FilterPinnedServerAddresses(hostname, addresses, true);
 	CHECK_EQ(int(ipv6.size()), 1);
 	if (ipv6.size() == 1) {
-		CHECK_EQ(ipv6.front(), QHostAddress(u"fd7a:115c:a1e0::1234"_q));
+		CHECK(ipv6.front() == QHostAddress(u"fd7a:115c:a1e0::1234"_q));
 	}
 
 	const auto capped = FilterPinnedServerAddresses(
@@ -549,8 +549,8 @@ TEST_CASE(PinnedHostnameAddressFilteringPreservesOrderAndCapsAnswers) {
 		},
 		false);
 	CHECK_EQ(int(capped.size()), 8);
-	CHECK_EQ(capped.front(), QHostAddress(u"8.8.8.1"_q));
-	CHECK_EQ(capped.back(), QHostAddress(u"8.8.8.8"_q));
+	CHECK(capped.front() == QHostAddress(u"8.8.8.1"_q));
+	CHECK(capped.back() == QHostAddress(u"8.8.8.8"_q));
 }
 
 TEST_CASE(SelectionRejectsNonRoutableIpLiterals) {
