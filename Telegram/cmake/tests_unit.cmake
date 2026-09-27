@@ -76,6 +76,8 @@ PRIVATE
     tests/unit/update_policy_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
+    mtproto/connection_abstract.h
+    mtproto/proxy_check.cpp
 )
 
 target_link_libraries(test_unit
@@ -98,5 +100,6 @@ PRIVATE
 # binary dir, so one documented path finds it. The generator appends the
 # config, as it does for the application.
 set_target_properties(test_unit PROPERTIES
+    AUTOMOC ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )

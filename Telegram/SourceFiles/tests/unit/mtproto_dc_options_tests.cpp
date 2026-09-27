@@ -16,12 +16,133 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/connection_server_resolving.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_enrollment.h"
+#include "mtproto/mtp_instance.h"
 #include "mtproto/proxy_check.h"
 #include "mtproto/session.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+
+namespace MTP::details {
+namespace {
+
+int UnitConnectionCounter = 0;
+
+} // namespace
+
+using UnitProxyCheckFactory = Fn<ConnectionPointer(
+	DcOptions::Variants::Protocol protocol,
+	QThread *thread,
+	const bytes::vector &secret,
+	const ProxyData &proxy,
+	const QString &hostname,
+	bool ipv6)>;
+
+const UnitProxyCheckFactory *UnitProxyCheckFactoryInstance = nullptr;
+
+ConnectionPointer::ConnectionPointer() = default;
+
+ConnectionPointer::ConnectionPointer(std::nullptr_t) {
+}
+
+ConnectionPointer::ConnectionPointer(ConnectionPointer &&other)
+: _value(base::take(other._value)) {
+}
+
+ConnectionPointer &ConnectionPointer::operator=(ConnectionPointer &&other) {
+	reset(base::take(other._value));
+	return *this;
+}
+
+AbstractConnection *ConnectionPointer::get() const {
+	return _value;
+}
+
+void ConnectionPointer::reset(AbstractConnection *value) {
+	if (_value == value) {
+		return;
+	}
+	delete _value;
+	_value = value;
+}
+
+ConnectionPointer::operator AbstractConnection*() const {
+	return get();
+}
+
+AbstractConnection *ConnectionPointer::operator->() const {
+	return get();
+}
+
+AbstractConnection &ConnectionPointer::operator*() const {
+	return *get();
+}
+
+ConnectionPointer::operator bool() const {
+	return get() != nullptr;
+}
+
+ConnectionPointer::~ConnectionPointer() {
+	reset();
+}
+
+AbstractConnection::AbstractConnection(
+		QThread *thread,
+		const ProxyData &proxy)
+: _proxy(proxy)
+, _debugId(QString::number(++UnitConnectionCounter)) {
+	moveToThread(thread);
+}
+
+ConnectionPointer AbstractConnection::Create(
+		not_null<Instance*>,
+		DcOptions::Variants::Protocol,
+		QThread *,
+		const bytes::vector &,
+		const ProxyData &) {
+	return nullptr;
+}
+
+ConnectionPointer CreateServerConnection(
+		not_null<Instance*>,
+		DcOptions::Variants::Protocol protocol,
+		QThread *thread,
+		const bytes::vector &secret,
+		const ProxyData &proxy,
+		const QString &hostname,
+		bool ipv6) {
+	Expects(UnitProxyCheckFactoryInstance != nullptr);
+	return (*UnitProxyCheckFactoryInstance)(
+		protocol,
+		thread,
+		secret,
+		proxy,
+		hostname,
+		ipv6);
+}
+
+} // namespace MTP::details
+
+namespace MTP::details {
+
+DcOptions *UnitProxyCheckOptions = nullptr;
+
+} // namespace MTP::details
+
+namespace MTP {
+
+DcId Instance::mainDcId() const {
+	Expects(details::UnitProxyCheckOptions != nullptr);
+	return details::UnitProxyCheckOptions->customServer().dcId;
+}
+
+DcOptions &Instance::dcOptions() const {
+	Expects(details::UnitProxyCheckOptions != nullptr);
+	return *details::UnitProxyCheckOptions;
+}
+
+} // namespace MTP
 
 namespace {
 
@@ -63,6 +184,89 @@ constexpr auto kProductionKeyFingerprint = qint64(-3414540481677951611LL);
 		.key = MakeKey(),
 	};
 }
+
+struct ProxyCheckObservation {
+	ProxyData::Type proxyType = ProxyData::Type::None;
+	QString factoryHostname;
+	QString addressReceivedByProxy;
+	QString addressPassedToWrapper;
+	int port = 0;
+	bool connected = false;
+};
+
+class ProxyCheckObserver final : public details::AbstractConnection {
+public:
+	ProxyCheckObserver(
+		QThread *thread,
+		const ProxyData &proxy,
+		QString hostname,
+		ProxyCheckObservation *observation)
+	: details::AbstractConnection(thread, proxy)
+	, _hostname(std::move(hostname))
+	, _observation(observation) {
+	}
+
+	details::ConnectionPointer clone(const ProxyData &) override {
+		return nullptr;
+	}
+
+	crl::time pingTime() const override {
+		return 0;
+	}
+
+	crl::time fullConnectTimeout() const override {
+		return 0;
+	}
+
+	void sendData(mtpBuffer &&) override {
+	}
+
+	void disconnectFromServer() override {
+	}
+
+	void connectToServer(
+			const QString &address,
+			int port,
+			const bytes::vector &,
+			int16,
+			bool) override {
+		_observation->addressPassedToWrapper = address;
+		_observation->port = port;
+		const auto vetted = FilterPinnedServerAddresses(
+			_hostname,
+			QList<QHostAddress>{ QHostAddress(u"100.124.236.66"_q) },
+			false);
+		if (vetted.size() != 1) {
+			error(kErrorCodeOther);
+			return;
+		}
+		_observation->addressReceivedByProxy = vetted.front().toString();
+		_observation->proxyType = _proxy.type;
+		_observation->connected = true;
+		connected();
+	}
+
+	bool isConnected() const override {
+		return _observation->connected;
+	}
+
+	int32 debugState() const override {
+		return 0;
+	}
+
+	QString transport() const override {
+		return u"test"_q;
+	}
+
+	QString tag() const override {
+		return u"test"_q;
+	}
+
+private:
+	const QString _hostname;
+	ProxyCheckObservation *_observation = nullptr;
+
+};
 
 } // namespace
 
@@ -489,22 +693,82 @@ TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
 		[DcOptions::Variants::Http].empty());
 }
 
-// Proxy checks must use the same local hostname-resolution route as session
-// connections, so SOCKS5 and HTTP CONNECT never receive the enrolled name.
-TEST_CASE(HostnamePinProxyChecksUseLocalResolution) {
-	const auto hostname = u"server.example.com"_q;
-	CHECK(details::ShouldResolveServerHostname(
-		hostname,
-		ProxyData::Type::Socks5));
-	CHECK(details::ShouldResolveServerHostname(
-		hostname,
-		ProxyData::Type::Http));
-	CHECK(!details::ShouldResolveServerHostname(
-		hostname,
-		ProxyData::Type::Mtproto));
-	CHECK(!details::ShouldResolveServerHostname(
-		{},
-		ProxyData::Type::Socks5));
+// Proxy checks must exercise the production factory, not just its predicate:
+// both proxy protocols must receive the vetted literal after local resolution.
+TEST_CASE(StartProxyCheckUsesVettedLiteralForProxyProtocols) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "telegram-server.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://telegram-server.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	for (const auto proxyType : {
+		ProxyData::Type::Socks5,
+		ProxyData::Type::Http,
+	}) {
+		ProxyData proxy;
+		proxy.type = proxyType;
+		proxy.host = u"127.0.0.1"_q;
+		proxy.port = 1080;
+		ProxyCheckObservation observation;
+		bool done = false;
+		bool failed = false;
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		const details::UnitProxyCheckFactory factory = [&](
+			DcOptions::Variants::Protocol protocol,
+			QThread *thread,
+			const bytes::vector &secret,
+			const ProxyData &data,
+			const QString &hostname,
+			bool ipv6) {
+			CHECK(protocol == DcOptions::Variants::Tcp);
+			CHECK(!ipv6);
+			observation.factoryHostname = hostname;
+			return details::ConnectionPointer::New<ProxyCheckObserver>(
+				thread,
+				data,
+				hostname,
+				&observation);
+		};
+		details::UnitProxyCheckFactoryInstance = &factory;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) { done = true; },
+			[&](details::AbstractConnection *) { failed = true; });
+
+		CHECK(v4);
+		CHECK(!v6);
+		CHECK(done);
+		CHECK(!failed);
+		CHECK_EQ(
+			observation.factoryHostname,
+			u"telegram-server.tailaa4918.ts.net"_q);
+		CHECK_EQ(
+			observation.addressPassedToWrapper,
+			observation.factoryHostname);
+		CHECK_EQ(
+			observation.addressReceivedByProxy,
+			u"100.124.236.66"_q);
+		CHECK(observation.addressReceivedByProxy != observation.factoryHostname);
+		CHECK_EQ(observation.port, 2443);
+		CHECK(observation.proxyType == proxyType);
+		v4.reset();
+		details::UnitProxyCheckFactoryInstance = nullptr;
+	}
+	details::UnitProxyCheckOptions = nullptr;
 }
 
 TEST_CASE(UnboundBuiltinDcRetainsHttpTransportCandidate) {
