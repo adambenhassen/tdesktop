@@ -360,7 +360,7 @@ TEST_CASE(HostnamePinRejectsInvalidCanonicalRestoreAndOlderVersion) {
 					int(der.size())).toBase64()) }
 			} }
 		}).toJson(QJsonDocument::Compact));
-	result.resolvedAddress = u"100.124.236.66"_q;
+	result.resolvedAddress = u"8.8.8.8"_q;
 	const auto server = BuildCustomServerFromDiscovery(selection, result);
 	CHECK(server.has_value());
 	if (!server) {
