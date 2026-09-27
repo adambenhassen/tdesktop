@@ -8,10 +8,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/connection_abstract.h"
+#include "mtproto/session.h"
 
 namespace MTP {
 
 using ProxyCheckConnection = details::ConnectionPointer;
+
+[[nodiscard]] inline DcOptions::Variants::Protocol ProxyCheckProtocol(
+	ProxyData::Type proxyType,
+	bool hasCustomServer) {
+	return details::UseTcpForProxy(proxyType, hasCustomServer)
+		? DcOptions::Variants::Tcp
+		: DcOptions::Variants::Http;
+}
 
 void ResetProxyCheckers(
 	ProxyCheckConnection &v4,

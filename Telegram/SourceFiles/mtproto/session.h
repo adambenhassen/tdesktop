@@ -79,6 +79,12 @@ struct SessionOptions {
 
 };
 
+[[nodiscard]] inline bool UseTcpForProxy(
+	ProxyData::Type proxyType,
+	bool hasCustomServer) {
+	return (proxyType != ProxyData::Type::Http) || hasCustomServer;
+}
+
 class Session;
 class SessionData final {
 public:

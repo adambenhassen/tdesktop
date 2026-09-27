@@ -49,9 +49,9 @@ void StartProxyCheck(
 	using Variants = DcOptions::Variants;
 
 	ResetProxyCheckers(v4, v6);
-	const auto connType = (proxy.type == ProxyData::Type::Http)
-		? Variants::Http
-		: Variants::Tcp;
+	const auto connType = ProxyCheckProtocol(
+		proxy.type,
+		mtproto->dcOptions().hasCustomServer());
 	const auto dcId = mtproto->mainDcId();
 	const auto setup = [&](ProxyCheckConnection &checker, const bytes::vector &secret) {
 		checker = Connection::Create(
