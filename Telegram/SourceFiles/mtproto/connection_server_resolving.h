@@ -80,4 +80,17 @@ private:
 
 };
 
+[[nodiscard]] bool ShouldResolveServerHostname(
+	const QString &hostname,
+	ProxyData::Type proxyType);
+
+[[nodiscard]] ConnectionPointer CreateServerConnection(
+	not_null<Instance*> instance,
+	DcOptions::Variants::Protocol protocol,
+	QThread *thread,
+	const bytes::vector &secret,
+	const ProxyData &proxy,
+	const QString &hostname,
+	bool ipv6);
+
 } // namespace MTP::details

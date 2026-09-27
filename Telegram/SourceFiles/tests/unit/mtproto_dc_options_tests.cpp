@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <vector>
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
+#include "mtproto/connection_server_resolving.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_enrollment.h"
 #include "mtproto/proxy_check.h"
@@ -486,6 +487,24 @@ TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
 	}
 	CHECK(proxied.data[DcOptions::Variants::IPv4]
 		[DcOptions::Variants::Http].empty());
+}
+
+// Proxy checks must use the same local hostname-resolution route as session
+// connections, so SOCKS5 and HTTP CONNECT never receive the enrolled name.
+TEST_CASE(HostnamePinProxyChecksUseLocalResolution) {
+	const auto hostname = u"server.example.com"_q;
+	CHECK(details::ShouldResolveServerHostname(
+		hostname,
+		ProxyData::Type::Socks5));
+	CHECK(details::ShouldResolveServerHostname(
+		hostname,
+		ProxyData::Type::Http));
+	CHECK(!details::ShouldResolveServerHostname(
+		hostname,
+		ProxyData::Type::Mtproto));
+	CHECK(!details::ShouldResolveServerHostname(
+		{},
+		ProxyData::Type::Socks5));
 }
 
 TEST_CASE(UnboundBuiltinDcRetainsHttpTransportCandidate) {

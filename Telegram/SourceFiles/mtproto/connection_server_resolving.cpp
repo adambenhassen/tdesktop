@@ -22,6 +22,37 @@ constexpr auto kMaxAddresses = 8;
 
 } // namespace
 
+bool ShouldResolveServerHostname(
+		const QString &hostname,
+		ProxyData::Type proxyType) {
+	return !hostname.isEmpty() && proxyType != ProxyData::Type::Mtproto;
+}
+
+ConnectionPointer CreateServerConnection(
+		not_null<Instance*> instance,
+		DcOptions::Variants::Protocol protocol,
+		QThread *thread,
+		const bytes::vector &secret,
+		const ProxyData &proxy,
+		const QString &hostname,
+		bool ipv6) {
+	if (ShouldResolveServerHostname(hostname, proxy.type)) {
+		return ConnectionPointer::New<ServerResolvingConnection>(
+			instance,
+			thread,
+			proxy,
+			protocol,
+			ipv6,
+			hostname);
+	}
+	return AbstractConnection::Create(
+		instance,
+		protocol,
+		thread,
+		secret,
+		proxy);
+}
+
 ServerResolvingConnection::ServerResolvingConnection(
 		not_null<Instance*> instance,
 		QThread *thread,

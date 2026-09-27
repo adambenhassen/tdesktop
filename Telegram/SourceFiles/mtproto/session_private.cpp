@@ -204,24 +204,14 @@ void SessionPrivate::appendTestConnection(
 	const auto priority = (ipv6 ? (OptionPreferIPv6.value() ? 2 : 0) : 1)
 		+ (protocol == DcOptions::Variants::Tcp ? 1 : 0)
 		+ (protocolSecret.empty() ? 0 : 1);
-	auto connection = ConnectionPointer();
-	if (!pin.hostname.empty()
-		&& _options->proxy.type != ProxyData::Type::Mtproto) {
-		connection = ConnectionPointer::New<ServerResolvingConnection>(
-			_instance,
-			thread(),
-			_options->proxy,
-			protocol,
-			ipv6,
-			QString::fromStdString(pin.hostname));
-	} else {
-		connection = AbstractConnection::Create(
-			_instance,
-			protocol,
-			thread(),
-			protocolSecret,
-			_options->proxy);
-	}
+	auto connection = CreateServerConnection(
+		_instance,
+		protocol,
+		thread(),
+		protocolSecret,
+		_options->proxy,
+		QString::fromStdString(pin.hostname),
+		ipv6);
 	_testConnections.push_back({
 		std::move(connection),
 		priority
