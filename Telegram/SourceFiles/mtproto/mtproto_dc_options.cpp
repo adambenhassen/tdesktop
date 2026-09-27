@@ -78,7 +78,9 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
-[[nodiscard]] bool ValidDiscoveryMetadata(const CustomServer &server) {
+[[nodiscard]] bool ValidDiscoveryMetadata(
+		const CustomServer &server,
+		bool allowRestoredPreviouslyAllowedLiteral = false) {
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::Legacy) {
 		return server.serverSelection.empty()
 			&& server.discoveryOrigin.empty();
@@ -88,7 +90,16 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	}
 	const auto selection = CheckServerSelection(
 		QString::fromStdString(server.serverSelection));
-	if (!selection || selection.policy != server.discoveryPolicy) {
+	const auto restoredPreviouslyAllowedLiteral =
+		allowRestoredPreviouslyAllowedLiteral
+		&& server.discoveryPolicy == ServerDiscoveryPolicy::LocalDirect
+		&& selection.status == ServerSelectionStatus::PublicIpLiteral
+		&& selection.explicitPort
+		&& selection.requestedPort == server.port
+		&& selection.normalizedSelection
+			== QString::fromStdString(server.serverSelection);
+	if ((!selection || selection.policy != server.discoveryPolicy)
+		&& !restoredPreviouslyAllowedLiteral) {
 		return false;
 	}
 	if (selection.requestedPort
@@ -104,6 +115,22 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 	}
 	const auto host = QString::fromStdString(server.ip);
 	auto address = QHostAddress();
+	if (restoredPreviouslyAllowedLiteral) {
+		return address.setAddress(host)
+			&& host == selection.host
+			&& server.ipv6
+				== (address.protocol() == QAbstractSocket::IPv6Protocol);
+	}
+	auto selectionAddress = QHostAddress();
+	const auto localNameResolvedAddress = server.discoveryPolicy
+		== ServerDiscoveryPolicy::LocalDirect
+		&& !selectionAddress.setAddress(selection.host)
+		&& selection.explicitPort
+		&& selection.requestedPort == server.port
+		&& address.setAddress(host)
+		&& host == address.toString().toLower()
+		&& server.ipv6
+			== (address.protocol() == QAbstractSocket::IPv6Protocol);
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps) {
 		return address.setAddress(host)
 			&& server.ipv6
@@ -116,9 +143,10 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 				? (u"["_q + host + u"]"_q)
 				: host) + u":"_q + QString::number(server.port)
 			: host + u":"_q + QString::number(server.port));
-	return endpoint
+	return (endpoint
 		&& endpoint.policy == server.discoveryPolicy
-		&& endpoint.ipv6 == server.ipv6;
+		&& endpoint.ipv6 == server.ipv6)
+		|| localNameResolvedAddress;
 }
 
 // A pin is all-or-nothing. Every one of these leaves an account that
@@ -165,6 +193,76 @@ bool SameCustomServerPin(
 	}
 	return a.key->getN() == b.key->getN()
 		&& a.key->getE() == b.key->getE();
+}
+
+std::optional<CustomServer> BuildCustomServerFromDiscovery(
+		const ServerSelectionCheck &selection,
+		const ServerDiscoveryResult &result) {
+	if (!selection.valid()
+		|| !result
+		|| selection.policy != result.policy
+		|| (result.policy != ServerDiscoveryPolicy::PublicHttps
+			&& result.policy != ServerDiscoveryPolicy::LocalDirect)) {
+		return std::nullopt;
+	}
+	const auto expectedOrigin = (result.policy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? PublicDiscoveryUrl(selection)
+		: (u"local:"_q + selection.normalizedSelection);
+	if (result.origin != expectedOrigin || result.dcId <= 0) {
+		return std::nullopt;
+	}
+	const auto endpoint = CheckServerSelection(result.endpoint);
+	const auto endpointAllowed = (result.policy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? IsPublicDiscoveryEndpoint(endpoint, selection)
+		: (endpoint && endpoint.policy == result.policy);
+	if (!endpointAllowed || !result.key.valid()) {
+		return std::nullopt;
+	}
+	const auto connectionHost = result.resolvedAddress.isEmpty()
+		? endpoint.host
+		: result.resolvedAddress;
+	auto connectionAddress = QHostAddress();
+	const auto connectionIsLiteral = connectionAddress.setAddress(
+		connectionHost);
+	auto selectionAddress = QHostAddress();
+	const auto localNameResolvedAddress = result.policy
+		== ServerDiscoveryPolicy::LocalDirect
+		&& !selectionAddress.setAddress(selection.host)
+		&& !result.resolvedAddress.isEmpty()
+		&& endpoint.normalizedSelection == selection.normalizedSelection
+		&& connectionIsLiteral;
+	const auto connectionHostText = connectionIsLiteral
+		? (connectionAddress.protocol() == QAbstractSocket::IPv6Protocol
+			? (u"["_q + connectionAddress.toString() + u"]"_q)
+			: connectionAddress.toString())
+		: connectionHost;
+	const auto connectionEndpoint = CheckServerSelection(
+		connectionHostText
+			+ u":"_q
+			+ QString::number(endpoint.operationalPort));
+	const auto connectionSafe = (result.policy
+		== ServerDiscoveryPolicy::PublicHttps)
+		? (connectionIsLiteral
+			&& IsPublicDiscoveryAddress(selection, connectionAddress))
+		: (localNameResolvedAddress
+			|| (connectionEndpoint
+				&& connectionEndpoint.policy
+					== ServerDiscoveryPolicy::LocalDirect));
+	if (!connectionSafe) {
+		return std::nullopt;
+	}
+	return CustomServer{
+		.dcId = result.dcId,
+		.ip = connectionEndpoint.host.toStdString(),
+		.port = endpoint.operationalPort,
+		.ipv6 = connectionEndpoint.ipv6,
+		.key = std::make_shared<details::RSAPublicKey>(result.key),
+		.serverSelection = selection.normalizedSelection.toStdString(),
+		.discoveryPolicy = result.policy,
+		.discoveryOrigin = result.origin.toStdString(),
+	};
 }
 
 bool CanStartSpecialConfigRequest(
@@ -934,7 +1032,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		_customServer.discoveryPolicy = ServerDiscoveryPolicy(policy);
 		_customServer.serverSelection = std::move(selection);
 		_customServer.discoveryOrigin = std::move(origin);
-		if (!ValidDiscoveryMetadata(_customServer)) {
+		if (!ValidDiscoveryMetadata(_customServer, true)) {
 			LOG(("MTP Error: Discovery metadata does not match the stored custom server."));
 			return false;
 		}

@@ -46,6 +46,41 @@ std::atomic<int> ServerDiscoveryAttempts = 0;
 	return code >= '0' && code <= '9';
 }
 
+[[nodiscard]] bool IsAsciiHexDigit(QChar ch) {
+	const auto code = ch.unicode();
+	return (code >= '0' && code <= '9')
+		|| (code >= 'a' && code <= 'f')
+		|| (code >= 'A' && code <= 'F');
+}
+
+[[nodiscard]] bool HasInetAtonNumericFinalLabel(const QString &host) {
+	auto normalized = host;
+	if (normalized.endsWith(QChar::fromLatin1('.'))) {
+		normalized.chop(1);
+	}
+	const auto label = normalized.mid(normalized.lastIndexOf('.') + 1);
+	if (!label.isEmpty()
+		&& std::all_of(label.begin(), label.end(), IsAsciiDigit)) {
+		return true;
+	}
+	return label.size() >= 2
+		&& label[0] == QChar::fromLatin1('0')
+		&& (label[1] == QChar::fromLatin1('x')
+			|| label[1] == QChar::fromLatin1('X'))
+		&& std::all_of(label.begin() + 2, label.end(), IsAsciiHexDigit);
+}
+
+[[nodiscard]] bool IsCanonicalIpv4WithTrailingDot(const QString &host) {
+	if (!host.endsWith(QChar::fromLatin1('.'))) {
+		return false;
+	}
+	const auto withoutTrailingDot = host.left(host.size() - 1);
+	auto address = QHostAddress();
+	return address.setAddress(withoutTrailingDot)
+		&& address.protocol() == QAbstractSocket::IPv4Protocol
+		&& address.toString() == withoutTrailingDot;
+}
+
 [[nodiscard]] bool IsInSubnet(
 		const QHostAddress &address,
 		const char *subnet,
@@ -163,6 +198,28 @@ constexpr auto kNonGlobalIpv6 = {
 	}
 	return IsInSubnet(address, "::", 128)
 		|| IsInSubnet(address, "ff00::", 8);
+}
+
+[[nodiscard]] bool IsFirstUseTrustedLocalLiteral(
+		const QHostAddress &address) {
+	if (address.protocol() == QAbstractSocket::IPv6Protocol
+		&& IsInSubnet(address, "::ffff:0:0", 96)) {
+		return IsFirstUseTrustedLocalLiteral(
+			QHostAddress(address.toIPv4Address()));
+	}
+	if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+		return IsInAnySubnet(address, {
+			{ "10.0.0.0", 8 },
+			{ "172.16.0.0", 12 },
+			{ "192.168.0.0", 16 },
+			{ "100.64.0.0", 10 },
+			{ "127.0.0.0", 8 },
+		});
+	}
+	return address.protocol() == QAbstractSocket::IPv6Protocol
+		&& (IsInSubnet(address, "::1", 128)
+			|| IsInSubnet(address, "fc00::", 7)
+			|| IsInSubnet(address, "fe80::", 10));
 }
 
 [[nodiscard]] bool IsLocalName(const QString &host) {
@@ -612,6 +669,7 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	auto hostText = QString();
 	auto portText = QString();
 	auto explicitPort = false;
+	auto bracketedWithoutPort = false;
 	if (bracketed) {
 		const auto close = trimmed.indexOf(QChar::fromLatin1(']'));
 		if (close <= 1) {
@@ -623,12 +681,13 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 		hostText = trimmed.mid(1, close - 1);
 		const auto rest = trimmed.mid(close + 1);
 		if (rest.isEmpty()) {
-			return SelectionFailure(ServerSelectionStatus::NoPort);
+			bracketedWithoutPort = true;
 		} else if (!rest.startsWith(QChar::fromLatin1(':'))) {
 			return SelectionFailure(ServerSelectionStatus::BadPort);
+		} else {
+			portText = rest.mid(1);
+			explicitPort = true;
 		}
-		portText = rest.mid(1);
-		explicitPort = true;
 	} else {
 		const auto firstColon = trimmed.indexOf(QChar::fromLatin1(':'));
 		const auto lastColon = trimmed.lastIndexOf(QChar::fromLatin1(':'));
@@ -663,13 +722,17 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	auto literal = QHostAddress();
 	const auto isLiteral = literal.setAddress(hostText);
 	if (bracketed && !isLiteral) {
-		return SelectionFailure(ServerSelectionStatus::BadHost);
+		return SelectionFailure(bracketedWithoutPort
+			? ServerSelectionStatus::NoPort
+			: ServerSelectionStatus::BadHost);
 	}
 
 	const auto ipv6 = isLiteral
 		&& literal.protocol() == QAbstractSocket::IPv6Protocol;
 	if (bracketed && isLiteral && !ipv6) {
-		return SelectionFailure(ServerSelectionStatus::BadHost);
+		return SelectionFailure(bracketedWithoutPort
+			? ServerSelectionStatus::NoPort
+			: ServerSelectionStatus::BadHost);
 	}
 	if (isLiteral) {
 		if (IsRejectedLiteral(literal)) {
@@ -679,11 +742,39 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 		// only the canonical spelling so an equivalent input cannot change
 		// the endpoint identity later.
 		if (hostText != literal.toString().toLower()) {
+			if (HasInetAtonNumericFinalLabel(hostText)) {
+				return SelectionFailure(
+					ServerSelectionStatus::PublicIpLiteral);
+			}
 			return SelectionFailure(ServerSelectionStatus::BadHost);
 		}
+		if (!IsFirstUseTrustedLocalLiteral(literal)) {
+			const auto host = literal.toString().toLower();
+			const auto port = explicitPort ? portText.toInt() : 443;
+			return {
+				.status = ServerSelectionStatus::PublicIpLiteral,
+				.host = host,
+				.normalizedSelection = explicitPort
+					? EndpointFor(host, ipv6, port)
+					: host,
+				.requestedPort = explicitPort ? port : 0,
+				.operationalPort = port,
+				.ipv6 = ipv6,
+				.explicitPort = explicitPort,
+				.policy = ServerDiscoveryPolicy::PublicHttps,
+			};
+		}
+	}
+	if (!isLiteral
+		&& HasInetAtonNumericFinalLabel(hostText)
+		&& !IsCanonicalIpv4WithTrailingDot(hostText)) {
+		return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
 	}
 	if (!isLiteral && HostExceedsNameLimit(hostText)) {
 		return SelectionFailure(ServerSelectionStatus::HostTooLong);
+	}
+	if (bracketedWithoutPort) {
+		return SelectionFailure(ServerSelectionStatus::NoPort);
 	}
 
 	auto host = QString();
@@ -698,11 +789,9 @@ ServerSelectionCheck CheckServerSelection(const QString &value) {
 	}
 
 	const auto localName = !isLiteral && IsLocalName(host);
-	// Every IP literal is local-direct: a literal has no WebPKI hostname to
-	// authenticate, so it must use the explicit-port preflight even when it
-	// is globally routable. Unspecified, multicast, and broadcast literals
-	// were rejected above; other special-use literals remain eligible when
-	// selected directly.
+	if (localName && HasInetAtonNumericFinalLabel(host)) {
+		return SelectionFailure(ServerSelectionStatus::PublicIpLiteral);
+	}
 	const auto localLiteral = isLiteral;
 	const auto local = localName || localLiteral;
 	if (local && !explicitPort) {
@@ -756,8 +845,7 @@ std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
 bool IsPublicDiscoveryEndpoint(
 		const ServerSelectionCheck &endpoint,
 		const ServerSelectionCheck &origin) {
-	if (!endpoint.valid()
-		|| !endpoint.explicitPort
+	if (!endpoint.explicitPort
 		|| !origin.valid()
 		|| origin.policy != ServerDiscoveryPolicy::PublicHttps) {
 		return false;
@@ -766,7 +854,8 @@ bool IsPublicDiscoveryEndpoint(
 	if (address.setAddress(endpoint.host)) {
 		return IsPublicDiscoveryAddress(origin, address);
 	}
-	return endpoint.policy == ServerDiscoveryPolicy::PublicHttps;
+	return endpoint.valid()
+		&& endpoint.policy == ServerDiscoveryPolicy::PublicHttps;
 }
 
 QString PublicDiscoveryUrl(const ServerSelectionCheck &selection) {

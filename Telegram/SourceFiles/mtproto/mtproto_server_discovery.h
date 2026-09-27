@@ -59,6 +59,7 @@ enum class ServerSelectionStatus {
 	HostTooLong,
 	UnbracketedIPv6,
 	InvalidSpecialAddress,
+	PublicIpLiteral,
 };
 
 struct ServerSelectionCheck {
@@ -83,8 +84,8 @@ struct ServerSelectionCheck {
 	const QString &value);
 
 // Whether an address is globally routable unicast. This deliberately remains
-// separate from CheckServerSelection(), where every IP literal is local-direct
-// because it has no DNS name that WebPKI can authenticate.
+// separate from typed literal selection: private local ranges use local-direct,
+// while public literals are refused before discovery starts.
 [[nodiscard]] bool IsPublicAddress(const QHostAddress &address);
 // Whether an address is safe for public discovery from the typed HTTPS origin.
 // MagicDNS origins also allow addresses in the two Tailscale ranges.
@@ -96,9 +97,9 @@ struct ServerSelectionCheck {
 	const QList<QHostAddress> &addresses);
 
 // A delegated public endpoint must be an explicit-port public DNS name or a
-// safe IP literal for the selected HTTPS origin. IP literals remain
-// local-direct when they are user selections, but a verified document may
-// delegate to a public or Tailscale address.
+// safe IP literal for the selected HTTPS origin. Local IP selections retain
+// local-direct routing; public IP selections are refused, but a verified
+// document may delegate to a public or permitted Tailscale address.
 [[nodiscard]] bool IsPublicDiscoveryEndpoint(
 	const ServerSelectionCheck &endpoint,
 	const ServerSelectionCheck &origin);
