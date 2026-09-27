@@ -675,7 +675,7 @@ TEST_CASE(HistoricalLiteralBindingsRestoreUnchanged) {
 			5,
 			int(sizeof(qint32) * 4)
 				+ int(server.serverSelection.size())
-				+ int(server.discoveryOrigin.size())),
+				+ int(server.discoveryOrigin.size())},
 		std::pair{
 			6,
 			int(sizeof(qint32) * 5)
@@ -866,7 +866,7 @@ TEST_CASE(StartProxyCheckRejectsFailedHostnameResolution) {
 	details::UnitProxyCheckOptions = &options;
 
 	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
-	for (const auto response : {
+	for (const auto &response : {
 		UnitHostLookupResponse{
 			.error = QHostInfo::HostNotFound,
 		},
