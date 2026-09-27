@@ -45,7 +45,7 @@ qint64 LookupServerHostname(
 		&QDnsLookup::finished,
 		lookup,
 		[lookup, callback = std::move(callback)] {
-			auto info = QHostInfo(lookup->name());
+			auto info = QHostInfo();
 			if (lookup->error() == QDnsLookup::NoError) {
 				auto addresses = QList<QHostAddress>();
 				for (const auto &record : lookup->hostAddressRecords()) {
