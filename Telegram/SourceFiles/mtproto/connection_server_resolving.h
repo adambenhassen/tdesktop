@@ -80,9 +80,11 @@ private:
 
 };
 
-[[nodiscard]] bool ShouldResolveServerHostname(
-	const QString &hostname,
-	ProxyData::Type proxyType);
+[[nodiscard]] inline bool ShouldResolveServerHostname(
+		const QString &hostname,
+		ProxyData::Type proxyType) {
+	return !hostname.isEmpty() && proxyType != ProxyData::Type::Mtproto;
+}
 
 [[nodiscard]] ConnectionPointer CreateServerConnection(
 	not_null<Instance*> instance,

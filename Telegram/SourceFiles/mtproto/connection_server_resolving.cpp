@@ -22,12 +22,6 @@ constexpr auto kMaxAddresses = 8;
 
 } // namespace
 
-bool ShouldResolveServerHostname(
-		const QString &hostname,
-		ProxyData::Type proxyType) {
-	return !hostname.isEmpty() && proxyType != ProxyData::Type::Mtproto;
-}
-
 ConnectionPointer CreateServerConnection(
 		not_null<Instance*> instance,
 		DcOptions::Variants::Protocol protocol,
