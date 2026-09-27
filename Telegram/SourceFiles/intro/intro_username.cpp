@@ -51,7 +51,9 @@ constexpr auto kStillWaitingAfterSeconds = 10;
 		return UsernameServerIdentity();
 	}
 	return UsernameServerIdentity{
-		.ip = QString::fromStdString(server.ip),
+		.ip = QString::fromStdString(server.hostname.empty()
+			? server.ip
+			: server.hostname),
 		.port = server.port,
 		.keyFingerprint = server.key->fingerprint(),
 	};

@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
 
+#include <utility>
+
 namespace {
 
 using namespace MTP;
@@ -18,12 +20,16 @@ using namespace MTP;
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
 		uint64 pinnedFingerprint = 0,
-		uint64 presentedFingerprint = 0) {
+		uint64 presentedFingerprint = 0,
+		QString pinnedHostname = {},
+		QString dialledAddress = {}) {
 	return {
 		shiftedDcId,
 		failure,
 		pinnedFingerprint,
 		presentedFingerprint,
+		std::move(pinnedHostname),
+		std::move(dialledAddress),
 	};
 }
 
@@ -91,6 +97,22 @@ TEST_CASE(PinnedServerFailureKeepsBothFingerprints) {
 	CHECK(channel.current().has_value());
 	CHECK_EQ(channel.current()->pinnedFingerprint, uint64(123));
 	CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
+}
+
+TEST_CASE(PinnedServerFailureKeepsEndpointIdentity) {
+	const auto report = Report(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		123,
+		456,
+		u"server.example.com"_q,
+		u"100.124.236.66"_q);
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+
+	CHECK(channel.current().has_value());
+	CHECK_EQ(channel.current()->pinnedHostname, u"server.example.com"_q);
+	CHECK_EQ(channel.current()->dialledAddress, u"100.124.236.66"_q);
 }
 
 TEST_CASE(AuthorizedKeyMismatchUsesTheIdentityChangeFlow) {

@@ -19,7 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace {
 
-constexpr auto kVersion = 6;
+constexpr auto kVersion = 7;
 
 using namespace details;
 
@@ -81,9 +81,15 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 [[nodiscard]] bool ValidDiscoveryMetadata(
 		const CustomServer &server,
 		bool allowRestoredPreviouslyAllowedLiteral = false) {
+	const auto hasHostname = !server.hostname.empty();
+	const auto hasIp = !server.ip.empty();
+	if (hasHostname && hasIp) {
+		return false;
+	}
 	if (server.discoveryPolicy == ServerDiscoveryPolicy::Legacy) {
 		return server.serverSelection.empty()
-			&& server.discoveryOrigin.empty();
+			&& server.discoveryOrigin.empty()
+			&& !hasHostname;
 	}
 	if (server.serverSelection.empty() || server.discoveryOrigin.empty()) {
 		return false;
@@ -112,6 +118,17 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 		: (u"local:"_q + selection.normalizedSelection);
 	if (QString::fromStdString(server.discoveryOrigin) != expectedOrigin) {
 		return false;
+	}
+	if (server.discoveryPolicy == ServerDiscoveryPolicy::PublicHttps
+		&& hasHostname) {
+		const auto hostname = QString::fromStdString(server.hostname);
+		const auto hostnameCheck = CheckServerSelection(hostname);
+		return hostnameCheck.valid()
+			&& hostnameCheck.policy == ServerDiscoveryPolicy::PublicHttps
+			&& hostnameCheck.host == hostname
+			&& hostnameCheck.host == selection.host
+			&& server.port != 80
+			&& !server.ipv6;
 	}
 	const auto host = QString::fromStdString(server.ip);
 	auto address = QHostAddress();
@@ -153,20 +170,26 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
 // looks pinned but is not: an invalid key trips the fingerprint
 // assertions, and a zero dc id matches no real DC, so the CDN refusal
 // silently stops applying and the pinned key can be shadowed again.
-[[nodiscard]] const char *CustomServerProblem(const CustomServer &server) {
+[[nodiscard]] const char *CustomServerProblem(
+		const CustomServer &server,
+		bool allowRestoredPreviouslyAllowedLiteral = false) {
 	if (!server.key) {
 		return "no RSA key";
 	} else if (!server.key->valid()) {
 		return "an invalid RSA key";
 	} else if (server.dcId <= 0) {
 		return "no dc id";
-	} else if (server.ip.empty()) {
-		return "no address";
+	} else if (server.hostname.empty() == server.ip.empty()) {
+		return "no endpoint";
+	} else if (server.hostname.size() > 253) {
+		return "hostname is too long";
 	} else if (server.port <= 0) {
 		return "no port";
 	} else if (server.port > 65535) {
 		return "bad port";
-	} else if (!ValidDiscoveryMetadata(server)) {
+	} else if (!ValidDiscoveryMetadata(
+			server,
+			allowRestoredPreviouslyAllowedLiteral)) {
 		return "invalid discovery metadata";
 	}
 	return nullptr;
@@ -181,6 +204,7 @@ bool SameCustomServerPin(
 		const CustomServer &a,
 		const CustomServer &b) {
 	if (a.dcId != b.dcId
+		|| a.hostname != b.hostname
 		|| a.ip != b.ip
 		|| a.port != b.port
 		|| a.ipv6 != b.ipv6
@@ -253,11 +277,17 @@ std::optional<CustomServer> BuildCustomServerFromDiscovery(
 	if (!connectionSafe) {
 		return std::nullopt;
 	}
+	auto endpointAddress = QHostAddress();
+	const auto retainsHostname = result.policy
+		== ServerDiscoveryPolicy::PublicHttps
+		&& !endpointAddress.setAddress(endpoint.host)
+		&& endpoint.host == selection.host;
 	return CustomServer{
 		.dcId = result.dcId,
-		.ip = connectionEndpoint.host.toStdString(),
+		.hostname = retainsHostname ? endpoint.host.toStdString() : "",
+		.ip = retainsHostname ? "" : connectionEndpoint.host.toStdString(),
 		.port = endpoint.operationalPort,
-		.ipv6 = connectionEndpoint.ipv6,
+		.ipv6 = retainsHostname ? false : connectionEndpoint.ipv6,
 		.key = std::make_shared<details::RSAPublicKey>(result.key),
 		.serverSelection = selection.normalizedSelection.toStdString(),
 		.discoveryPolicy = result.policy,
@@ -689,13 +719,15 @@ QByteArray DcOptions::serialize() const {
 		}
 	}
 
-	// Pinned custom server (v3). The endpoint identity (dcId, ip,
-	// port) and the key bytes are persisted; the fingerprint is
-	// recomputed on load. Without dcId the CDN-shadowing control
-	// cannot match and the pin is silently ineffective.
+	// Pinned custom server. Literal endpoint identity (dcId, ip, port)
+	// and the key bytes are persisted here; v7 adds the hostname field
+	// after the unenrolled marker. The fingerprint is recomputed on load.
+	// Without dcId the CDN-shadowing control cannot match and the pin is
+	// silently ineffective.
 	bool pinned = false;
 	qint32 customDcId = 0, customPort = 0;
 	auto customIp = std::string();
+	auto customHostname = std::string();
 	bytes::vector customKeyN, customKeyE;
 	auto customSelection = std::string();
 	auto customOrigin = std::string();
@@ -705,6 +737,7 @@ QByteArray DcOptions::serialize() const {
 		customDcId = _customServer.dcId;
 		customPort = _customServer.port;
 		customIp = _customServer.ip;
+		customHostname = _customServer.hostname;
 		customKeyN = _customServer.key->getN();
 		customKeyE = _customServer.key->getE();
 		customSelection = _customServer.serverSelection;
@@ -727,6 +760,7 @@ QByteArray DcOptions::serialize() const {
 		size += sizeof(qint32) + customOrigin.size();
 	}
 	size += sizeof(qint32); // unenrolled
+	size += sizeof(qint32) + customHostname.size();
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -792,6 +826,8 @@ QByteArray DcOptions::serialize() const {
 		}
 
 		stream << qint32(_unenrolled ? 1 : 0);
+		stream << qint32(customHostname.size());
+		stream.writeRawData(customHostname.data(), customHostname.size());
 	}
 	return result;
 }
@@ -834,7 +870,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		stream >> id >> flags >> port >> ipSize;
 
 		// https://stackoverflow.com/questions/1076714/max-length-for-client-ip-address
-		constexpr auto kMaxIpSize = 45;
+		const auto kMaxIpSize = (version > 6) ? 253 : 45;
 		if (ipSize <= 0 || ipSize > kMaxIpSize) {
 			LOG(("MTP Error: Bad data inside DcOptions::constructFromSerialized()"));
 			return false;
@@ -961,16 +997,7 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 				.ipv6 = ipv6,
 				.key = std::make_shared<RSAPublicKey>(RSAPublicKey(n, e))
 			};
-			// A blob that claims a pin but carries a partial one must
-			// fail the load rather than install it: the account then
-			// takes the fail-closed path instead of running with a pin
-			// whose controls do not apply.
-			if (const auto problem = CustomServerProblem(restored)) {
-				LOG(("MTP Error: Stored custom server has %1."
-					).arg(QString::fromUtf8(problem)));
-				return false;
-			}
-			applyCustomServerUnlocked(restored);
+			_customServer = std::move(restored);
 		}
 	}
 	if (version > 3) {
@@ -1032,10 +1059,6 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 		_customServer.discoveryPolicy = ServerDiscoveryPolicy(policy);
 		_customServer.serverSelection = std::move(selection);
 		_customServer.discoveryOrigin = std::move(origin);
-		if (!ValidDiscoveryMetadata(_customServer, true)) {
-			LOG(("MTP Error: Discovery metadata does not match the stored custom server."));
-			return false;
-		}
 	}
 	if (version > 5) {
 		qint32 unenrolled = 0;
@@ -1056,6 +1079,42 @@ bool DcOptions::constructFromSerialized(const QByteArray &serialized) {
 			_customServer = CustomServer();
 			_unenrolled = true;
 		}
+	}
+	if (version > 6) {
+		qint32 hostnameSize = 0;
+		if (stream.atEnd()) {
+			LOG(("MTP Error: Missing custom server hostname in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		stream >> hostnameSize;
+		constexpr auto kMaxHostnameSize = 253;
+		if (hostnameSize < 0
+			|| hostnameSize > kMaxHostnameSize
+			|| stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Bad custom server hostname in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		auto hostname = std::string(hostnameSize, ' ');
+		stream.readRawData(hostname.data(), hostnameSize);
+		if (stream.status() != QDataStream::Ok) {
+			LOG(("MTP Error: Truncated custom server hostname in DcOptions::constructFromSerialized()"));
+			return false;
+		}
+		if (!_customServer.key && !hostname.empty()) {
+			LOG(("MTP Error: Unpinned config carries a custom server hostname."));
+			return false;
+		}
+		_customServer.hostname = std::move(hostname);
+	}
+	if (_customServer.key) {
+		if (const auto problem = CustomServerProblem(
+				_customServer,
+				true)) {
+			LOG(("MTP Error: Stored custom server has %1."
+				).arg(QString::fromUtf8(problem)));
+			return false;
+		}
+		applyCustomServerUnlocked(_customServer, true);
 	}
 	return true;
 }
@@ -1135,8 +1194,12 @@ void DcOptions::setCDNConfig(const MTPDcdnConfig &config) {
 	_cdnConfigChanged.fire({});
 }
 
-void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
-	Expects(CustomServerProblem(server) == nullptr);
+void DcOptions::applyCustomServerUnlocked(
+		const CustomServer &server,
+		bool allowRestoredPreviouslyAllowedLiteral) {
+	Expects(CustomServerProblem(
+		server,
+		allowRestoredPreviouslyAllowedLiteral) == nullptr);
 
 	// A blocked config is one whose pinned server could not be read
 	// back, and this is the user handing that server over again. Lift
@@ -1164,7 +1227,7 @@ void DcOptions::applyCustomServerUnlocked(const CustomServer &server) {
 		Flag::f_static
 		| Flag::f_tcpo_only
 		| (server.ipv6 ? Flag::f_ipv6 : Flag(0)),
-		server.ip,
+		server.hostname.empty() ? server.ip : server.hostname,
 		server.port,
 		{});
 }
@@ -1203,9 +1266,13 @@ bool DcOptions::setCustomServer(
 			// _blocked, the production-fallback block, exactly as it was.
 			LOG(("MTP Error: refusing to replace pinned custom server"
 				" %1:%2 with %3:%4 for an authorized account."
-				).arg(QString::fromStdString(_customServer.ip)
+				).arg(QString::fromStdString(
+					_customServer.hostname.empty()
+						? _customServer.ip
+						: _customServer.hostname)
 				).arg(_customServer.port
-				).arg(QString::fromStdString(server.ip)
+				).arg(QString::fromStdString(
+					server.hostname.empty() ? server.ip : server.hostname)
 				).arg(server.port));
 			return false;
 		}
@@ -1351,6 +1418,11 @@ auto DcOptions::lookup(
 			&& (flags & Flag::f_media_only)) {
 			continue;
 		} else if (!ValidateSecret(endpoint.secret)) {
+			continue;
+		}
+		if (!_customServer.hostname.empty()) {
+			result.data[Variants::IPv4][Variants::Tcp].push_back(endpoint);
+			result.data[Variants::IPv6][Variants::Tcp].push_back(endpoint);
 			continue;
 		}
 		const auto address = (flags & Flag::f_ipv6)

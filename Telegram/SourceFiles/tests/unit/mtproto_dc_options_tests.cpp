@@ -290,6 +290,107 @@ TEST_CASE(PublicHttpsDiscoveryEnrollsWithPublicResolvedAddress) {
 	}
 }
 
+TEST_CASE(PublicHttpsSameOriginDiscoveryRetainsHostname) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	const auto key = MakeKey();
+	const auto der = key->getSubjectPublicKeyInfo();
+	const auto json = QJsonDocument(QJsonObject{
+		{ u"version"_q, 1 },
+		{ u"mtproto"_q, QJsonObject{
+			{ u"endpoint"_q,
+				u"telegram-server.tailaa4918.ts.net:2443"_q },
+			{ u"dc_id"_q, 2 },
+			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
+				reinterpret_cast<const char *>(der.data()),
+				int(der.size())).toBase64()) }
+		} }
+	}).toJson(QJsonDocument::Compact);
+	auto result = ParsePublicDiscoveryResponse(selection, json);
+	CHECK(result.valid());
+	result.resolvedAddress = u"100.124.236.66"_q;
+
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+	CHECK_EQ(server->hostname, "telegram-server.tailaa4918.ts.net");
+	CHECK(server->ip.empty());
+	CHECK_EQ(server->port, 2443);
+	CHECK(!server->ipv6);
+
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	const auto variants = options.lookup(server->dcId, DcType::Regular, false);
+	for (const auto address : {
+		DcOptions::Variants::IPv4,
+		DcOptions::Variants::IPv6,
+	}) {
+		const auto &tcp = variants.data[address][DcOptions::Variants::Tcp];
+		CHECK_EQ(tcp.size(), 1);
+		if (tcp.size() == 1) {
+			CHECK_EQ(tcp.front().ip, server->hostname);
+			CHECK_EQ(tcp.front().port, server->port);
+		}
+		CHECK(variants.data[address][DcOptions::Variants::Http].empty());
+	}
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	const auto got = restored.customServer();
+	CHECK_EQ(got.hostname, server->hostname);
+	CHECK(got.ip.empty());
+	CHECK_EQ(got.port, server->port);
+}
+
+TEST_CASE(HostnamePinRejectsInvalidCanonicalRestoreAndOlderVersion) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	const auto key = MakeKey();
+	const auto der = key->getSubjectPublicKeyInfo();
+	auto result = ParsePublicDiscoveryResponse(
+		selection,
+		QJsonDocument(QJsonObject{
+			{ u"version"_q, 1 },
+			{ u"mtproto"_q, QJsonObject{
+				{ u"endpoint"_q, u"server.example.com:2443"_q },
+				{ u"dc_id"_q, 2 },
+				{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
+					reinterpret_cast<const char *>(der.data()),
+					int(der.size())).toBase64()) }
+			} }
+		}).toJson(QJsonDocument::Compact));
+	result.resolvedAddress = u"100.124.236.66"_q;
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	const auto serialized = options.serialize();
+	const auto hostnameOffset = serialized.lastIndexOf("server.example.com");
+	CHECK(hostnameOffset >= 0);
+	if (hostnameOffset < 0) {
+		return;
+	}
+	auto invalidCanonical = serialized;
+	invalidCanonical.replace(
+		hostnameOffset,
+		QByteArray("server.example.com").size(),
+		"Server.example.com");
+	auto restored = DcOptions(Environment::Production);
+	CHECK(!restored.constructFromSerialized(invalidCanonical));
+
+	auto olderVersion = serialized;
+	olderVersion[0] = char(0xFF);
+	olderVersion[1] = char(0xFF);
+	olderVersion[2] = char(0xFF);
+	olderVersion[3] = char(0xFA);
+	CHECK(!restored.constructFromSerialized(olderVersion));
+}
+
 TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
 	auto options = DcOptions(Environment::Production);
 	auto server = MakeCustomServer();

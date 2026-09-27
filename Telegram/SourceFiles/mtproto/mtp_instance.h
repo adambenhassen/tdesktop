@@ -44,6 +44,8 @@ struct PinnedServerFailureReport {
 	// fingerprint advertised by the endpoint during the failed exchange.
 	uint64 pinnedFingerprint = 0;
 	uint64 presentedFingerprint = 0;
+	QString pinnedHostname;
+	QString dialledAddress;
 
 	friend inline bool operator==(
 			const PinnedServerFailureReport &a,
@@ -51,7 +53,9 @@ struct PinnedServerFailureReport {
 		return (a.shiftedDcId == b.shiftedDcId)
 			&& (a.failure == b.failure)
 			&& (a.pinnedFingerprint == b.pinnedFingerprint)
-			&& (a.presentedFingerprint == b.presentedFingerprint);
+			&& (a.presentedFingerprint == b.presentedFingerprint)
+			&& (a.pinnedHostname == b.pinnedHostname)
+			&& (a.dialledAddress == b.dialledAddress);
 	}
 };
 
@@ -238,7 +242,9 @@ public:
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint = 0);
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	[[nodiscard]] auto pinnedServerFailure() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 

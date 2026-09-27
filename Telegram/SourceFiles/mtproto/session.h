@@ -127,7 +127,9 @@ public:
 	void queueConnectionStateChange(int newState);
 	void queuePinnedServerFailure(
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint = 0);
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	void queueResetDone();
 	void queueSendAnything(crl::time msCanWait = 0);
 
@@ -229,7 +231,9 @@ public:
 	void connectionStateChange(int newState);
 	void pinnedServerFailure(
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint = 0);
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	void stopUntilPinChange();
 	void resetDone();
 	void sendAnything(crl::time msCanWait = 0);

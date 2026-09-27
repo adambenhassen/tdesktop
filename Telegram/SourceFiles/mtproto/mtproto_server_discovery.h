@@ -95,6 +95,10 @@ struct ServerSelectionCheck {
 [[nodiscard]] std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
 	const ServerSelectionCheck &origin,
 	const QList<QHostAddress> &addresses);
+[[nodiscard]] QList<QHostAddress> FilterPinnedServerAddresses(
+	const QString &hostname,
+	const QList<QHostAddress> &addresses,
+	bool ipv6);
 
 // A delegated public endpoint must be an explicit-port public DNS name or a
 // safe IP literal for the selected HTTPS origin. Local IP selections retain

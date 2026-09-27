@@ -23,6 +23,8 @@ struct ConnectionErrorInfo {
 	bool proxied = false;
 	QString proxyEndpoint;
 	int proxyPort = 0;
+	QString dialledAddress;
+	QString pinnedHostname;
 };
 
 enum class PersistentKeyErrorDecision {

@@ -157,7 +157,9 @@ public:
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint = 0);
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	[[nodiscard]] auto pinnedServerFailureValue() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
@@ -1435,16 +1437,24 @@ void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 void Instance::Private::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint) {
-	LOG(("MTP Error: pinned server failure on dc %1: %2"
+		uint64 presentedFingerprint,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
+	const auto customServer = dcOptions().customServer();
+	const auto hostname = pinnedHostname.isEmpty()
+		? QString::fromStdString(customServer.hostname)
+		: pinnedHostname;
+	LOG(("MTP Error: pinned server failure on dc %1: %2, hostname %3, "
+		"dialled %4"
 		).arg(shiftedDcId
 		).arg(failure == PinnedServerFailure::KeyMismatch
 			? "key mismatch"
-			: "dc id mismatch"));
+			: "dc id mismatch")
+		.arg(hostname.isEmpty() ? u"unknown"_q : hostname)
+		.arg(dialledAddress.isEmpty() ? u"unknown"_q : dialledAddress));
 	// Emits unconditionally: a repeated identical failure is a second
 	// occurrence and has to reach the UI again, which a compare-then-
 	// assign would silently swallow.
-	const auto customServer = dcOptions().customServer();
 	const auto pinnedFingerprint = customServer.key
 		? customServer.key->fingerprint()
 		: uint64(0);
@@ -1453,6 +1463,8 @@ void Instance::Private::onPinnedServerFailure(
 		failure,
 		pinnedFingerprint,
 		presentedFingerprint,
+		hostname,
+		dialledAddress,
 	});
 	if (failure == PinnedServerFailure::DcIdMismatch) {
 		// Gate reconnection exactly like the key mismatch: neither
@@ -2230,11 +2242,15 @@ void Instance::stopForServerEnrollment() {
 void Instance::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint) {
+		uint64 presentedFingerprint,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
 	_private->onPinnedServerFailure(
 		shiftedDcId,
 		failure,
-		presentedFingerprint);
+		presentedFingerprint,
+		pinnedHostname,
+		dialledAddress);
 }
 
 rpl::producer<std::optional<PinnedServerFailureReport>>
