@@ -43,6 +43,10 @@ const UnitProxyCheckFactory *UnitProxyCheckFactoryInstance = nullptr;
 
 ConnectionPointer::ConnectionPointer() = default;
 
+ConnectionPointer::ConnectionPointer(AbstractConnection *value)
+: _value(value) {
+}
+
 ConnectionPointer::ConnectionPointer(std::nullptr_t) {
 }
 
