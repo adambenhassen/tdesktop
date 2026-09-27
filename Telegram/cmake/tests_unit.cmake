@@ -77,6 +77,8 @@ PRIVATE
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
     mtproto/connection_abstract.h
+    mtproto/connection_server_resolving.cpp
+    mtproto/connection_server_resolving.h
     mtproto/proxy_check.cpp
 )
 

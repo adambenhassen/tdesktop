@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/connection_abstract.h"
+#include "mtproto/connection_server_resolving.h"
 #include "mtproto/session.h"
 
 namespace MTP {
@@ -39,6 +40,7 @@ void StartProxyCheck(
 	ProxyCheckConnection &v4,
 	ProxyCheckConnection &v6,
 	Fn<void(details::AbstractConnection *raw, int ping)> done,
-	Fn<void(details::AbstractConnection *raw)> fail);
+	Fn<void(details::AbstractConnection *raw)> fail,
+	details::ServerHostnameResolver resolver = {});
 
 } // namespace MTP

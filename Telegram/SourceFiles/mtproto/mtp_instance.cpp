@@ -1440,32 +1440,29 @@ void Instance::Private::onPinnedServerFailure(
 		uint64 presentedFingerprint,
 		const QString &pinnedHostname,
 		const QString &dialledAddress) {
-	const auto customServer = dcOptions().customServer();
-	const auto hostname = pinnedHostname.isEmpty()
-		? QString::fromStdString(customServer.hostname)
-		: pinnedHostname;
+	const auto report = MakePinnedServerFailureReport(
+		shiftedDcId,
+		failure,
+		presentedFingerprint,
+		dcOptions().customServer(),
+		pinnedHostname,
+		dialledAddress);
 	LOG(("MTP Error: pinned server failure on dc %1: %2, hostname %3, "
 		"dialled %4"
-		).arg(shiftedDcId
-		).arg(failure == PinnedServerFailure::KeyMismatch
+		).arg(report.shiftedDcId
+		).arg(report.failure == PinnedServerFailure::KeyMismatch
 			? "key mismatch"
 			: "dc id mismatch")
-		.arg(hostname.isEmpty() ? u"unknown"_q : hostname)
-		.arg(dialledAddress.isEmpty() ? u"unknown"_q : dialledAddress));
+		.arg(report.pinnedHostname.isEmpty()
+			? u"unknown"_q
+			: report.pinnedHostname)
+		.arg(report.dialledAddress.isEmpty()
+			? u"unknown"_q
+			: report.dialledAddress));
 	// Emits unconditionally: a repeated identical failure is a second
 	// occurrence and has to reach the UI again, which a compare-then-
 	// assign would silently swallow.
-	const auto pinnedFingerprint = customServer.key
-		? customServer.key->fingerprint()
-		: uint64(0);
-	_pinnedServerFailure.report({
-		shiftedDcId,
-		failure,
-		pinnedFingerprint,
-		presentedFingerprint,
-		hostname,
-		dialledAddress,
-	});
+	_pinnedServerFailure.report(report);
 	if (failure == PinnedServerFailure::DcIdMismatch) {
 		// Gate reconnection exactly like the key mismatch: neither
 		// class may re-enter the requestConfig / restart cycle. A

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/details/mtproto_serialized_request.h"
+#include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
@@ -58,6 +59,26 @@ struct PinnedServerFailureReport {
 			&& (a.dialledAddress == b.dialledAddress);
 	}
 };
+
+[[nodiscard]] inline PinnedServerFailureReport MakePinnedServerFailureReport(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint,
+		const CustomServer &customServer,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
+	const auto hostname = pinnedHostname.isEmpty()
+		? QString::fromStdString(customServer.hostname)
+		: pinnedHostname;
+	return {
+		shiftedDcId,
+		failure,
+		customServer.key ? customServer.key->fingerprint() : uint64(0),
+		presentedFingerprint,
+		hostname,
+		dialledAddress,
+	};
+}
 
 [[nodiscard]] inline bool ShouldShowPinnedServerIdentityChange(
 		const PinnedServerFailureReport &report,

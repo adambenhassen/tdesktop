@@ -20,6 +20,27 @@ constexpr auto kAddressTimeout = crl::time(4000);
 constexpr auto kLookupTimeout = crl::time(8000);
 constexpr auto kMaxAddresses = 8;
 
+qint64 LookupServerHostname(
+		const QString &hostname,
+		QObject *context,
+		Fn<void(const QHostInfo &)> callback) {
+	return QHostInfo::lookupHost(
+		hostname,
+		context,
+		std::move(callback));
+}
+
+void AbortServerHostnameLookup(qint64 lookupId) {
+	QHostInfo::abortHostLookup(lookupId);
+}
+
+ServerHostnameResolver DefaultServerHostnameResolver() {
+	return {
+		.lookup = LookupServerHostname,
+		.abort = AbortServerHostnameLookup,
+	};
+}
+
 } // namespace
 
 ConnectionPointer CreateServerConnection(
@@ -29,15 +50,22 @@ ConnectionPointer CreateServerConnection(
 		const bytes::vector &secret,
 		const ProxyData &proxy,
 		const QString &hostname,
-		bool ipv6) {
+		bool ipv6,
+		ServerHostnameResolver resolver) {
 	if (ShouldResolveServerHostname(hostname, proxy.type)) {
+		if (!resolver.lookup) {
+			resolver = DefaultServerHostnameResolver();
+		} else if (!resolver.abort) {
+			resolver.abort = AbortServerHostnameLookup;
+		}
 		return ConnectionPointer::New<ServerResolvingConnection>(
 			instance,
 			thread,
 			proxy,
 			protocol,
 			ipv6,
-			hostname);
+			hostname,
+			std::move(resolver));
 	}
 	return AbstractConnection::Create(
 		instance,
@@ -53,12 +81,14 @@ ServerResolvingConnection::ServerResolvingConnection(
 		const ProxyData &proxy,
 		DcOptions::Variants::Protocol protocol,
 		bool ipv6,
-		const QString &hostname)
+		const QString &hostname,
+		ServerHostnameResolver resolver)
 : AbstractConnection(thread, proxy)
 , _instance(instance)
 , _protocol(protocol)
 , _ipv6(ipv6)
 , _hostname(hostname)
+, _resolver(std::move(resolver))
 , _lookupTimeoutTimer([=] { emitError(kErrorCodeOther); })
 , _addressTimeoutTimer([=] { handleError(kErrorCodeOther); }) {
 }
@@ -101,6 +131,7 @@ void ServerResolvingConnection::lookupFinished(const QHostInfo &info) {
 		return;
 	}
 	_lookupId = -1;
+	_lookupActive = false;
 	_lookupTimeoutTimer.cancel();
 	if (info.error() != QHostInfo::NoError) {
 		emitError(kErrorCodeOther);
@@ -148,10 +179,11 @@ void ServerResolvingConnection::emitError(int errorCode) {
 		return;
 	}
 	_errorEmitted = true;
-	if (_lookupId >= 0) {
-		QHostInfo::abortHostLookup(_lookupId);
+	if (_lookupActive && _lookupId >= 0) {
+		_resolver.abort(_lookupId);
 		_lookupId = -1;
 	}
+	_lookupActive = false;
 	_lookupTimeoutTimer.cancel();
 	_addressTimeoutTimer.cancel();
 	_child = nullptr;
@@ -210,8 +242,8 @@ void ServerResolvingConnection::sendData(mtpBuffer &&buffer) {
 
 void ServerResolvingConnection::disconnectFromServer() {
 	++_lookupGeneration;
-	if (_lookupId >= 0) {
-		QHostInfo::abortHostLookup(_lookupId);
+	if (_lookupActive && _lookupId >= 0) {
+		_resolver.abort(_lookupId);
 		_lookupId = -1;
 	}
 	_lookupTimeoutTimer.cancel();
@@ -220,6 +252,7 @@ void ServerResolvingConnection::disconnectFromServer() {
 	_nextAddress = 0;
 	_connected = false;
 	_child = nullptr;
+	_lookupActive = false;
 }
 
 void ServerResolvingConnection::connectToServer(
@@ -237,7 +270,8 @@ void ServerResolvingConnection::connectToServer(
 	_protocolDcId = protocolDcId;
 	_protocolForFiles = protocolForFiles;
 	const auto lookupGeneration = ++_lookupGeneration;
-	_lookupId = QHostInfo::lookupHost(
+	_lookupActive = true;
+	_lookupId = _resolver.lookup(
 		_hostname,
 		this,
 		[=](const QHostInfo &info) {
@@ -245,7 +279,9 @@ void ServerResolvingConnection::connectToServer(
 				lookupFinished(info);
 			}
 		});
-	if (_lookupId < 0) {
+	if (!_lookupActive) {
+		_lookupId = -1;
+	} else if (_lookupId < 0) {
 		emitError(kErrorCodeOther);
 	} else {
 		_lookupTimeoutTimer.callOnce(kLookupTimeout);

@@ -46,7 +46,8 @@ void StartProxyCheck(
 		ProxyCheckConnection &v4,
 		ProxyCheckConnection &v6,
 		Fn<void(Connection *raw, int ping)> done,
-		Fn<void(Connection *raw)> fail) {
+		Fn<void(Connection *raw)> fail,
+		details::ServerHostnameResolver resolver) {
 	using Variants = DcOptions::Variants;
 
 	ResetProxyCheckers(v4, v6);
@@ -66,7 +67,8 @@ void StartProxyCheck(
 			secret,
 			proxy,
 			QString::fromStdString(pin.hostname),
-			ipv6);
+			ipv6,
+			resolver);
 		const auto raw = checker.get();
 		raw->connect(raw, &Connection::connected, [=] {
 			if (done) {

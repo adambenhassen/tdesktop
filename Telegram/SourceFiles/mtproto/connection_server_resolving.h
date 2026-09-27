@@ -17,6 +17,14 @@ class QHostInfo;
 
 namespace MTP::details {
 
+struct ServerHostnameResolver {
+	Fn<qint64(
+		const QString &hostname,
+		QObject *context,
+		Fn<void(const QHostInfo &)> callback)> lookup;
+	Fn<void(qint64)> abort;
+};
+
 class ServerResolvingConnection final : public AbstractConnection {
 public:
 	ServerResolvingConnection(
@@ -25,7 +33,8 @@ public:
 		const ProxyData &proxy,
 		DcOptions::Variants::Protocol protocol,
 		bool ipv6,
-		const QString &hostname);
+		const QString &hostname,
+		ServerHostnameResolver resolver);
 
 	ConnectionPointer clone(const ProxyData &proxy) override;
 
@@ -62,6 +71,7 @@ private:
 	const DcOptions::Variants::Protocol _protocol;
 	const bool _ipv6 = false;
 	const QString _hostname;
+	const ServerHostnameResolver _resolver;
 	ConnectionPointer _child;
 	QList<QHostAddress> _addresses;
 	QString _dialledAddress;
@@ -72,6 +82,7 @@ private:
 	int _nextAddress = 0;
 	qint64 _lookupId = -1;
 	quint64 _lookupGeneration = 0;
+	bool _lookupActive = false;
 	int _lastErrorCode = kErrorCodeOther;
 	bool _connected = false;
 	bool _errorEmitted = false;
@@ -93,6 +104,7 @@ private:
 	const bytes::vector &secret,
 	const ProxyData &proxy,
 	const QString &hostname,
-	bool ipv6);
+	bool ipv6,
+	ServerHostnameResolver resolver = {});
 
 } // namespace MTP::details
