@@ -328,7 +328,7 @@ TEST_CASE(PublicHttpsSameOriginDiscoveryRetainsHostname) {
 		DcOptions::Variants::IPv6,
 	}) {
 		const auto &tcp = variants.data[address][DcOptions::Variants::Tcp];
-		CHECK_EQ(tcp.size(), 1);
+		CHECK_EQ(int(tcp.size()), 1);
 		if (tcp.size() == 1) {
 			CHECK_EQ(tcp.front().ip, server->hostname);
 			CHECK_EQ(tcp.front().port, server->port);
