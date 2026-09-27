@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/mtproto_server_discovery.h"
 
+#include <QtNetwork/QDnsLookup>
 #include <QtNetwork/QHostInfo>
 
 #include <utility>
@@ -20,18 +21,59 @@ constexpr auto kAddressTimeout = crl::time(4000);
 constexpr auto kLookupTimeout = crl::time(8000);
 constexpr auto kMaxAddresses = 8;
 
+#ifdef TDESKTOP_UNIT_TESTS
+QHostAddress TestNameserver;
+quint16 TestNameserverPort = 0;
+#endif
+
 qint64 LookupServerHostname(
 		const QString &hostname,
 		QObject *context,
+		bool ipv6,
 		Fn<void(const QHostInfo &)> callback) {
-	return QHostInfo::lookupHost(
+	const auto lookup = new QDnsLookup(
+		ipv6 ? QDnsLookup::AAAA : QDnsLookup::A,
 		hostname,
-		context,
-		std::move(callback));
+		context);
+#ifdef TDESKTOP_UNIT_TESTS
+	if (!TestNameserver.isNull()) {
+		lookup->setNameserver(TestNameserver, TestNameserverPort);
+	}
+#endif
+	QObject::connect(
+		lookup,
+		&QDnsLookup::finished,
+		lookup,
+		[lookup, callback = std::move(callback)] {
+			auto info = QHostInfo(lookup->name());
+			if (lookup->error() == QDnsLookup::NoError) {
+				auto addresses = QList<QHostAddress>();
+				for (const auto &record : lookup->hostAddressRecords()) {
+					addresses.push_back(record.value());
+				}
+				info.setAddresses(addresses);
+			} else if (lookup->error() == QDnsLookup::NotFoundError) {
+				info.setError(QHostInfo::HostNotFound);
+			} else {
+				info.setError(QHostInfo::UnknownError);
+			}
+			callback(info);
+			lookup->deleteLater();
+		});
+	const auto id = static_cast<qint64>(
+		reinterpret_cast<quintptr>(lookup));
+	lookup->lookup();
+	return id;
 }
 
 void AbortServerHostnameLookup(qint64 lookupId) {
-	QHostInfo::abortHostLookup(lookupId);
+	const auto lookup = reinterpret_cast<QDnsLookup*>(
+		static_cast<quintptr>(lookupId));
+	if (!lookup) {
+		return;
+	}
+	lookup->abort();
+	lookup->deleteLater();
 }
 
 ServerHostnameResolver DefaultServerHostnameResolver() {
@@ -42,6 +84,15 @@ ServerHostnameResolver DefaultServerHostnameResolver() {
 }
 
 } // namespace
+
+#ifdef TDESKTOP_UNIT_TESTS
+void SetServerHostnameResolverTestNameserver(
+		const QHostAddress &address,
+		quint16 port) {
+	TestNameserver = address;
+	TestNameserverPort = port;
+}
+#endif
 
 ConnectionPointer CreateServerConnection(
 		not_null<Instance*> instance,
@@ -274,6 +325,7 @@ void ServerResolvingConnection::connectToServer(
 	_lookupId = _resolver.lookup(
 		_hostname,
 		this,
+		_ipv6,
 		[=](const QHostInfo &info) {
 			if (lookupGeneration == _lookupGeneration) {
 				lookupFinished(info);

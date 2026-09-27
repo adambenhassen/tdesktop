@@ -21,9 +21,16 @@ struct ServerHostnameResolver {
 	Fn<qint64(
 		const QString &hostname,
 		QObject *context,
+		bool ipv6,
 		Fn<void(const QHostInfo &)> callback)> lookup;
 	Fn<void(qint64)> abort;
 };
+
+#ifdef TDESKTOP_UNIT_TESTS
+void SetServerHostnameResolverTestNameserver(
+	const QHostAddress &address,
+	quint16 port);
+#endif
 
 class ServerResolvingConnection final : public AbstractConnection {
 public:

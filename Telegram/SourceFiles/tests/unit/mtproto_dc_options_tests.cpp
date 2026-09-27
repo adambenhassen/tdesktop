@@ -22,9 +22,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QByteArray>
 #include <QtCore/QDataStream>
+#include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QTimer>
 #include <QtNetwork/QHostInfo>
+#include <QtNetwork/QUdpSocket>
 
 namespace MTP::details {
 namespace {
@@ -198,6 +201,7 @@ public:
 			.lookup = [this](
 					const QString &,
 					QObject *,
+					bool,
 					Fn<void(const QHostInfo &)> callback) {
 				if (_nextResponse >= _responses.size()) {
 					return qint64(-1);
@@ -236,6 +240,60 @@ private:
 	int _aborts = 0;
 
 };
+
+[[nodiscard]] QByteArray MakeDnsResponse(
+		const QByteArray &query,
+		const QHostAddress &address) {
+	if (query.size() < 12) {
+		return {};
+	}
+	auto questionEnd = 12;
+	while (questionEnd < query.size()
+		&& query.at(questionEnd) != 0) {
+		const auto length = static_cast<uchar>(query.at(questionEnd));
+		questionEnd += 1 + length;
+	}
+	if (questionEnd + 5 > query.size()) {
+		return {};
+	}
+	const auto type = (static_cast<quint16>(static_cast<uchar>(
+		query.at(questionEnd + 1))) << 8)
+		| static_cast<quint16>(static_cast<uchar>(
+			query.at(questionEnd + 2)));
+	const auto answer = (type == 1) ? 1 : 0;
+	auto response = QByteArray();
+	response.append(query.constData(), 2);
+	const auto append16 = [&](quint16 value) {
+		response.append(char(value >> 8));
+		response.append(char(value & 0xff));
+	};
+	const auto append32 = [&](quint32 value) {
+		append16(quint16(value >> 16));
+		append16(quint16(value & 0xffff));
+	};
+	append16(0x8180);
+	append16(1);
+	append16(answer);
+	append16(0);
+	append16(0);
+	response.append(
+		query.constData() + 12,
+		questionEnd + 5 - 12);
+	if (answer) {
+		response.append(char(0xc0));
+		response.append(char(0x0c));
+		append16(1);
+		append16(1);
+		append32(60);
+		append16(4);
+		const auto value = address.toIPv4Address();
+		response.append(char(value >> 24));
+		response.append(char(value >> 16));
+		response.append(char(value >> 8));
+		response.append(char(value));
+	}
+	return response;
+}
 
 class ProxyCheckObserver final : public details::AbstractConnection {
 public:
@@ -1033,6 +1091,114 @@ TEST_CASE(HostnameConnectionRetriesWithFreshResolution) {
 	CHECK_EQ(resolver.lookups(), 2);
 	CHECK_EQ(dialled.value(0), u"100.124.236.66"_q);
 	CHECK_EQ(dialled.value(1), u"100.124.236.67"_q);
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "resolver-test.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://resolver-test.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	QUdpSocket dns;
+	if (!dns.bind(QHostAddress::LocalHost)) {
+		CHECK(false);
+		details::UnitProxyCheckOptions = nullptr;
+		return;
+	}
+	const auto answers = std::vector{
+		QHostAddress(u"100.124.236.66"_q),
+		QHostAddress(u"100.124.236.67"_q),
+	};
+	auto nextAnswer = 0;
+	QObject::connect(&dns, &QUdpSocket::readyRead, &dns, [&] {
+		while (dns.hasPendingDatagrams()) {
+			QByteArray query;
+			query.resize(int(dns.pendingDatagramSize()));
+			QHostAddress sender;
+			quint16 senderPort = 0;
+			dns.readDatagram(
+				query.data(),
+				query.size(),
+				&sender,
+				&senderPort);
+			if (nextAnswer >= int(answers.size())) {
+				continue;
+			}
+			const auto response = MakeDnsResponse(
+				query,
+				answers[nextAnswer++]);
+			dns.writeDatagram(response, sender, senderPort);
+		}
+	});
+	details::SetServerHostnameResolverTestNameserver(
+		dns.localAddress(),
+		dns.localPort());
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.type = ProxyData::Type::Socks5;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QStringList dialled;
+	for (const auto &expected : answers) {
+		ProxyCheckObservation observation;
+		bool done = false;
+		bool failed = false;
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		const details::UnitConnectionFactory factory = [&](
+			not_null<Instance*>,
+			DcOptions::Variants::Protocol,
+			QThread *thread,
+			const bytes::vector &,
+			const ProxyData &data) {
+			return details::ConnectionPointer::New<ProxyCheckObserver>(
+				thread,
+				data,
+				&observation);
+		};
+		details::UnitConnectionFactoryInstance = &factory;
+		QEventLoop loop;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) {
+				done = true;
+				loop.quit();
+			},
+			[&](details::AbstractConnection *) {
+				failed = true;
+				loop.quit();
+			});
+		if (!done && !failed) {
+			QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+			loop.exec();
+		}
+		CHECK(done);
+		CHECK(!failed);
+		if (done) {
+			dialled.push_back(observation.addressPassedToChild);
+		}
+		CHECK_EQ(observation.addressPassedToChild, expected.toString());
+		v4.reset();
+		details::UnitConnectionFactoryInstance = nullptr;
+	}
+	CHECK_EQ(nextAnswer, int(answers.size()));
+	CHECK_EQ(dialled.value(0), answers[0].toString());
+	CHECK_EQ(dialled.value(1), answers[1].toString());
+	details::SetServerHostnameResolverTestNameserver({}, 0);
 	details::UnitProxyCheckOptions = nullptr;
 }
 
