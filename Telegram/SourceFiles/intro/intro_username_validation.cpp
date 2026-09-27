@@ -46,7 +46,7 @@ QString ToWireUsername(const QString &normalized) {
 
 bool IsValidUsername(const QString &normalized) {
 	static const auto Pattern = QRegularExpression(
-		u"^[a-zA-Z][a-zA-Z0-9_]{4,31}$"_q);
+		u"^[a-zA-Z][a-zA-Z0-9_]{1,31}$"_q);
 	return Pattern.match(normalized).hasMatch();
 }
 

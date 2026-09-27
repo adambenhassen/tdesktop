@@ -65,7 +65,7 @@ enum class SigninPasswordDataFailure {
 // What the user typed stays on screen.
 [[nodiscard]] QString ToWireUsername(const QString &normalized);
 
-// The server's own username pattern: 5 to 32 characters, ASCII letters,
+// The server's own username pattern: 2 to 32 characters, ASCII letters,
 // digits and underscore, starting with a letter. Checked before any
 // network call — sendCode is limited to 10 per hour per IP.
 [[nodiscard]] bool IsValidUsername(const QString &normalized);
