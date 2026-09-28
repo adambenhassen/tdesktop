@@ -12,7 +12,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_response.h"
 
 #include <atomic>
+#include <map>
 #include <utility>
+
+#include <QtCore/QMutex>
+#include <QtCore/QObject>
 
 namespace MTP {
 namespace details {
@@ -213,11 +217,24 @@ private:
 
 };
 
-[[nodiscard]] bool RejectServerEnrollmentRequest(
+// Keep refused failures cancelable until their queued main-thread delivery.
+// Serialized requests never enter this queue.
+class ServerEnrollmentRefusalQueue {
+public:
+	[[nodiscard]] bool reject(
 		bool networkAllowed,
 		mtpRequestId requestId,
-		ResponseHandler &callbacks,
-		not_null<QObject*> context);
+		ResponseHandler &callbacks);
+	void cancel(mtpRequestId requestId);
+	[[nodiscard]] bool pending(mtpRequestId requestId) const;
+
+private:
+	void deliver(mtpRequestId requestId);
+
+	mutable QMutex _mutex;
+	std::map<mtpRequestId, FailHandler> _failures;
+	QObject _context;
+};
 
 template <typename Send>
 [[nodiscard]] bool AdmitServerEnrollmentRequest(
@@ -225,13 +242,12 @@ template <typename Send>
 		mtpRequestId requestId,
 		details::SerializedRequest &&request,
 		ResponseHandler &&callbacks,
-		not_null<QObject*> context,
+		ServerEnrollmentRefusalQueue &refusals,
 		Send &&send) {
-	if (RejectServerEnrollmentRequest(
+	if (refusals.reject(
 			networkAllowed,
 			requestId,
-			callbacks,
-			context)) {
+			callbacks)) {
 		return false;
 	}
 	send(requestId, std::move(request), std::move(callbacks));

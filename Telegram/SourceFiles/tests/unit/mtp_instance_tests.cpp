@@ -208,6 +208,61 @@ TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
 		MTP::Error::Local("RESPONSE_PARSE_FAILED", "Empty response.")));
 }
 
+TEST_CASE(CancelledEnrollmentRefusalDoesNotDeliver) {
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
+	auto delivered = 0;
+	auto callbacks = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &, const MTP::Response &) {
+			++delivered;
+			return true;
+		},
+	};
+	CHECK(refusals.reject(false, 61, callbacks));
+	CHECK(refusals.pending(61));
+	refusals.cancel(61);
+	CHECK(!refusals.pending(61));
+	QCoreApplication::processEvents();
+	CHECK_EQ(delivered, 0);
+}
+
+TEST_CASE(LiveEnrollmentRefusalDeliversExactlyOnce) {
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
+	auto delivered = 0;
+	auto callbacks = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &error, const MTP::Response &response) {
+			CHECK(MTP::IsServerEnrollmentPausedError(error));
+			CHECK_EQ(response.requestId, mtpRequestId(62));
+			++delivered;
+			return true;
+		},
+	};
+	CHECK(refusals.reject(false, 62, callbacks));
+	CHECK(refusals.pending(62));
+	QCoreApplication::processEvents();
+	QCoreApplication::processEvents();
+	CHECK_EQ(delivered, 1);
+	CHECK(!refusals.pending(62));
+}
+
+TEST_CASE(DestroyedEnrollmentRefusalQueueDropsDelivery) {
+	auto delivered = 0;
+	{
+		auto refusals = MTP::ServerEnrollmentRefusalQueue();
+		auto callbacks = MTP::ResponseHandler{
+			nullptr,
+			[&](const MTP::Error &, const MTP::Response &) {
+				++delivered;
+				return true;
+			},
+		};
+		CHECK(refusals.reject(false, 63, callbacks));
+	}
+	QCoreApplication::processEvents();
+	CHECK_EQ(delivered, 0);
+}
+
 TEST_CASE(ContiguousUpdateAfterEnrollmentRecoveryAppliesOnce) {
 	auto applied = 0;
 	auto waiter = PtsWaiter({
@@ -252,6 +307,7 @@ TEST_CASE(EnrollmentAdmissionResumesWithFreshSerializedState) {
 	using Type = Api::details::UpdateRequestState::Type;
 	auto gate = MTP::ServerEnrollmentGate(true);
 	auto requests = Api::details::UpdateRequestState();
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
 	auto blocked = MTP::DcOptions(MTP::Environment::Production);
 	blocked.constructBlocked();
 	auto unenrolled = MTP::DcOptions(MTP::Environment::Production);
@@ -284,7 +340,7 @@ TEST_CASE(EnrollmentAdmissionResumesWithFreshSerializedState) {
 		41,
 		std::move(refused),
 		std::move(callbacks),
-		QCoreApplication::instance(),
+		refusals,
 		[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
 			sent.emplace_back(id, std::move(request));
 		}));
@@ -309,7 +365,7 @@ TEST_CASE(EnrollmentAdmissionResumesWithFreshSerializedState) {
 						42,
 						std::move(fresh),
 						MTP::ResponseHandler(),
-						QCoreApplication::instance(),
+						refusals,
 						[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
 							sent.emplace_back(id, std::move(request));
 						}));
@@ -345,7 +401,7 @@ TEST_CASE(EnrollmentAdmissionResumesWithFreshSerializedState) {
 				43,
 				std::move(difference),
 				MTP::ResponseHandler(),
-				QCoreApplication::instance(),
+				refusals,
 				[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
 					sent.emplace_back(id, std::move(request));
 				}));
@@ -367,6 +423,7 @@ TEST_CASE(RepausedGateRefusesFreshRecoveryRequest) {
 	CHECK(gate.start());
 	CHECK(gate.pause());
 	auto requests = Api::details::UpdateRequestState();
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
 	auto sent = 0;
 	auto failures = 0;
 	auto lifetime = rpl::lifetime();
@@ -391,7 +448,7 @@ TEST_CASE(RepausedGateRefusesFreshRecoveryRequest) {
 					55,
 					std::move(request),
 					std::move(callbacks),
-					QCoreApplication::instance(),
+					refusals,
 					[&](mtpRequestId, Request &&, MTP::ResponseHandler &&) {
 						++sent;
 					}));

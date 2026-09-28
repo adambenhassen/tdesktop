@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QRegularExpression>
 #include <QtCore/QDebug>
 #include <QtCore/QObject>
+#include <QtCore/QMutexLocker>
 
 namespace MTP {
 namespace {
@@ -79,27 +80,51 @@ Error Error::Local(
 	return Error(MTPLocal(type, description));
 }
 
-bool RejectServerEnrollmentRequest(
+bool ServerEnrollmentRefusalQueue::reject(
 		bool networkAllowed,
 		mtpRequestId requestId,
-		ResponseHandler &callbacks,
-		not_null<QObject*> context) {
+		ResponseHandler &callbacks) {
 	if (networkAllowed) {
 		return false;
 	}
 	if (callbacks.fail) {
-		QMetaObject::invokeMethod(context.get(), [
-			requestId,
-			fail = std::move(callbacks.fail)
-		]() mutable {
-			fail(
-				Error::Local(
-					u"SERVER_ENROLLMENT_PAUSED"_q,
-					u"Network access is paused until server enrollment completes."_q),
-				Response{ .requestId = requestId });
+		{
+			QMutexLocker locker(&_mutex);
+			_failures.emplace(requestId, std::move(callbacks.fail));
+		}
+		QMetaObject::invokeMethod(&_context, [this, requestId] {
+			deliver(requestId);
 		}, Qt::QueuedConnection);
 	}
 	return true;
+}
+
+void ServerEnrollmentRefusalQueue::cancel(mtpRequestId requestId) {
+	QMutexLocker locker(&_mutex);
+	_failures.erase(requestId);
+}
+
+bool ServerEnrollmentRefusalQueue::pending(mtpRequestId requestId) const {
+	QMutexLocker locker(&_mutex);
+	return _failures.find(requestId) != _failures.end();
+}
+
+void ServerEnrollmentRefusalQueue::deliver(mtpRequestId requestId) {
+	auto fail = FailHandler();
+	{
+		QMutexLocker locker(&_mutex);
+		const auto i = _failures.find(requestId);
+		if (i == _failures.end()) {
+			return;
+		}
+		fail = std::move(i->second);
+		_failures.erase(i);
+	}
+	fail(
+		Error::Local(
+			u"SERVER_ENROLLMENT_PAUSED"_q,
+			u"Network access is paused until server enrollment completes."_q),
+		Response{ .requestId = requestId });
 }
 
 QDebug operator<<(QDebug debug, const Error &error) {

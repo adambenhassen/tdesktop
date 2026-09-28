@@ -304,6 +304,7 @@ private:
 
 	std::map<mtpRequestId, ResponseHandler> _parserMap;
 	mutable QMutex _parserMapLock;
+	ServerEnrollmentRefusalQueue _refusedRequests;
 
 	std::map<mtpRequestId, SerializedRequest> _requestMap;
 	QReadWriteLock _requestMapLock;
@@ -828,6 +829,7 @@ void Instance::Private::cancel(mtpRequestId requestId) {
 	if (!requestId) return;
 
 	DEBUG_LOG(("MTP Info: Cancel request %1.").arg(requestId));
+	_refusedRequests.cancel(requestId);
 	const auto shiftedDcId = queryRequestByDc(requestId);
 	auto msgId = mtpMsgId(0);
 	{
@@ -1231,7 +1233,7 @@ void Instance::Private::sendRequest(
 			requestId,
 			std::move(request),
 			std::move(callbacks),
-			_instance,
+			_refusedRequests,
 			[this, shiftedDcId, msCanWait, needsLayer, afterRequestId](
 					mtpRequestId id,
 					SerializedRequest &&accepted,
