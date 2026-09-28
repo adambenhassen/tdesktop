@@ -65,8 +65,10 @@ qint64 LookupServerHostname(
 		auto info = QHostInfo();
 		if (testLookup) {
 			testLookup(hostname, ipv6, info);
+#ifdef TDESKTOP_UNIT_TESTS
 		} else if (testSystemLookup) {
 			info = testSystemLookup(hostname, ipv6);
+#endif
 		} else {
 			info = QHostInfo::fromName(hostname);
 		}
