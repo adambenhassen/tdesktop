@@ -462,6 +462,9 @@ TEST_CASE(PublicDiscoveryAllowsOnlyMagicDnsTailscaleAddresses) {
 		QHostAddress(u"::ffff:100.124.236.66"_q)));
 	CHECK(!IsPublicDiscoveryAddress(
 		selection,
+		QHostAddress(u"8.8.8.8"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
 		QHostAddress(u"::ffff:10.0.0.5"_q)));
 	CHECK(!IsPublicDiscoveryAddress(
 		selection,
@@ -507,6 +510,47 @@ TEST_CASE(PublicDiscoveryUsesMagicDnsPolicyForDnsAnswers) {
 	CHECK(!FirstSafePublicDiscoveryAddress(
 		magicDns,
 		{ QHostAddress(u"::ffff:10.0.0.5"_q) }).has_value());
+}
+
+TEST_CASE(PinnedHostnameAddressFilteringPreservesOrderAndCapsAnswers) {
+	const auto hostname = u"telegram-server.tailaa4918.ts.net"_q;
+	const auto addresses = QList<QHostAddress>{
+		QHostAddress(u"8.8.8.8"_q),
+		QHostAddress(u"127.0.0.1"_q),
+		QHostAddress(u"100.124.236.66"_q),
+		QHostAddress(u"10.0.0.5"_q),
+		QHostAddress(u"fd7a:115c:a1e0::1234"_q),
+		QHostAddress(u"192.168.1.1"_q),
+	};
+	const auto ipv4 = FilterPinnedServerAddresses(hostname, addresses, false);
+	CHECK_EQ(int(ipv4.size()), 1);
+	if (ipv4.size() == 1) {
+		CHECK(ipv4.front() == QHostAddress(u"100.124.236.66"_q));
+	}
+
+	const auto ipv6 = FilterPinnedServerAddresses(hostname, addresses, true);
+	CHECK_EQ(int(ipv6.size()), 1);
+	if (ipv6.size() == 1) {
+		CHECK(ipv6.front() == QHostAddress(u"fd7a:115c:a1e0::1234"_q));
+	}
+
+	const auto capped = FilterPinnedServerAddresses(
+		u"server.example.com"_q,
+		{
+			QHostAddress(u"8.8.8.1"_q),
+			QHostAddress(u"8.8.8.2"_q),
+			QHostAddress(u"8.8.8.3"_q),
+			QHostAddress(u"8.8.8.4"_q),
+			QHostAddress(u"8.8.8.5"_q),
+			QHostAddress(u"8.8.8.6"_q),
+			QHostAddress(u"8.8.8.7"_q),
+			QHostAddress(u"8.8.8.8"_q),
+			QHostAddress(u"8.8.8.9"_q),
+		},
+		false);
+	CHECK_EQ(int(capped.size()), 8);
+	CHECK(capped.front() == QHostAddress(u"8.8.8.1"_q));
+	CHECK(capped.back() == QHostAddress(u"8.8.8.8"_q));
 }
 
 TEST_CASE(SelectionRejectsNonRoutableIpLiterals) {
@@ -666,7 +710,10 @@ TEST_CASE(LocalDiscoveryStartsSocketForLiteralAndLocalName) {
 			peer->deleteLater();
 		}
 		client.disconnectFromHost();
-		client.waitForDisconnected(1000);
+		if (client.state() != QAbstractSocket::UnconnectedState) {
+			CHECK(client.waitForDisconnected(1000));
+		}
+		CHECK(client.state() == QAbstractSocket::UnconnectedState);
 	}
 }
 
@@ -1673,6 +1720,17 @@ TEST_CASE(DiscoveryJsonRequiresAnExplicitEndpointPort) {
 	}).toJson(QJsonDocument::Compact);
 	const auto result = ParsePublicDiscoveryResponse(selection, json);
 	CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+}
+
+TEST_CASE(DiscoveryJsonRejectsHttpPort) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	CHECK(!IsPublicDiscoveryEndpoint(
+		CheckServerSelection(u"server.example.com:80"_q),
+		selection));
+	CHECK(ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"server.example.com:80"_q)).status
+		== ServerDiscoveryResponseStatus::UnsafeEndpoint);
 }
 
 } // namespace

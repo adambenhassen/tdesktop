@@ -83,10 +83,16 @@ void SessionData::queueConnectionStateChange(int newState) {
 }
 
 void SessionData::queuePinnedServerFailure(
-		PinnedServerFailure failure,
-		uint64 presentedFingerprint) {
+	PinnedServerFailure failure,
+	uint64 presentedFingerprint,
+	const QString &pinnedHostname,
+	const QString &dialledAddress) {
 	withSession([=](not_null<Session*> session) {
-		session->pinnedServerFailure(failure, presentedFingerprint);
+		session->pinnedServerFailure(
+			failure,
+			presentedFingerprint,
+			pinnedHostname,
+			dialledAddress);
 	});
 }
 
@@ -409,11 +415,15 @@ void Session::connectionStateChange(int newState) {
 
 void Session::pinnedServerFailure(
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint) {
+		uint64 presentedFingerprint,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
 	_instance->onPinnedServerFailure(
 		_shiftedDcId,
 		failure,
-		presentedFingerprint);
+		presentedFingerprint,
+		pinnedHostname,
+		dialledAddress);
 }
 
 void Session::stopUntilPinChange() {

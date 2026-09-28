@@ -62,10 +62,13 @@ void ConfigureAddressField(not_null<Ui::InputField*> field) {
 }
 
 [[nodiscard]] QString CustomServerEndpoint(const MTP::CustomServer &server) {
-	const auto host = QString::fromStdString(server.ip);
-	return (server.ipv6 ? (u"["_q + host + u"]"_q) : host)
-		+ u":"_q
-		+ QString::number(server.port);
+	const auto host = QString::fromStdString(server.hostname.empty()
+		? server.ip
+		: server.hostname);
+	const auto formattedHost = server.hostname.empty() && server.ipv6
+		? (u"["_q + host + u"]"_q)
+		: host;
+	return formattedHost + u":"_q + QString::number(server.port);
 }
 
 [[nodiscard]] bool HasBoundServer(Main::Account &account) {

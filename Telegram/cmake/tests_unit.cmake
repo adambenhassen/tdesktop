@@ -16,6 +16,16 @@
 add_executable(test_unit)
 init_target(test_unit "(tests)")
 
+if(UNIX)
+    add_library(test_unit_system_resolver SHARED
+        ${src_loc}/tests/unit/system_resolver_fixture.c
+    )
+    target_compile_features(test_unit_system_resolver PRIVATE c_std_11)
+    target_include_directories(test_unit_system_resolver PRIVATE ${src_loc})
+    target_link_libraries(test_unit_system_resolver PRIVATE ${CMAKE_DL_LIBS})
+    target_link_libraries(test_unit PRIVATE test_unit_system_resolver)
+endif()
+
 target_include_directories(test_unit PRIVATE ${src_loc})
 target_compile_definitions(test_unit PRIVATE
     TDESKTOP_UNIT_TESTS
@@ -77,6 +87,10 @@ PRIVATE
     tests/unit/username_check_state_tests.cpp
     tests/unit/unit_test.cpp
     tests/unit/unit_test.h
+    mtproto/connection_abstract.h
+    mtproto/connection_server_resolving.cpp
+    mtproto/connection_server_resolving.h
+    mtproto/proxy_check.cpp
 )
 
 target_link_libraries(test_unit
@@ -99,5 +113,6 @@ PRIVATE
 # binary dir, so one documented path finds it. The generator appends the
 # config, as it does for the application.
 set_target_properties(test_unit PROPERTIES
+    AUTOMOC ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )

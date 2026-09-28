@@ -645,12 +645,23 @@ void ShowServerIdentityChange(
 		qint64(report.pinnedFingerprint));
 	const auto presented = QString::number(
 		qint64(report.presentedFingerprint));
-	const auto text = tr::lng_intro_server_identity_changed(
+	auto text = tr::lng_intro_server_identity_changed(
 		tr::now,
 		lt_pinned_fingerprint,
 		pinned,
 		lt_presented_fingerprint,
 		presented);
+	if (!report.pinnedHostname.isEmpty()
+		|| !report.dialledAddress.isEmpty()) {
+		text.append(u"\n\nPinned hostname: "_q)
+			.append(report.pinnedHostname.isEmpty()
+				? u"unknown"_q
+				: report.pinnedHostname)
+			.append(u"\nDialled address: "_q)
+			.append(report.dialledAddress.isEmpty()
+				? u"unknown"_q
+				: report.dialledAddress);
+	}
 
 	const auto weakAccount = base::make_weak(account);
 	const auto advancing = std::make_shared<bool>(false);
