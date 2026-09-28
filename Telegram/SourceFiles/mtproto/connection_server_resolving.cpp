@@ -9,9 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/mtproto_server_discovery.h"
 
-#include <QtNetwork/QDnsLookup>
+#include <QtCore/QThread>
 #include <QtNetwork/QHostInfo>
 
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 namespace MTP::details {
@@ -22,58 +25,78 @@ constexpr auto kLookupTimeout = crl::time(8000);
 constexpr auto kMaxAddresses = 8;
 
 #ifdef TDESKTOP_UNIT_TESTS
-QHostAddress TestNameserver;
-quint16 TestNameserverPort = 0;
+ServerHostnameResolverTestLookup TestLookup;
 #endif
+
+using HostnameLookupFunction = Fn<void(
+		const QString &hostname,
+		bool ipv6,
+		QHostInfo &info)>;
+
+struct HostnameLookupState final {
+	std::atomic_bool aborted = false;
+	std::mutex mutex;
+	QHostInfo info;
+};
 
 qint64 LookupServerHostname(
 		const QString &hostname,
 		QObject *context,
 		bool ipv6,
 		Fn<void(const QHostInfo &)> callback) {
-	const auto lookup = new QDnsLookup(
-		ipv6 ? QDnsLookup::AAAA : QDnsLookup::A,
-		hostname,
-		context);
+	const auto state = std::make_shared<HostnameLookupState>();
+	auto testLookup = HostnameLookupFunction();
 #ifdef TDESKTOP_UNIT_TESTS
-	if (!TestNameserver.isNull()) {
-		lookup->setNameserver(TestNameserver, TestNameserverPort);
-	}
+	testLookup = TestLookup;
 #endif
+	const auto thread = QThread::create([
+			state,
+			hostname,
+			ipv6,
+			testLookup = std::move(testLookup)] {
+		auto info = QHostInfo();
+		if (testLookup) {
+			testLookup(hostname, ipv6, info);
+		} else {
+			info = QHostInfo::fromName(hostname);
+		}
+		const auto lock = std::lock_guard(state->mutex);
+		state->info = std::move(info);
+	});
 	QObject::connect(
-		lookup,
-		&QDnsLookup::finished,
-		lookup,
-		[lookup, callback = std::move(callback)] {
-			auto info = QHostInfo();
-			if (lookup->error() == QDnsLookup::NoError) {
-				auto addresses = QList<QHostAddress>();
-				for (const auto &record : lookup->hostAddressRecords()) {
-					addresses.push_back(record.value());
-				}
-				info.setAddresses(addresses);
-			} else if (lookup->error() == QDnsLookup::NotFoundError) {
-				info.setError(QHostInfo::HostNotFound);
-			} else {
-				info.setError(QHostInfo::UnknownError);
+		thread,
+		&QThread::finished,
+		context,
+		[state, callback = std::move(callback)] {
+			if (state->aborted.load()) {
+				return;
 			}
-			lookup->deleteLater();
+			auto info = QHostInfo();
+			{
+				const auto lock = std::lock_guard(state->mutex);
+				info = state->info;
+			}
 			callback(info);
-		});
+		},
+		Qt::QueuedConnection);
+	QObject::connect(
+		thread,
+		&QThread::finished,
+		thread,
+		&QObject::deleteLater);
 	const auto id = static_cast<qint64>(
-		reinterpret_cast<quintptr>(lookup));
-	lookup->lookup();
+		reinterpret_cast<quintptr>(state.get()));
+	thread->start();
 	return id;
 }
 
 void AbortServerHostnameLookup(qint64 lookupId) {
-	const auto lookup = reinterpret_cast<QDnsLookup*>(
+	const auto state = reinterpret_cast<HostnameLookupState*>(
 		static_cast<quintptr>(lookupId));
-	if (!lookup) {
+	if (!state) {
 		return;
 	}
-	lookup->abort();
-	lookup->deleteLater();
+	state->aborted.store(true);
 }
 
 ServerHostnameResolver DefaultServerHostnameResolver() {
@@ -86,11 +109,9 @@ ServerHostnameResolver DefaultServerHostnameResolver() {
 } // namespace
 
 #ifdef TDESKTOP_UNIT_TESTS
-void SetServerHostnameResolverTestNameserver(
-		const QHostAddress &address,
-		quint16 port) {
-	TestNameserver = address;
-	TestNameserverPort = port;
+void SetServerHostnameResolverTestLookup(
+		ServerHostnameResolverTestLookup lookup) {
+	TestLookup = std::move(lookup);
 }
 #endif
 

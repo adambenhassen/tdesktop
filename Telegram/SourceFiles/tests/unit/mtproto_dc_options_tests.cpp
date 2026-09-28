@@ -28,7 +28,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
 #include <QtNetwork/QHostInfo>
-#include <QtNetwork/QUdpSocket>
 
 namespace MTP::details {
 namespace {
@@ -229,6 +228,19 @@ public:
 		};
 	}
 
+	void resolve(
+			const QString &,
+			bool,
+			QHostInfo &info) {
+		if (_nextResponse >= _responses.size()) {
+			info.setError(QHostInfo::HostNotFound);
+			return;
+		}
+		const auto &response = _responses[_nextResponse++];
+		info.setError(response.error);
+		info.setAddresses(response.addresses);
+	}
+
 	void add(UnitHostLookupResponse response) {
 		_responses.push_back(std::move(response));
 	}
@@ -248,61 +260,11 @@ private:
 
 };
 
-[[nodiscard]] QByteArray MakeDnsResponse(
-		const QByteArray &query,
-		const QHostAddress &address,
-		bool notFound = false) {
-	if (query.size() < 12) {
-		return {};
-	}
-	auto questionEnd = 12;
-	while (questionEnd < query.size()
-		&& query.at(questionEnd) != 0) {
-		const auto length = static_cast<uchar>(query.at(questionEnd));
-		questionEnd += 1 + length;
-	}
-	if (questionEnd + 5 > query.size()) {
-		return {};
-	}
-	const auto type = (static_cast<quint16>(static_cast<uchar>(
-		query.at(questionEnd + 1))) << 8)
-		| static_cast<quint16>(static_cast<uchar>(
-			query.at(questionEnd + 2)));
-	const auto answer = (!notFound && !address.isNull() && (type == 1))
-		? 1
-		: 0;
-	auto response = QByteArray();
-	response.append(query.constData(), 2);
-	const auto append16 = [&](quint16 value) {
-		response.append(char(value >> 8));
-		response.append(char(value & 0xff));
-	};
-	const auto append32 = [&](quint32 value) {
-		append16(quint16(value >> 16));
-		append16(quint16(value & 0xffff));
-	};
-	append16(notFound ? 0x8183 : 0x8180);
-	append16(1);
-	append16(answer);
-	append16(0);
-	append16(0);
-	response.append(
-		query.constData() + 12,
-		questionEnd + 5 - 12);
-	if (answer) {
-		response.append(char(0xc0));
-		response.append(char(0x0c));
-		append16(1);
-		append16(1);
-		append32(60);
-		append16(4);
-		const auto value = address.toIPv4Address();
-		response.append(char(value >> 24));
-		response.append(char(value >> 16));
-		response.append(char(value >> 8));
-		response.append(char(value));
-	}
-	return response;
+void SetDefaultHostnameResolver(UnitHostResolver &resolver) {
+	details::SetServerHostnameResolverTestLookup(
+		[&resolver](const QString &hostname, bool ipv6, QHostInfo &info) {
+			resolver.resolve(hostname, ipv6, info);
+		});
 }
 
 class ProxyCheckObserver final : public details::AbstractConnection {
@@ -1118,41 +1080,15 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 	CHECK(options.setCustomServer(server));
 	details::UnitProxyCheckOptions = &options;
 
-	QUdpSocket dns;
-	if (!dns.bind(QHostAddress::LocalHost)) {
-		CHECK(false);
-		details::SetServerHostnameResolverTestNameserver({}, 0);
-		details::UnitProxyCheckOptions = nullptr;
-		return;
-	}
 	const auto answers = std::vector{
 		QHostAddress(u"100.124.236.66"_q),
 		QHostAddress(u"100.124.236.67"_q),
 	};
-	auto nextAnswer = 0;
-	QObject::connect(&dns, &QUdpSocket::readyRead, &dns, [&] {
-		while (dns.hasPendingDatagrams()) {
-			QByteArray query;
-			query.resize(int(dns.pendingDatagramSize()));
-			QHostAddress sender;
-			quint16 senderPort = 0;
-			dns.readDatagram(
-				query.data(),
-				query.size(),
-				&sender,
-				&senderPort);
-			if (nextAnswer >= int(answers.size())) {
-				continue;
-			}
-			const auto response = MakeDnsResponse(
-				query,
-				answers[nextAnswer++]);
-			dns.writeDatagram(response, sender, senderPort);
-		}
-	});
-	details::SetServerHostnameResolverTestNameserver(
-		dns.localAddress(),
-		dns.localPort());
+	UnitHostResolver resolver;
+	for (const auto &answer : answers) {
+		resolver.add({ .addresses = { answer } });
+	}
+	SetDefaultHostnameResolver(resolver);
 
 	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
 	ProxyData proxy;
@@ -1206,10 +1142,10 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 		v4.reset();
 		details::UnitConnectionFactoryInstance = nullptr;
 	}
-	CHECK_EQ(nextAnswer, int(answers.size()));
+	CHECK_EQ(resolver.lookups(), int(answers.size()));
 	CHECK_EQ(dialled.value(0), answers[0].toString());
 	CHECK_EQ(dialled.value(1), answers[1].toString());
-	details::SetServerHostnameResolverTestNameserver({}, 0);
+	details::SetServerHostnameResolverTestLookup({});
 	details::UnitProxyCheckOptions = nullptr;
 }
 
@@ -1228,41 +1164,21 @@ void RunDefaultResolverOwnerRemovalCase(
 		".well-known/telegramd/client";
 	CHECK(options.setCustomServer(server));
 	details::UnitProxyCheckOptions = &options;
-	const auto dnsAnswer = (responseKind
-		== OwnerRemovalDnsResponse::RejectedAddress)
-		? QHostAddress(u"8.8.8.8"_q)
-		: QHostAddress();
-	const auto dnsFailure = (responseKind
-		== OwnerRemovalDnsResponse::NxDomain);
-
-	QUdpSocket dns;
-	if (!dns.bind(QHostAddress::LocalHost)) {
-		CHECK(false);
-		details::UnitProxyCheckOptions = nullptr;
-		return;
+	UnitHostResolver resolver;
+	switch (responseKind) {
+	case OwnerRemovalDnsResponse::NoErrorNoData:
+		resolver.add({});
+		break;
+	case OwnerRemovalDnsResponse::NxDomain:
+		resolver.add({ .error = QHostInfo::HostNotFound });
+		break;
+	case OwnerRemovalDnsResponse::RejectedAddress:
+		resolver.add({
+			.addresses = { QHostAddress(u"8.8.8.8"_q) },
+		});
+		break;
 	}
-	auto queries = 0;
-	QObject::connect(&dns, &QUdpSocket::readyRead, &dns, [&] {
-		while (dns.hasPendingDatagrams()) {
-			QByteArray query;
-			query.resize(int(dns.pendingDatagramSize()));
-			QHostAddress sender;
-			quint16 senderPort = 0;
-			dns.readDatagram(
-				query.data(),
-				query.size(),
-				&sender,
-				&senderPort);
-			++queries;
-			dns.writeDatagram(
-				MakeDnsResponse(query, dnsAnswer, dnsFailure),
-				sender,
-				senderPort);
-		}
-	});
-	details::SetServerHostnameResolverTestNameserver(
-		dns.localAddress(),
-		dns.localPort());
+	SetDefaultHostnameResolver(resolver);
 
 	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
 	ProxyData proxy;
@@ -1328,9 +1244,9 @@ void RunDefaultResolverOwnerRemovalCase(
 		CHECK(!connection);
 	}
 	CHECK(failed);
-	CHECK(queries > 0);
+	CHECK_EQ(resolver.lookups(), 1);
 
-	details::SetServerHostnameResolverTestNameserver({}, 0);
+	details::SetServerHostnameResolverTestLookup({});
 	details::UnitProxyCheckOptions = nullptr;
 }
 

@@ -11,7 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 
 #include <QtCore/QList>
-#include <QtNetwork/QHostAddress>
 
 class QHostInfo;
 
@@ -27,9 +26,12 @@ struct ServerHostnameResolver {
 };
 
 #ifdef TDESKTOP_UNIT_TESTS
-void SetServerHostnameResolverTestNameserver(
-	const QHostAddress &address,
-	quint16 port);
+using ServerHostnameResolverTestLookup = Fn<void(
+		const QString &hostname,
+		bool ipv6,
+		QHostInfo &info)>;
+void SetServerHostnameResolverTestLookup(
+		ServerHostnameResolverTestLookup lookup);
 #endif
 
 class ServerResolvingConnection final : public AbstractConnection {
