@@ -827,8 +827,9 @@ bool IsPublicDiscoveryAddress(
 		|| origin.policy != ServerDiscoveryPolicy::PublicHttps) {
 		return false;
 	}
-	return IsPublicAddress(address)
-		|| (IsMagicDnsSelection(origin) && IsTailscaleAddress(address));
+	return IsMagicDnsSelection(origin)
+		? IsTailscaleAddress(address)
+		: IsPublicAddress(address);
 }
 
 std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
@@ -842,12 +843,45 @@ std::optional<QHostAddress> FirstSafePublicDiscoveryAddress(
 	return std::nullopt;
 }
 
+QList<QHostAddress> FilterPinnedServerAddresses(
+		const QString &hostname,
+		const QList<QHostAddress> &addresses,
+		bool ipv6) {
+	const auto origin = CheckServerSelection(hostname);
+	if (!origin.valid()
+		|| origin.policy != ServerDiscoveryPolicy::PublicHttps
+		|| origin.host != hostname) {
+		return {};
+	}
+
+	constexpr auto kMaxAddresses = 8;
+	auto result = QList<QHostAddress>();
+	for (const auto &address : addresses) {
+		auto normalized = address;
+		if (normalized.protocol() == QAbstractSocket::IPv6Protocol
+			&& IsInSubnet(normalized, "::ffff:0:0", 96)) {
+			normalized = QHostAddress(normalized.toIPv4Address());
+		}
+		if ((normalized.protocol() == QAbstractSocket::IPv6Protocol) != ipv6
+			|| !IsPublicDiscoveryAddress(origin, normalized)
+			|| result.contains(normalized)) {
+			continue;
+		}
+		result.push_back(normalized);
+		if (result.size() == kMaxAddresses) {
+			break;
+		}
+	}
+	return result;
+}
+
 bool IsPublicDiscoveryEndpoint(
 		const ServerSelectionCheck &endpoint,
 		const ServerSelectionCheck &origin) {
 	if (!endpoint.explicitPort
 		|| !origin.valid()
-		|| origin.policy != ServerDiscoveryPolicy::PublicHttps) {
+		|| origin.policy != ServerDiscoveryPolicy::PublicHttps
+		|| endpoint.operationalPort == 80) {
 		return false;
 	}
 	auto address = QHostAddress();

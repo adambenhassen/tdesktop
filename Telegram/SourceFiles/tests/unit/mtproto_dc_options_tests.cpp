@@ -7,20 +7,143 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include <algorithm>
 #include <atomic>
+#include <iterator>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "mtproto/details/mtproto_rsa_public_key.h"
+#include "mtproto/connection_server_resolving.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_enrollment.h"
+#include "mtproto/mtp_instance.h"
 #include "mtproto/proxy_check.h"
 #include "mtproto/session.h"
+#ifdef Q_OS_UNIX
+#include "tests/unit/system_resolver_fixture.h"
+#endif
 
 #include <QtCore/QByteArray>
+#include <QtCore/QDataStream>
+#include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QPointer>
+#include <QtCore/QTimer>
+#include <QtNetwork/QHostInfo>
+
+namespace MTP::details {
+namespace {
+
+int UnitConnectionCounter = 0;
+
+} // namespace
+
+using UnitConnectionFactory = Fn<ConnectionPointer(
+	not_null<Instance*> instance,
+	DcOptions::Variants::Protocol protocol,
+	QThread *thread,
+	const bytes::vector &secret,
+	const ProxyData &proxy)>;
+
+const UnitConnectionFactory *UnitConnectionFactoryInstance = nullptr;
+
+ConnectionPointer::ConnectionPointer() = default;
+
+ConnectionPointer::ConnectionPointer(AbstractConnection *value)
+: _value(value) {
+}
+
+ConnectionPointer::ConnectionPointer(std::nullptr_t) {
+}
+
+ConnectionPointer::ConnectionPointer(ConnectionPointer &&other)
+: _value(base::take(other._value)) {
+}
+
+ConnectionPointer &ConnectionPointer::operator=(ConnectionPointer &&other) {
+	reset(base::take(other._value));
+	return *this;
+}
+
+AbstractConnection *ConnectionPointer::get() const {
+	return _value;
+}
+
+void ConnectionPointer::reset(AbstractConnection *value) {
+	if (_value == value) {
+		return;
+	}
+	delete _value;
+	_value = value;
+}
+
+ConnectionPointer::operator AbstractConnection*() const {
+	return get();
+}
+
+AbstractConnection *ConnectionPointer::operator->() const {
+	return get();
+}
+
+AbstractConnection &ConnectionPointer::operator*() const {
+	return *get();
+}
+
+ConnectionPointer::operator bool() const {
+	return get() != nullptr;
+}
+
+ConnectionPointer::~ConnectionPointer() {
+	reset();
+}
+
+AbstractConnection::AbstractConnection(
+		QThread *thread,
+		const ProxyData &proxy)
+: _proxy(proxy)
+, _debugId(QString::number(++UnitConnectionCounter)) {
+	moveToThread(thread);
+}
+
+ConnectionPointer AbstractConnection::Create(
+		not_null<Instance*> instance,
+		DcOptions::Variants::Protocol protocol,
+		QThread *thread,
+		const bytes::vector &secret,
+		const ProxyData &proxy) {
+	Expects(UnitConnectionFactoryInstance != nullptr);
+	return (*UnitConnectionFactoryInstance)(
+		instance,
+		protocol,
+		thread,
+		secret,
+		proxy);
+}
+
+} // namespace MTP::details
+
+namespace MTP::details {
+
+DcOptions *UnitProxyCheckOptions = nullptr;
+
+} // namespace MTP::details
+
+namespace MTP {
+
+DcId Instance::mainDcId() const {
+	Expects(details::UnitProxyCheckOptions != nullptr);
+	return details::UnitProxyCheckOptions->customServer().dcId;
+}
+
+DcOptions &Instance::dcOptions() const {
+	Expects(details::UnitProxyCheckOptions != nullptr);
+	return *details::UnitProxyCheckOptions;
+}
+
+} // namespace MTP
 
 namespace {
 
@@ -62,6 +185,154 @@ constexpr auto kProductionKeyFingerprint = qint64(-3414540481677951611LL);
 		.key = MakeKey(),
 	};
 }
+
+struct ProxyCheckObservation {
+	ProxyData::Type proxyType = ProxyData::Type::None;
+	QString addressPassedToChild;
+	int port = 0;
+	bool connected = false;
+};
+
+struct UnitHostLookupResponse {
+	QList<QHostAddress> addresses;
+	QHostInfo::HostInfoError error = QHostInfo::NoError;
+	bool timeout = false;
+};
+
+enum class OwnerRemovalDnsResponse {
+	NoErrorNoData,
+	NxDomain,
+	RejectedAddress,
+};
+
+class UnitHostResolver final {
+public:
+	MTP::details::ServerHostnameResolver resolver() {
+		return {
+			.lookup = [this](
+					const QString &,
+					QObject *,
+					bool,
+					Fn<void(const QHostInfo &)> callback) {
+				if (_nextResponse >= _responses.size()) {
+					return qint64(-1);
+				}
+				const auto &response = _responses[_nextResponse++];
+				if (response.timeout) {
+					return qint64(1);
+				}
+				QHostInfo info;
+				info.setError(response.error);
+				info.setAddresses(response.addresses);
+				callback(info);
+				return qint64(-1);
+			},
+			.abort = [this](qint64) {
+				++_aborts;
+			}
+		};
+	}
+
+	void resolve(
+			const QString &,
+			bool,
+			QHostInfo &info) {
+		if (_nextResponse >= _responses.size()) {
+			info.setError(QHostInfo::HostNotFound);
+			return;
+		}
+		const auto &response = _responses[_nextResponse++];
+		info.setError(response.error);
+		info.setAddresses(response.addresses);
+	}
+
+	void add(UnitHostLookupResponse response) {
+		_responses.push_back(std::move(response));
+	}
+
+	[[nodiscard]] int lookups() const {
+		return _nextResponse;
+	}
+
+	[[nodiscard]] int aborts() const {
+		return _aborts;
+	}
+
+private:
+	std::vector<UnitHostLookupResponse> _responses;
+	int _nextResponse = 0;
+	int _aborts = 0;
+
+};
+
+void SetDefaultHostnameResolver(UnitHostResolver &resolver) {
+	details::SetServerHostnameResolverTestLookup(
+		[&resolver](const QString &hostname, bool ipv6, QHostInfo &info) {
+			resolver.resolve(hostname, ipv6, info);
+		});
+}
+
+class ProxyCheckObserver final : public details::AbstractConnection {
+public:
+	ProxyCheckObserver(
+		QThread *thread,
+		const ProxyData &proxy,
+		ProxyCheckObservation *observation)
+	: details::AbstractConnection(thread, proxy)
+	, _observation(observation) {
+	}
+
+	details::ConnectionPointer clone(const ProxyData &) override {
+		return nullptr;
+	}
+
+	crl::time pingTime() const override {
+		return 0;
+	}
+
+	crl::time fullConnectTimeout() const override {
+		return 0;
+	}
+
+	void sendData(mtpBuffer &&) override {
+	}
+
+	void disconnectFromServer() override {
+	}
+
+	void connectToServer(
+			const QString &address,
+			int port,
+			const bytes::vector &,
+			int16,
+			bool) override {
+		_observation->addressPassedToChild = address;
+		_observation->port = port;
+		_observation->proxyType = _proxy.type;
+		_observation->connected = true;
+		connected();
+	}
+
+	bool isConnected() const override {
+		return _observation->connected;
+	}
+
+	int32 debugState() const override {
+		return 0;
+	}
+
+	QString transport() const override {
+		return u"test"_q;
+	}
+
+	QString tag() const override {
+		return u"test"_q;
+	}
+
+private:
+	ProxyCheckObservation *_observation = nullptr;
+
+};
 
 } // namespace
 
@@ -290,6 +561,107 @@ TEST_CASE(PublicHttpsDiscoveryEnrollsWithPublicResolvedAddress) {
 	}
 }
 
+TEST_CASE(PublicHttpsSameOriginDiscoveryRetainsHostname) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	const auto key = MakeKey();
+	const auto der = key->getSubjectPublicKeyInfo();
+	const auto json = QJsonDocument(QJsonObject{
+		{ u"version"_q, 1 },
+		{ u"mtproto"_q, QJsonObject{
+			{ u"endpoint"_q,
+				u"telegram-server.tailaa4918.ts.net:2443"_q },
+			{ u"dc_id"_q, 2 },
+			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
+				reinterpret_cast<const char *>(der.data()),
+				int(der.size())).toBase64()) }
+		} }
+	}).toJson(QJsonDocument::Compact);
+	auto result = ParsePublicDiscoveryResponse(selection, json);
+	CHECK(result.valid());
+	result.resolvedAddress = u"100.124.236.66"_q;
+
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+	CHECK_EQ(server->hostname, "telegram-server.tailaa4918.ts.net");
+	CHECK(server->ip.empty());
+	CHECK_EQ(server->port, 2443);
+	CHECK(!server->ipv6);
+
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	const auto variants = options.lookup(server->dcId, DcType::Regular, false);
+	for (const auto address : {
+		DcOptions::Variants::IPv4,
+		DcOptions::Variants::IPv6,
+	}) {
+		const auto &tcp = variants.data[address][DcOptions::Variants::Tcp];
+		CHECK_EQ(int(tcp.size()), 1);
+		if (tcp.size() == 1) {
+			CHECK_EQ(tcp.front().ip, server->hostname);
+			CHECK_EQ(tcp.front().port, server->port);
+		}
+		CHECK(variants.data[address][DcOptions::Variants::Http].empty());
+	}
+
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	const auto got = restored.customServer();
+	CHECK_EQ(got.hostname, server->hostname);
+	CHECK(got.ip.empty());
+	CHECK_EQ(got.port, server->port);
+}
+
+TEST_CASE(HostnamePinRejectsInvalidCanonicalRestoreAndOlderVersion) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	const auto key = MakeKey();
+	const auto der = key->getSubjectPublicKeyInfo();
+	auto result = ParsePublicDiscoveryResponse(
+		selection,
+		QJsonDocument(QJsonObject{
+			{ u"version"_q, 1 },
+			{ u"mtproto"_q, QJsonObject{
+				{ u"endpoint"_q, u"server.example.com:2443"_q },
+				{ u"dc_id"_q, 2 },
+				{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
+					reinterpret_cast<const char *>(der.data()),
+					int(der.size())).toBase64()) }
+			} }
+		}).toJson(QJsonDocument::Compact));
+	result.resolvedAddress = u"8.8.8.8"_q;
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	const auto serialized = options.serialize();
+	const auto hostnameOffset = serialized.lastIndexOf("server.example.com");
+	CHECK(hostnameOffset >= 0);
+	if (hostnameOffset < 0) {
+		return;
+	}
+	auto invalidCanonical = serialized;
+	invalidCanonical.replace(
+		hostnameOffset,
+		QByteArray("server.example.com").size(),
+		"Server.example.com");
+	auto restored = DcOptions(Environment::Production);
+	CHECK(!restored.constructFromSerialized(invalidCanonical));
+
+	auto olderVersion = serialized;
+	olderVersion[0] = char(0xFF);
+	olderVersion[1] = char(0xFF);
+	olderVersion[2] = char(0xFF);
+	olderVersion[3] = char(0xFA);
+	CHECK(!restored.constructFromSerialized(olderVersion));
+}
+
 TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
 	auto options = DcOptions(Environment::Production);
 	auto server = MakeCustomServer();
@@ -314,6 +686,55 @@ TEST_CASE(PublicMagicDnsTailnetBindingSurvivesSerialization) {
 	CHECK_EQ(got.dcId, server.dcId);
 	CHECK(got.key != nullptr);
 	CHECK(got.key->valid());
+}
+
+TEST_CASE(HistoricalLiteralBindingsRestoreUnchanged) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.ip = "100.124.236.66";
+	server.port = 2443;
+	server.serverSelection = "100.124.236.66:2443";
+	server.discoveryPolicy = ServerDiscoveryPolicy::LocalDirect;
+	server.discoveryOrigin = "local:100.124.236.66:2443";
+	CHECK(options.setCustomServer(server));
+
+	const auto serialized = options.serialize();
+	const auto historicalTail = int(sizeof(qint32) * 6
+		+ server.serverSelection.size()
+		+ server.discoveryOrigin.size());
+	const auto customBlockEnd = serialized.size() - historicalTail;
+	for (const auto &[version, tail] : {
+		std::pair{ 3, 0 },
+		std::pair{ 4, int(sizeof(qint32)) },
+		std::pair{
+			5,
+			int(sizeof(qint32) * 4)
+				+ int(server.serverSelection.size())
+				+ int(server.discoveryOrigin.size())},
+		std::pair{
+			6,
+			int(sizeof(qint32) * 5)
+				+ int(server.serverSelection.size())
+				+ int(server.discoveryOrigin.size())},
+	}) {
+		auto fixture = serialized.left(customBlockEnd + tail);
+		QDataStream stream(&fixture, QIODevice::ReadWrite);
+		stream.setVersion(QDataStream::Qt_5_1);
+		stream << qint32(-version);
+
+		auto restored = DcOptions(Environment::Production);
+		CHECK(restored.constructFromSerialized(fixture));
+		CHECK(restored.hasCustomServer());
+		const auto got = restored.customServer();
+		CHECK_EQ(got.dcId, server.dcId);
+		CHECK_EQ(got.ip, server.ip);
+		CHECK_EQ(got.port, server.port);
+		CHECK(got.hostname.empty());
+		CHECK(got.key != nullptr);
+		if (got.key) {
+			CHECK_EQ(qint64(got.key->fingerprint()), kProductionKeyFingerprint);
+		}
+	}
 }
 
 TEST_CASE(PinnedNon80EndpointRestoresAsDirectTcpOnly) {
@@ -385,6 +806,582 @@ TEST_CASE(PinnedEndpointUsesTcpThroughHttpProxy) {
 	}
 	CHECK(proxied.data[DcOptions::Variants::IPv4]
 		[DcOptions::Variants::Http].empty());
+}
+
+TEST_CASE(StartProxyCheckUsesVettedLiteralForAllTransportPaths) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "telegram-server.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://telegram-server.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	for (const auto proxyType : {
+		ProxyData::Type::None,
+		ProxyData::Type::Socks5,
+		ProxyData::Type::Http,
+	}) {
+		UnitHostResolver resolver;
+		resolver.add({
+			.addresses = {
+				QHostAddress(u"8.8.8.8"_q),
+				QHostAddress(u"127.0.0.1"_q),
+				QHostAddress(u"10.0.0.1"_q),
+				QHostAddress(u"100.124.236.66"_q),
+			},
+		});
+		ProxyData proxy;
+		proxy.type = proxyType;
+		proxy.host = u"127.0.0.1"_q;
+		proxy.port = 1080;
+		ProxyCheckObservation observation;
+		bool done = false;
+		bool failed = false;
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		const details::UnitConnectionFactory factory = [&](
+			not_null<Instance*>,
+			DcOptions::Variants::Protocol protocol,
+			QThread *thread,
+			const bytes::vector &secret,
+			const ProxyData &data) {
+			CHECK(protocol == DcOptions::Variants::Tcp);
+			return details::ConnectionPointer::New<ProxyCheckObserver>(
+				thread,
+				data,
+				&observation);
+		};
+		details::UnitConnectionFactoryInstance = &factory;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) { done = true; },
+			[&](details::AbstractConnection *) { failed = true; },
+			resolver.resolver());
+
+		CHECK(v4);
+		CHECK(!v6);
+		CHECK(done);
+		CHECK(!failed);
+		CHECK_EQ(
+			observation.addressPassedToChild,
+			u"100.124.236.66"_q);
+		CHECK(observation.addressPassedToChild
+			!= u"telegram-server.tailaa4918.ts.net"_q);
+		CHECK_EQ(observation.port, 2443);
+		CHECK(observation.proxyType == proxyType);
+		v4.reset();
+		details::UnitConnectionFactoryInstance = nullptr;
+	}
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(StartProxyCheckRejectsFailedHostnameResolution) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "telegram-server.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://telegram-server.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	for (const auto &response : {
+		UnitHostLookupResponse{
+			.error = QHostInfo::HostNotFound,
+		},
+		UnitHostLookupResponse{
+			.addresses = {
+				QHostAddress(u"8.8.8.8"_q),
+				QHostAddress(u"127.0.0.1"_q),
+				QHostAddress(u"10.0.0.1"_q),
+			},
+		},
+	}) {
+		UnitHostResolver resolver;
+		resolver.add(response);
+		ProxyData proxy;
+		proxy.type = ProxyData::Type::Socks5;
+		proxy.host = u"127.0.0.1"_q;
+		proxy.port = 1080;
+		ProxyCheckObservation observation;
+		int factoryCalls = 0;
+		bool done = false;
+		bool failed = false;
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		const details::UnitConnectionFactory factory = [&](
+			not_null<Instance*>,
+			DcOptions::Variants::Protocol,
+			QThread *thread,
+			const bytes::vector &,
+			const ProxyData &data) {
+			++factoryCalls;
+			return details::ConnectionPointer::New<ProxyCheckObserver>(
+				thread,
+				data,
+				&observation);
+		};
+		details::UnitConnectionFactoryInstance = &factory;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) { done = true; },
+			[&](details::AbstractConnection *) { failed = true; },
+			resolver.resolver());
+
+		CHECK(v4);
+		CHECK(!v6);
+		CHECK(!done);
+		CHECK(failed);
+		CHECK_EQ(factoryCalls, 0);
+		CHECK(!observation.connected);
+		v4.reset();
+		details::UnitConnectionFactoryInstance = nullptr;
+	}
+
+	UnitHostResolver timeoutResolver;
+	timeoutResolver.add({ .timeout = true });
+	ProxyData proxy;
+	proxy.type = ProxyData::Type::Http;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 8080;
+	ProxyCheckObservation observation;
+	int factoryCalls = 0;
+	bool done = false;
+	bool failed = false;
+	ProxyCheckConnection v4;
+	ProxyCheckConnection v6;
+	const details::UnitConnectionFactory factory = [&](
+		not_null<Instance*>,
+		DcOptions::Variants::Protocol,
+		QThread *thread,
+		const bytes::vector &,
+		const ProxyData &data) {
+		++factoryCalls;
+		return details::ConnectionPointer::New<ProxyCheckObserver>(
+			thread,
+			data,
+			&observation);
+	};
+	details::UnitConnectionFactoryInstance = &factory;
+	StartProxyCheck(
+		not_null<Instance*>(fakeInstance),
+		proxy,
+		false,
+		v4,
+		v6,
+		[&](details::AbstractConnection *, int) { done = true; },
+		[&](details::AbstractConnection *) { failed = true; },
+		timeoutResolver.resolver());
+	CHECK(v4);
+	CHECK(!done);
+	CHECK(!failed);
+	CHECK_EQ(factoryCalls, 0);
+	v4->timedOut();
+	CHECK(failed);
+	CHECK_EQ(factoryCalls, 0);
+	CHECK_EQ(timeoutResolver.aborts(), 1);
+	v4.reset();
+	details::UnitConnectionFactoryInstance = nullptr;
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(HostnameConnectionRetriesWithFreshResolution) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "telegram-server.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://telegram-server.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	UnitHostResolver resolver;
+	resolver.add({
+		.addresses = { QHostAddress(u"100.124.236.66"_q) },
+	});
+	resolver.add({
+		.addresses = { QHostAddress(u"100.124.236.67"_q) },
+	});
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.type = ProxyData::Type::Socks5;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QStringList dialled;
+	for (auto i = 0; i != 2; ++i) {
+		ProxyCheckObservation observation;
+		bool done = false;
+		bool failed = false;
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		const details::UnitConnectionFactory factory = [&](
+			not_null<Instance*>,
+			DcOptions::Variants::Protocol,
+			QThread *thread,
+			const bytes::vector &,
+			const ProxyData &data) {
+			return details::ConnectionPointer::New<ProxyCheckObserver>(
+				thread,
+				data,
+				&observation);
+		};
+		details::UnitConnectionFactoryInstance = &factory;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) { done = true; },
+			[&](details::AbstractConnection *) { failed = true; },
+			resolver.resolver());
+		CHECK(done);
+		CHECK(!failed);
+		dialled.push_back(observation.addressPassedToChild);
+		v4.reset();
+		details::UnitConnectionFactoryInstance = nullptr;
+	}
+	CHECK_EQ(resolver.lookups(), 2);
+	CHECK_EQ(dialled.value(0), u"100.124.236.66"_q);
+	CHECK_EQ(dialled.value(1), u"100.124.236.67"_q);
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "resolver-test.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://resolver-test.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	const auto answers = std::vector{
+		QHostAddress(u"100.124.236.66"_q),
+		QHostAddress(u"100.124.236.67"_q),
+	};
+	UnitHostResolver resolver;
+	for (const auto &answer : answers) {
+		resolver.add({ .addresses = { answer } });
+	}
+	SetDefaultHostnameResolver(resolver);
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.type = ProxyData::Type::Socks5;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QStringList dialled;
+	for (const auto &expected : answers) {
+		ProxyCheckObservation observation;
+		bool done = false;
+		bool failed = false;
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		const details::UnitConnectionFactory factory = [&](
+			not_null<Instance*>,
+			DcOptions::Variants::Protocol,
+			QThread *thread,
+			const bytes::vector &,
+			const ProxyData &data) {
+			return details::ConnectionPointer::New<ProxyCheckObserver>(
+				thread,
+				data,
+				&observation);
+		};
+		details::UnitConnectionFactoryInstance = &factory;
+		QEventLoop loop;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) {
+				done = true;
+				loop.quit();
+			},
+			[&](details::AbstractConnection *) {
+				failed = true;
+				loop.quit();
+			});
+		if (!done && !failed) {
+			QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+			loop.exec();
+		}
+		CHECK(done);
+		CHECK(!failed);
+		if (done) {
+			dialled.push_back(observation.addressPassedToChild);
+		}
+		CHECK_EQ(observation.addressPassedToChild, expected.toString());
+		v4.reset();
+		details::UnitConnectionFactoryInstance = nullptr;
+	}
+	CHECK_EQ(resolver.lookups(), int(answers.size()));
+	CHECK_EQ(dialled.value(0), answers[0].toString());
+	CHECK_EQ(dialled.value(1), answers[1].toString());
+	details::SetServerHostnameResolverTestLookup({});
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+#ifdef Q_OS_UNIX
+TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "system-resolver-fixture.test";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://system-resolver-fixture.test/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+	details::SetServerHostnameResolverTestLookup({});
+
+	const auto answers = std::vector{
+		QHostAddress(u"8.8.8.8"_q),
+		QHostAddress(u"8.8.4.4"_q),
+	};
+	const auto proxyTypes = std::vector{
+		ProxyData::Type::Socks5,
+		ProxyData::Type::Http,
+	};
+	const uint32_t systemAnswers[] = {
+		0x08080808,
+		0x08080404,
+		0x08080808,
+		0x08080404,
+	};
+	UnitSystemResolverSetAnswers(systemAnswers, std::size(systemAnswers));
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QStringList dialled;
+	for (const auto proxyType : proxyTypes) {
+		proxy.type = proxyType;
+		for (const auto &expected : answers) {
+			ProxyCheckObservation observation;
+			bool done = false;
+			bool failed = false;
+			ProxyCheckConnection v4;
+			ProxyCheckConnection v6;
+			const details::UnitConnectionFactory factory = [&](
+				not_null<Instance*>,
+				DcOptions::Variants::Protocol protocol,
+				QThread *thread,
+				const bytes::vector &,
+				const ProxyData &data) {
+				CHECK(protocol == DcOptions::Variants::Tcp);
+				return details::ConnectionPointer::New<ProxyCheckObserver>(
+					thread,
+					data,
+					&observation);
+			};
+			details::UnitConnectionFactoryInstance = &factory;
+			QEventLoop loop;
+			StartProxyCheck(
+				not_null<Instance*>(fakeInstance),
+				proxy,
+				false,
+				v4,
+				v6,
+				[&](details::AbstractConnection *, int) {
+					done = true;
+					loop.quit();
+				},
+				[&](details::AbstractConnection *) {
+					failed = true;
+					loop.quit();
+				});
+			if (!done && !failed) {
+				QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+				loop.exec();
+			}
+			CHECK(done);
+			CHECK(!failed);
+			CHECK_EQ(observation.addressPassedToChild, expected.toString());
+			CHECK(observation.addressPassedToChild
+				!= u"system-resolver-fixture.test"_q);
+			CHECK(observation.proxyType == proxyType);
+			dialled.push_back(observation.addressPassedToChild);
+			v4.reset();
+			details::UnitConnectionFactoryInstance = nullptr;
+		}
+	}
+	const auto expectedLookups = int(answers.size() * proxyTypes.size());
+	CHECK_EQ(UnitSystemResolverLookups(), expectedLookups);
+	CHECK_EQ(dialled.value(0), answers[0].toString());
+	CHECK_EQ(dialled.value(1), answers[1].toString());
+	CHECK_EQ(dialled.value(2), answers[0].toString());
+	CHECK_EQ(dialled.value(3), answers[1].toString());
+	UnitSystemResolverSetAnswers(nullptr, 0);
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(SystemResolverFixtureForwardsLocalhost) {
+	const auto resolved = QHostInfo::fromName(u"localhost"_q);
+	const auto addresses = resolved.addresses();
+	CHECK(resolved.error() == QHostInfo::NoError);
+	CHECK(std::any_of(
+		addresses.cbegin(),
+		addresses.cend(),
+		[](const QHostAddress &address) { return address.isLoopback(); }));
+}
+#endif // Q_OS_UNIX
+
+void RunDefaultResolverOwnerRemovalCase(
+		bool proxyCheck,
+		OwnerRemovalDnsResponse responseKind) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "owner-removal-test.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://owner-removal-test.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+	UnitHostResolver resolver;
+	switch (responseKind) {
+	case OwnerRemovalDnsResponse::NoErrorNoData:
+		resolver.add({});
+		break;
+	case OwnerRemovalDnsResponse::NxDomain:
+		resolver.add({ .error = QHostInfo::HostNotFound });
+		break;
+	case OwnerRemovalDnsResponse::RejectedAddress:
+		resolver.add({
+			.addresses = { QHostAddress(u"8.8.8.8"_q) },
+		});
+		break;
+	}
+	SetDefaultHostnameResolver(resolver);
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.type = ProxyData::Type::Socks5;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QEventLoop loop;
+	bool failed = false;
+	if (proxyCheck) {
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) {
+				loop.quit();
+			},
+			[&](details::AbstractConnection *) {
+				const auto owner = QPointer<details::AbstractConnection>(
+					v4.get());
+				CHECK(!owner.isNull());
+				failed = true;
+				ResetProxyCheckers(v4, v6);
+				CHECK(owner.isNull());
+				loop.quit();
+			});
+		QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+		loop.exec();
+		CHECK(!v4);
+		CHECK(!v6);
+	} else {
+		auto connection = details::CreateServerConnection(
+			not_null<Instance*>(fakeInstance),
+			DcOptions::Variants::Tcp,
+			QThread::currentThread(),
+			{},
+			proxy,
+			QString::fromStdString(server.hostname),
+			false);
+		QObject::connect(
+			connection.get(),
+			&details::AbstractConnection::error,
+			[&](int) {
+				const auto owner = QPointer<details::AbstractConnection>(
+					connection.get());
+				CHECK(!owner.isNull());
+				failed = true;
+				connection.reset();
+				CHECK(owner.isNull());
+				loop.quit();
+			});
+		connection->connectToServer(
+			{},
+			server.port,
+			{},
+			server.dcId,
+			false);
+		QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+		loop.exec();
+		CHECK(!connection);
+	}
+	CHECK(failed);
+	CHECK_EQ(resolver.lookups(), 1);
+
+	details::SetServerHostnameResolverTestLookup({});
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(DefaultResolverSurvivesProxyCheckOwnerRemoval) {
+	for (const auto responseKind : {
+		OwnerRemovalDnsResponse::NoErrorNoData,
+		OwnerRemovalDnsResponse::NxDomain,
+		OwnerRemovalDnsResponse::RejectedAddress,
+	}) {
+		RunDefaultResolverOwnerRemovalCase(true, responseKind);
+	}
+}
+
+TEST_CASE(DefaultResolverSurvivesSessionTestConnectionOwnerRemoval) {
+	for (const auto responseKind : {
+		OwnerRemovalDnsResponse::NoErrorNoData,
+		OwnerRemovalDnsResponse::NxDomain,
+		OwnerRemovalDnsResponse::RejectedAddress,
+	}) {
+		RunDefaultResolverOwnerRemovalCase(false, responseKind);
+	}
 }
 
 TEST_CASE(UnboundBuiltinDcRetainsHttpTransportCandidate) {

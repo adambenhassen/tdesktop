@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_dump_to_text.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/connection_abstract.h"
+#include "mtproto/connection_server_resolving.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_response.h"
 #include "mtproto/persistent_key_rejection.h"
@@ -195,23 +196,27 @@ void SessionPrivate::appendTestConnection(
 		DcOptions::Variants::Protocol protocol,
 		const QString &ip,
 		int port,
-		const bytes::vector &protocolSecret) {
+		const bytes::vector &protocolSecret,
+		bool ipv6) {
 	QWriteLocker lock(&_stateMutex);
 
-	const auto priority = (qthelp::is_ipv6(ip) ? (OptionPreferIPv6.value() ? 2 : 0) : 1)
+	const auto pin = _instance->dcOptions().customServer();
+	const auto priority = (ipv6 ? (OptionPreferIPv6.value() ? 2 : 0) : 1)
 		+ (protocol == DcOptions::Variants::Tcp ? 1 : 0)
 		+ (protocolSecret.empty() ? 0 : 1);
+	auto connection = CreateServerConnection(
+		_instance,
+		protocol,
+		thread(),
+		protocolSecret,
+		_options->proxy,
+		QString::fromStdString(pin.hostname),
+		ipv6);
 	_testConnections.push_back({
-		AbstractConnection::Create(
-			_instance,
-			protocol,
-			thread(),
-			protocolSecret,
-			_options->proxy),
+		std::move(connection),
 		priority
 	});
 	const auto weak = _testConnections.back().data.get();
-	const auto pin = _instance->dcOptions().customServer();
 	const auto context = ConnectionErrorInfo{
 		.generation = _instance->serverEnrollmentStopToken(),
 		.endpoint = ip.isEmpty() && pin.key
@@ -225,9 +230,14 @@ void SessionPrivate::appendTestConnection(
 		.proxied = (_options->proxy.type != ProxyData::Type::None),
 		.proxyEndpoint = _options->proxy.host,
 		.proxyPort = int(_options->proxy.port),
+		.pinnedHostname = QString::fromStdString(pin.hostname),
 	};
 	connect(weak, &AbstractConnection::error, [=](int errorCode) {
 		auto errorContext = context;
+		if (const auto endpoint = weak->endpoint(); !endpoint.isEmpty()) {
+			errorContext.endpoint = endpoint;
+			errorContext.dialledAddress = endpoint;
+		}
 		errorContext.presentedKeyId = weak->sentEncryptedWithKeyId();
 		onError(weak, errorCode, std::move(errorContext));
 	});
@@ -1138,7 +1148,8 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 						static_cast<Variants::Protocol>(protocol),
 						QString::fromStdString(endpoint.ip),
 						endpoint.port,
-						endpoint.secret);
+						endpoint.secret,
+						address == Variants::IPv6);
 				}
 			}
 		}
@@ -2686,7 +2697,10 @@ DcType SessionPrivate::tryAcquireKeyCreation() {
 					"stopping until the endpoint is corrected"));
 				_sessionData->queuePinnedServerFailure(
 					PinnedServerFailure::KeyMismatch,
-					_presentedServerKeyFingerprint);
+					_presentedServerKeyFingerprint,
+					QString::fromStdString(
+						_instance->dcOptions().customServer().hostname),
+					_connection ? _connection->endpoint() : QString());
 				stopUntilPinChange();
 				return;
 			}

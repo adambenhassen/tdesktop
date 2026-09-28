@@ -28,6 +28,7 @@ class RSAPublicKey;
 // not used and a failed config load must not fall back to production.
 struct CustomServer {
 	int dcId = 0;
+	std::string hostname;
 	std::string ip;
 	int port = 0;
 	bool ipv6 = false;
@@ -201,7 +202,9 @@ public:
 
 private:
 	// Callers must hold one of the lockers.
-	void applyCustomServerUnlocked(const CustomServer &server);
+	void applyCustomServerUnlocked(
+		const CustomServer &server,
+		bool allowRestoredPreviouslyAllowedLiteral = false);
 	[[nodiscard]] bool hasCustomServerUnlocked() const;
 	[[nodiscard]] bool isAuthorizedUnlocked(DcId dcId) const;
 	[[nodiscard]] bool isCustomServerPinnedUnlocked(DcId dcId) const;

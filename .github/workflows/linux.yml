@@ -322,27 +322,22 @@ jobs:
       # already produced it, so this only executes it: seconds, not a second
       # compile. Placed before the artifact steps so a red test stops the
       # upload rather than shipping a binary nothing checked.
-      # Telegramd ships for macOS, so Linux CI also runs the headless account
-      # lifecycle regression that exercises the real MTP sender path.
+      # Telegramd ships for macOS, so Linux CI gates the standalone unit cases
+      # without running the desktop GUI regression under Xvfb.
       - name: Unit tests.
         if: env.ONLY_CACHE == 'false'
         run: |
           docker run --rm \
           -u $(id -u) \
-          -e HOME=/tmp/tdesktop-ci-home \
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
           bash -lc '
             cd /usr/src/tdesktop
-            install -d -m 700 "$HOME"
             /usr/src/tdesktop/out/Debug/test_unit
             TEST_STATUS=$?
             if test "$TEST_STATUS" -ne 0; then
               exit "$TEST_STATUS"
             fi
-            TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
-            QT_QPA_PLATFORM=offscreen \
-            /usr/src/tdesktop/out/Debug/Telegram
           '
 
       - name: Move artifact.

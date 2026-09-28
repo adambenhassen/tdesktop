@@ -168,7 +168,9 @@ public:
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint = 0);
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	[[nodiscard]] auto pinnedServerFailureValue() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 
@@ -1471,25 +1473,32 @@ void Instance::Private::onStateChange(ShiftedDcId dcWithShift, int32 state) {
 void Instance::Private::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint) {
-	LOG(("MTP Error: pinned server failure on dc %1: %2"
-		).arg(shiftedDcId
-		).arg(failure == PinnedServerFailure::KeyMismatch
+		uint64 presentedFingerprint,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
+	const auto report = MakePinnedServerFailureReport(
+		shiftedDcId,
+		failure,
+		presentedFingerprint,
+		dcOptions().customServer(),
+		pinnedHostname,
+		dialledAddress);
+	LOG(("MTP Error: pinned server failure on dc %1: %2, hostname %3, "
+		"dialled %4"
+		).arg(report.shiftedDcId
+		).arg(report.failure == PinnedServerFailure::KeyMismatch
 			? "key mismatch"
-			: "dc id mismatch"));
+			: "dc id mismatch")
+		.arg(report.pinnedHostname.isEmpty()
+			? u"unknown"_q
+			: report.pinnedHostname)
+		.arg(report.dialledAddress.isEmpty()
+			? u"unknown"_q
+			: report.dialledAddress));
 	// Emits unconditionally: a repeated identical failure is a second
 	// occurrence and has to reach the UI again, which a compare-then-
 	// assign would silently swallow.
-	const auto customServer = dcOptions().customServer();
-	const auto pinnedFingerprint = customServer.key
-		? customServer.key->fingerprint()
-		: uint64(0);
-	_pinnedServerFailure.report({
-		shiftedDcId,
-		failure,
-		pinnedFingerprint,
-		presentedFingerprint,
-	});
+	_pinnedServerFailure.report(report);
 	if (failure == PinnedServerFailure::DcIdMismatch) {
 		// Gate reconnection exactly like the key mismatch: neither
 		// class may re-enter the requestConfig / restart cycle. A
@@ -2270,11 +2279,15 @@ void Instance::stopForServerEnrollment() {
 void Instance::onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint) {
+		uint64 presentedFingerprint,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
 	_private->onPinnedServerFailure(
 		shiftedDcId,
 		failure,
-		presentedFingerprint);
+		presentedFingerprint,
+		pinnedHostname,
+		dialledAddress);
 }
 
 rpl::producer<std::optional<PinnedServerFailureReport>>

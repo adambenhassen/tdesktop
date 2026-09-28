@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/details/mtproto_serialized_request.h"
+#include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
@@ -55,6 +56,8 @@ struct PinnedServerFailureReport {
 	// fingerprint advertised by the endpoint during the failed exchange.
 	uint64 pinnedFingerprint = 0;
 	uint64 presentedFingerprint = 0;
+	QString pinnedHostname;
+	QString dialledAddress;
 
 	friend inline bool operator==(
 			const PinnedServerFailureReport &a,
@@ -62,9 +65,31 @@ struct PinnedServerFailureReport {
 		return (a.shiftedDcId == b.shiftedDcId)
 			&& (a.failure == b.failure)
 			&& (a.pinnedFingerprint == b.pinnedFingerprint)
-			&& (a.presentedFingerprint == b.presentedFingerprint);
+			&& (a.presentedFingerprint == b.presentedFingerprint)
+			&& (a.pinnedHostname == b.pinnedHostname)
+			&& (a.dialledAddress == b.dialledAddress);
 	}
 };
+
+[[nodiscard]] inline PinnedServerFailureReport MakePinnedServerFailureReport(
+		ShiftedDcId shiftedDcId,
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint,
+		const CustomServer &customServer,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
+	const auto hostname = pinnedHostname.isEmpty()
+		? QString::fromStdString(customServer.hostname)
+		: pinnedHostname;
+	return {
+		shiftedDcId,
+		failure,
+		customServer.key ? customServer.key->fingerprint() : uint64(0),
+		presentedFingerprint,
+		hostname,
+		dialledAddress,
+	};
+}
 
 [[nodiscard]] inline bool ShouldShowPinnedServerIdentityChange(
 		const PinnedServerFailureReport &report,
@@ -313,7 +338,9 @@ public:
 	void onPinnedServerFailure(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
-		uint64 presentedFingerprint = 0);
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	[[nodiscard]] auto pinnedServerFailure() const
 		-> rpl::producer<std::optional<PinnedServerFailureReport>>;
 

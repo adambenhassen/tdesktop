@@ -9,26 +9,49 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_updates.h"
 #include "data/data_pts_waiter.h"
+#include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QThread>
 
+#include <utility>
+
 namespace {
 
 using namespace MTP;
+
+const char kPinnedServerKey[] = "\
+-----BEGIN RSA PUBLIC KEY-----\n\
+MIIBCgKCAQEA6LszBcC1LGzyr992NzE0ieY+BSaOW622Aa9Bd4ZHLl+TuFQ4lo4g\n\
+5nKaMBwK/BIb9xUfg0Q29/2mgIR6Zr9krM7HjuIcCzFvDtr+L0GQjae9H0pRB2OO\n\
+62cECs5HKhT5DZ98K33vmWiLowc621dQuwKWSQKjWf50XYFw42h21P2KXUGyp2y/\n\
++aEyZ+uVgLLQbRA1dEjSDZ2iGRy12Mk5gpYc397aYp438fsJoHIgJ2lgMv5h7WY9\n\
+t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
+5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
+-----END RSA PUBLIC KEY-----";
+
+[[nodiscard]] std::shared_ptr<details::RSAPublicKey> MakePinnedServerKey() {
+	return std::make_shared<details::RSAPublicKey>(bytes::make_span(
+		kPinnedServerKey,
+		sizeof(kPinnedServerKey) - 1));
+}
 
 [[nodiscard]] PinnedServerFailureReport Report(
 		ShiftedDcId shiftedDcId,
 		PinnedServerFailure failure,
 		uint64 pinnedFingerprint = 0,
-		uint64 presentedFingerprint = 0) {
+		uint64 presentedFingerprint = 0,
+		QString pinnedHostname = {},
+		QString dialledAddress = {}) {
 	return {
 		shiftedDcId,
 		failure,
 		pinnedFingerprint,
 		presentedFingerprint,
+		std::move(pinnedHostname),
+		std::move(dialledAddress),
 	};
 }
 
@@ -58,6 +81,46 @@ private:
 };
 
 } // namespace
+
+TEST_CASE(KeyMismatchReportPreservesPinAndEndpointIdentity) {
+	const auto key = MakePinnedServerKey();
+	const auto pinned = CustomServer{
+		.dcId = 2,
+		.hostname = "telegram-server.tailaa4918.ts.net",
+		.port = 2443,
+		.key = key,
+		.serverSelection = "telegram-server.tailaa4918.ts.net",
+		.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps,
+		.discoveryOrigin =
+			"https://telegram-server.tailaa4918.ts.net/"
+			".well-known/telegramd/client",
+	};
+	const auto before = pinned;
+	const auto report = MakePinnedServerFailureReport(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		456,
+		pinned,
+		u"telegram-server.tailaa4918.ts.net"_q,
+		u"100.124.236.66"_q);
+
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+	CHECK(channel.current().has_value());
+	if (channel.current()) {
+		CHECK_EQ(
+			channel.current()->pinnedFingerprint,
+			uint64(key->fingerprint()));
+		CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
+		CHECK_EQ(
+			channel.current()->pinnedHostname,
+			u"telegram-server.tailaa4918.ts.net"_q);
+		CHECK_EQ(
+			channel.current()->dialledAddress,
+			u"100.124.236.66"_q);
+	}
+	CHECK(SameCustomServerPin(pinned, before));
+}
 
 // The swallow finding: a repeated identical failure must emit again.
 // A compare-then-assign holder would drop the second emission, and a
@@ -96,6 +159,22 @@ TEST_CASE(PinnedServerFailureKeepsBothFingerprints) {
 	CHECK(channel.current().has_value());
 	CHECK_EQ(channel.current()->pinnedFingerprint, uint64(123));
 	CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
+}
+
+TEST_CASE(PinnedServerFailureKeepsEndpointIdentity) {
+	const auto report = Report(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		123,
+		456,
+		u"server.example.com"_q,
+		u"100.124.236.66"_q);
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+
+	CHECK(channel.current().has_value());
+	CHECK_EQ(channel.current()->pinnedHostname, u"server.example.com"_q);
+	CHECK_EQ(channel.current()->dialledAddress, u"100.124.236.66"_q);
 }
 
 TEST_CASE(AuthorizedKeyMismatchUsesTheIdentityChangeFlow) {
