@@ -6,9 +6,11 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/mtproto_response.h"
+#include "mtproto/mtp_instance.h"
 
 #include <QtCore/QRegularExpression>
 #include <QtCore/QDebug>
+#include <QtCore/QObject>
 
 namespace MTP {
 namespace {
@@ -75,6 +77,29 @@ Error Error::Local(
 		const QString &type,
 		const QString &description) {
 	return Error(MTPLocal(type, description));
+}
+
+bool RejectServerEnrollmentRequest(
+		bool networkAllowed,
+		mtpRequestId requestId,
+		ResponseHandler &callbacks,
+		not_null<QObject*> context) {
+	if (networkAllowed) {
+		return false;
+	}
+	if (callbacks.fail) {
+		QMetaObject::invokeMethod(context.get(), [
+			requestId,
+			fail = std::move(callbacks.fail)
+		]() mutable {
+			fail(
+				Error::Local(
+					u"SERVER_ENROLLMENT_PAUSED"_q,
+					u"Network access is paused until server enrollment completes."_q),
+				Response{ .requestId = requestId });
+		}, Qt::QueuedConnection);
+	}
+	return true;
 }
 
 QDebug operator<<(QDebug debug, const Error &error) {

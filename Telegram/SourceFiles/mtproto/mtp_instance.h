@@ -11,8 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
-#include <crl/crl_on_main.h>
-
 #include <atomic>
 #include <utility>
 
@@ -215,28 +213,11 @@ private:
 
 };
 
-[[nodiscard]] inline bool RejectServerEnrollmentRequest(
+[[nodiscard]] bool RejectServerEnrollmentRequest(
 		bool networkAllowed,
 		mtpRequestId requestId,
 		ResponseHandler &callbacks,
-		not_null<QObject*> context) {
-	if (networkAllowed) {
-		return false;
-	}
-	if (callbacks.fail) {
-		crl::on_main(context, [
-			requestId,
-			fail = std::move(callbacks.fail)
-		]() mutable {
-			fail(
-				Error::Local(
-					u"SERVER_ENROLLMENT_PAUSED"_q,
-					u"Network access is paused until server enrollment completes."_q),
-				Response{ .requestId = requestId });
-		});
-	}
-	return true;
-}
+		not_null<QObject*> context);
 
 template <typename Send>
 [[nodiscard]] bool AdmitServerEnrollmentRequest(

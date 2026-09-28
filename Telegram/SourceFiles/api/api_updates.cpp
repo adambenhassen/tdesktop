@@ -262,7 +262,7 @@ Updates::Updates(not_null<Main::Session*> session)
 	session->account().mtp().resumed(
 	) | rpl::on_next([=] {
 		recoverAfterEnrollment();
-	}, session->lifetime());
+	}, _lifetime);
 
 	requestState();
 
