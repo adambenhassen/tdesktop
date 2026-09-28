@@ -914,7 +914,7 @@ cmake -B build . \
 {%- if ASAN %}
 	-DFEATURE_sanitize_address=ON \
 {%- endif %}
-	-DQT_QPA_PLATFORMS="wayland;xcb" \
+	-DQT_QPA_PLATFORMS="wayland;xcb;offscreen" \
 	-DINPUT_libpng=qt \
 	-DINPUT_harfbuzz=qt \
 	-DINPUT_pcre=qt \
