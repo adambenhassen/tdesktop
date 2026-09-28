@@ -34,11 +34,9 @@ using HostnameLookupFunction = Fn<void(
 		bool ipv6,
 		QHostInfo &info)>;
 
-#ifdef TDESKTOP_UNIT_TESTS
-using SystemHostnameLookupFunction = ServerHostnameResolverTestSystemLookup;
-#else
-using SystemHostnameLookupFunction = HostnameLookupFunction;
-#endif
+using SystemHostnameLookupFunction = Fn<QHostInfo(
+		const QString &hostname,
+		bool ipv6)>;
 
 struct HostnameLookupState final {
 	std::atomic_bool aborted = false;
