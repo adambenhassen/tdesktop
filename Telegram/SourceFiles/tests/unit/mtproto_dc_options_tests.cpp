@@ -1172,11 +1172,6 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 		ProxyData::Type::Socks5,
 		ProxyData::Type::Http,
 	};
-	for (const auto proxyType : proxyTypes) {
-		for (const auto &answer : answers) {
-			resolver.add({ .addresses = { answer } });
-		}
-	}
 	std::atomic<int> systemLookups = 0;
 	std::atomic<int> successfulSystemLookups = 0;
 	details::SetServerHostnameResolverTestSystemLookup(
@@ -1199,6 +1194,9 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 	QStringList dialled;
 	for (const auto proxyType : proxyTypes) {
 		proxy.type = proxyType;
+		for (const auto &answer : answers) {
+			resolver.add({ .addresses = { answer } });
+		}
 		for (const auto &expected : answers) {
 			ProxyCheckObservation observation;
 			bool done = false;
