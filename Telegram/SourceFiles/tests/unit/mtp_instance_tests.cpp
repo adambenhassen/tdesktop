@@ -218,7 +218,7 @@ TEST_CASE(ContiguousUpdateAfterEnrollmentRecoveryAppliesOnce) {
 	waiter.init(7);
 	waiter.setRequesting(false);
 	const auto update = MTP_updateDeleteMessages(
-		MTP_vector<MTP_int>(),
+		MTP_vector<MTPint>(),
 		MTP_int(8),
 		MTP_int(1));
 	CHECK(waiter.updateAndApply(nullptr, 8, 1, update));
