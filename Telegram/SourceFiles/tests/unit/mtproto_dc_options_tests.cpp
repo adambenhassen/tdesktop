@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QPointer>
 #include <QtCore/QTimer>
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QUdpSocket>
@@ -192,6 +193,12 @@ struct UnitHostLookupResponse {
 	QList<QHostAddress> addresses;
 	QHostInfo::HostInfoError error = QHostInfo::NoError;
 	bool timeout = false;
+};
+
+enum class OwnerRemovalDnsResponse {
+	NoErrorNoData,
+	NxDomain,
+	RejectedAddress,
 };
 
 class UnitHostResolver final {
@@ -1208,7 +1215,7 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 
 void RunDefaultResolverOwnerRemovalCase(
 		bool proxyCheck,
-		bool dnsFailure) {
+		OwnerRemovalDnsResponse responseKind) {
 	auto options = DcOptions(Environment::Production);
 	auto server = MakeCustomServer();
 	server.hostname = "owner-removal-test.tailaa4918.ts.net";
@@ -1221,6 +1228,12 @@ void RunDefaultResolverOwnerRemovalCase(
 		".well-known/telegramd/client";
 	CHECK(options.setCustomServer(server));
 	details::UnitProxyCheckOptions = &options;
+	const auto dnsAnswer = (responseKind
+		== OwnerRemovalDnsResponse::RejectedAddress)
+		? QHostAddress(u"8.8.8.8"_q)
+		: QHostAddress();
+	const auto dnsFailure = (responseKind
+		== OwnerRemovalDnsResponse::NxDomain);
 
 	QUdpSocket dns;
 	if (!dns.bind(QHostAddress::LocalHost)) {
@@ -1242,7 +1255,7 @@ void RunDefaultResolverOwnerRemovalCase(
 				&senderPort);
 			++queries;
 			dns.writeDatagram(
-				MakeDnsResponse(query, {}, dnsFailure),
+				MakeDnsResponse(query, dnsAnswer, dnsFailure),
 				sender,
 				senderPort);
 		}
@@ -1271,8 +1284,12 @@ void RunDefaultResolverOwnerRemovalCase(
 				loop.quit();
 			},
 			[&](details::AbstractConnection *) {
+				const auto owner = QPointer<details::AbstractConnection>(
+					v4.get());
+				CHECK(!owner.isNull());
 				failed = true;
 				ResetProxyCheckers(v4, v6);
+				CHECK(owner.isNull());
 				loop.quit();
 			});
 		QTimer::singleShot(2000, &loop, &QEventLoop::quit);
@@ -1292,8 +1309,12 @@ void RunDefaultResolverOwnerRemovalCase(
 			connection.get(),
 			&details::AbstractConnection::error,
 			[&](int) {
+				const auto owner = QPointer<details::AbstractConnection>(
+					connection.get());
+				CHECK(!owner.isNull());
 				failed = true;
 				connection.reset();
+				CHECK(owner.isNull());
 				loop.quit();
 			});
 		connection->connectToServer(
@@ -1314,14 +1335,22 @@ void RunDefaultResolverOwnerRemovalCase(
 }
 
 TEST_CASE(DefaultResolverSurvivesProxyCheckOwnerRemoval) {
-	for (const auto dnsFailure : { false, true }) {
-		RunDefaultResolverOwnerRemovalCase(true, dnsFailure);
+	for (const auto responseKind : {
+		OwnerRemovalDnsResponse::NoErrorNoData,
+		OwnerRemovalDnsResponse::NxDomain,
+		OwnerRemovalDnsResponse::RejectedAddress,
+	}) {
+		RunDefaultResolverOwnerRemovalCase(true, responseKind);
 	}
 }
 
 TEST_CASE(DefaultResolverSurvivesSessionTestConnectionOwnerRemoval) {
-	for (const auto dnsFailure : { false, true }) {
-		RunDefaultResolverOwnerRemovalCase(false, dnsFailure);
+	for (const auto responseKind : {
+		OwnerRemovalDnsResponse::NoErrorNoData,
+		OwnerRemovalDnsResponse::NxDomain,
+		OwnerRemovalDnsResponse::RejectedAddress,
+	}) {
+		RunDefaultResolverOwnerRemovalCase(false, responseKind);
 	}
 }
 
