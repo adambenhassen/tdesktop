@@ -61,11 +61,10 @@ qint64 LookupServerHostname(
 		auto info = QHostInfo();
 		if (testLookup) {
 			testLookup(hostname, ipv6, info);
+		} else if (testSystemLookup) {
+			info = testSystemLookup(hostname, ipv6);
 		} else {
 			info = QHostInfo::fromName(hostname);
-			if (testSystemLookup) {
-				testSystemLookup(hostname, ipv6, info);
-			}
 		}
 		const auto lock = std::lock_guard(state->mutex);
 		state->info = std::move(info);

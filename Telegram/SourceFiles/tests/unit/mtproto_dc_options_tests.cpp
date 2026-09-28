@@ -1152,13 +1152,14 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 	auto options = DcOptions(Environment::Production);
 	auto server = MakeCustomServer();
-	server.hostname = "example.com";
+	server.hostname = "system-resolver-fixture.test";
 	server.ip.clear();
 	server.port = 2443;
 	server.serverSelection = server.hostname;
 	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
 	server.discoveryOrigin =
-		"https://example.com/.well-known/telegramd/client";
+		"https://system-resolver-fixture.test/"
+		".well-known/telegramd/client";
 	CHECK(options.setCustomServer(server));
 	details::UnitProxyCheckOptions = &options;
 	details::SetServerHostnameResolverTestLookup({});
@@ -1177,14 +1178,15 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 	details::SetServerHostnameResolverTestSystemLookup(
 		[&resolver, &systemLookups, &successfulSystemLookups](
 				const QString &hostname,
-				bool ipv6,
-				QHostInfo &info) {
+				bool ipv6) {
+			++systemLookups;
+			auto info = QHostInfo();
+			resolver.resolve(hostname, ipv6, info);
 			if (info.error() == QHostInfo::NoError
 				&& !info.addresses().isEmpty()) {
 				++successfulSystemLookups;
 			}
-			++systemLookups;
-			resolver.resolve(hostname, ipv6, info);
+			return info;
 		});
 
 	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
@@ -1238,7 +1240,8 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 			CHECK(done);
 			CHECK(!failed);
 			CHECK_EQ(observation.addressPassedToChild, expected.toString());
-			CHECK(observation.addressPassedToChild != u"example.com"_q);
+			CHECK(observation.addressPassedToChild
+				!= u"system-resolver-fixture.test"_q);
 			CHECK(observation.proxyType == proxyType);
 			dialled.push_back(observation.addressPassedToChild);
 			v4.reset();

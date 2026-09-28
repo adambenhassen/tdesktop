@@ -12,7 +12,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QList>
 
+#ifdef TDESKTOP_UNIT_TESTS
+#include <QtNetwork/QHostInfo>
+#else
 class QHostInfo;
+#endif
 
 namespace MTP::details {
 
@@ -32,10 +36,9 @@ using ServerHostnameResolverTestLookup = Fn<void(
 		QHostInfo &info)>;
 void SetServerHostnameResolverTestLookup(
 		ServerHostnameResolverTestLookup lookup);
-using ServerHostnameResolverTestSystemLookup = Fn<void(
+using ServerHostnameResolverTestSystemLookup = Fn<QHostInfo(
 		const QString &hostname,
-		bool ipv6,
-		QHostInfo &info)>;
+		bool ipv6)>;
 void SetServerHostnameResolverTestSystemLookup(
 		ServerHostnameResolverTestSystemLookup lookup);
 #endif
