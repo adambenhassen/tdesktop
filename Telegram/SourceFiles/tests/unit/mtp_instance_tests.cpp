@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "api/api_updates.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
 
@@ -177,4 +178,61 @@ TEST_CASE(RefusedFallbackSkipsHttpTimeSpecialConfigIo) {
 	}
 
 	CHECK_EQ(specialConfigIoAttempts, 0);
+}
+
+TEST_CASE(EnrollmentRecoveryUsesFreshAccountScopedRequests) {
+	using Type = Api::details::UpdateRequestState::Type;
+	auto accountA = Api::details::UpdateRequestState();
+	auto accountB = Api::details::UpdateRequestState();
+	auto sent = std::vector<mtpRequestId>();
+	auto gate = MTP::ServerEnrollmentGate(true);
+
+	accountA.started(Type::State, 41);
+	accountA.clearInactive([](mtpRequestId) { return false; });
+	CHECK(!accountA.pending());
+	CHECK(gate.resume().resumed);
+	CHECK(!gate.networkAllowed());
+	CHECK(!accountA.canStart(
+		gate.networkAllowed(),
+		[](mtpRequestId) { return false; }));
+	CHECK(sent.empty());
+
+	CHECK(gate.start());
+	if (accountA.canStart(
+			gate.networkAllowed(),
+			[](mtpRequestId) { return false; })) {
+		const auto fresh = mtpRequestId(42);
+		sent.push_back(fresh);
+		accountA.started(Type::State, fresh);
+	}
+	CHECK_EQ(int(sent.size()), 1);
+	CHECK_EQ(sent.front(), mtpRequestId(42));
+	CHECK_EQ(accountA.current(Type::State), mtpRequestId(42));
+
+	CHECK(gate.pause());
+	CHECK(!accountA.canStart(
+		gate.networkAllowed(),
+		[](mtpRequestId) { return false; }));
+	CHECK_EQ(int(sent.size()), 1);
+
+	accountA.finished(Type::State, 41);
+	CHECK_EQ(accountA.current(Type::State), mtpRequestId(42));
+
+	accountB.started(Type::State, 51);
+	CHECK(accountB.pending());
+	CHECK(accountA.pending());
+
+	accountA.finished(Type::State, 42);
+	CHECK(!accountA.pending());
+	CHECK(accountB.pending());
+}
+
+TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
+	const auto error = MTP::Error::Local(
+		"SERVER_ENROLLMENT_PAUSED",
+		"Network access is paused until server enrollment completes.");
+	CHECK_EQ(error.code(), MTP::Error::NoError);
+	CHECK(MTP::IsServerEnrollmentPausedError(error));
+	CHECK(!MTP::IsServerEnrollmentPausedError(
+		MTP::Error::Local("RESPONSE_PARSE_FAILED", "Empty response.")));
 }

@@ -249,10 +249,12 @@ Updates::Updates(not_null<Main::Session*> session)
 		mtpNewSessionCreated();
 	}, _lifetime);
 
-	api().request(MTPupdates_GetState(
-	)).done([=](const MTPupdates_State &result) {
-		stateDone(result);
-	}).send();
+	session->account().mtp().resumed(
+	) | rpl::on_next([=] {
+		recoverAfterEnrollment();
+	}, session->lifetime());
+
+	requestState();
 
 	using namespace rpl::mappers;
 	session->changes().peerUpdates(
@@ -275,6 +277,43 @@ Updates::Updates(not_null<Main::Session*> session)
 			}
 		}
 	}, _lifetime);
+}
+
+void Updates::clearStaleSyncRequests() {
+	_syncRequests.clearInactive([this](mtpRequestId requestId) {
+		return session().mtp().hasCallback(requestId);
+	});
+}
+
+void Updates::requestState() {
+	clearStaleSyncRequests();
+	if (_syncRequests.pending()) {
+		return;
+	}
+
+	_ptsWaiter.setRequesting(true);
+	const auto requestId = api().request(MTPupdates_GetState(
+	)).done([=](const MTPupdates_State &result, mtpRequestId id) {
+		stateRequestDone(id, result);
+	}).fail([=](const MTP::Error &error, mtpRequestId id) {
+		stateRequestFail(id, error);
+	}).send();
+	_syncRequests.started(details::UpdateRequestState::Type::State, requestId);
+}
+
+void Updates::recoverAfterEnrollment() {
+	if (!session().mtp().isServerEnrollmentNetworkAllowed()) {
+		return;
+	}
+	if (!_syncRequests.canStart(
+			session().mtp().isServerEnrollmentNetworkAllowed(),
+			[this](mtpRequestId requestId) {
+				return session().mtp().hasCallback(requestId);
+			})) {
+		return;
+	}
+	_ptsWaiter.setRequesting(false);
+	requestState();
 }
 
 Main::Session &Updates::session() const {
@@ -471,6 +510,39 @@ void Updates::channelDifferenceFail(
 	failDifferenceStartTimerFor(channel);
 }
 
+void Updates::stateRequestDone(
+		mtpRequestId requestId,
+		const MTPupdates_State &state) {
+	if (requestId != _syncRequests.current(
+			details::UpdateRequestState::Type::State)) {
+		return;
+	}
+	_syncRequests.finished(
+		details::UpdateRequestState::Type::State,
+		requestId);
+	stateDone(state);
+}
+
+void Updates::stateRequestFail(
+		mtpRequestId requestId,
+		const MTP::Error &error) {
+	if (requestId != _syncRequests.current(
+			details::UpdateRequestState::Type::State)) {
+		return;
+	}
+	_syncRequests.finished(
+		details::UpdateRequestState::Type::State,
+		requestId);
+	_ptsWaiter.setRequesting(false);
+	if (MTP::IsServerEnrollmentPausedError(error)) {
+		return;
+	}
+	LOG(("RPC Error in getState: %1 %2: %3").arg(
+		QString::number(error.code()),
+		error.type(),
+		error.description()));
+}
+
 void Updates::stateDone(const MTPupdates_State &state) {
 	const auto &d = state.c_updates_state();
 	setState(d.vpts().v, d.vdate().v, d.vqts().v, d.vseq().v);
@@ -481,6 +553,19 @@ void Updates::stateDone(const MTPupdates_State &state) {
 
 	session().api().requestDialogs();
 	updateOnline();
+}
+
+void Updates::differenceDone(
+		mtpRequestId requestId,
+		const MTPupdates_Difference &result) {
+	if (requestId != _syncRequests.current(
+			details::UpdateRequestState::Type::Difference)) {
+		return;
+	}
+	_syncRequests.finished(
+		details::UpdateRequestState::Type::Difference,
+		requestId);
+	differenceDone(result);
 }
 
 void Updates::differenceDone(const MTPupdates_Difference &result) {
@@ -621,7 +706,20 @@ void Updates::feedDifference(
 	feedUpdateVector(other, SkipUpdatePolicy::SkipMessageIds);
 }
 
-void Updates::differenceFail(const MTP::Error &error) {
+void Updates::differenceFail(
+		mtpRequestId requestId,
+		const MTP::Error &error) {
+	if (requestId != _syncRequests.current(
+			details::UpdateRequestState::Type::Difference)) {
+		return;
+	}
+	_syncRequests.finished(
+		details::UpdateRequestState::Type::Difference,
+		requestId);
+	if (MTP::IsServerEnrollmentPausedError(error)) {
+		_ptsWaiter.setRequesting(false);
+		return;
+	}
 	LOG(("RPC Error in getDifference: %1 %2: %3").arg(
 		QString::number(error.code()),
 		error.type(),
@@ -688,8 +786,9 @@ void Updates::getDifferenceAfterFail() {
 
 void Updates::getDifference() {
 	_getDifferenceTimeByPts = 0;
+	clearStaleSyncRequests();
 
-	if (requestingDifference()) {
+	if (requestingDifference() || _syncRequests.pending()) {
 		return;
 	}
 
@@ -701,7 +800,7 @@ void Updates::getDifference() {
 
 	_ptsWaiter.setRequesting(true);
 
-	api().request(MTPupdates_GetDifference(
+	const auto requestId = api().request(MTPupdates_GetDifference(
 		MTP_flags(0),
 		MTP_int(_ptsWaiter.current()),
 		MTPint(), // pts_limit
@@ -709,11 +808,14 @@ void Updates::getDifference() {
 		MTP_int(_updatesDate),
 		MTP_int(_updatesQts),
 		MTPint() // qts_limit
-	)).done([=](const MTPupdates_Difference &result) {
-		differenceDone(result);
-	}).fail([=](const MTP::Error &error) {
-		differenceFail(error);
+	)).done([=](const MTPupdates_Difference &result, mtpRequestId id) {
+		differenceDone(id, result);
+	}).fail([=](const MTP::Error &error, mtpRequestId id) {
+		differenceFail(id, error);
 	}).send();
+	_syncRequests.started(
+		details::UpdateRequestState::Type::Difference,
+		requestId);
 }
 
 void Updates::getChannelDifference(

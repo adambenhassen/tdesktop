@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_pts_waiter.h"
 #include "base/timer.h"
 
+#include <utility>
+
 class ApiWrap;
 class History;
 
@@ -26,6 +28,62 @@ struct EmojiInteractionsBunch;
 } // namespace ChatHelpers
 
 namespace Api {
+
+namespace details {
+
+class UpdateRequestState final {
+public:
+	enum class Type {
+		State,
+		Difference,
+	};
+
+	void started(Type type, mtpRequestId requestId) {
+		current(type) = requestId;
+	}
+
+	void finished(Type type, mtpRequestId requestId) {
+		if (current(type) == requestId) {
+			current(type) = 0;
+		}
+	}
+
+	template <typename IsActive>
+	void clearInactive(IsActive &&isActive) {
+		if (_state && !isActive(_state)) {
+			_state = 0;
+		}
+		if (_difference && !isActive(_difference)) {
+			_difference = 0;
+		}
+	}
+
+	template <typename IsActive>
+	[[nodiscard]] bool canStart(
+			bool networkAllowed,
+			IsActive &&isActive) {
+		clearInactive(std::forward<IsActive>(isActive));
+		return networkAllowed && !_state && !_difference;
+	}
+
+	[[nodiscard]] bool pending() const {
+		return _state || _difference;
+	}
+
+	[[nodiscard]] mtpRequestId current(Type type) const {
+		return (type == Type::State) ? _state : _difference;
+	}
+
+private:
+	mtpRequestId &current(Type type) {
+		return (type == Type::State) ? _state : _difference;
+	}
+
+	mtpRequestId _state = 0;
+	mtpRequestId _difference = 0;
+};
+
+} // namespace details
 
 class Updates final {
 public:
@@ -105,12 +163,26 @@ private:
 	void sendPing();
 	void getDifferenceByPts();
 	void getDifferenceAfterFail();
+	void requestState();
+	void recoverAfterEnrollment();
+	void clearStaleSyncRequests();
+	void stateRequestDone(
+		mtpRequestId requestId,
+		const MTPupdates_State &state);
+	void stateRequestFail(
+		mtpRequestId requestId,
+		const MTP::Error &error);
 
 	void getChannelDifference(
 		not_null<ChannelData*> channel,
 		ChannelDifferenceRequest from = ChannelDifferenceRequest::Unknown);
 	void differenceDone(const MTPupdates_Difference &result);
-	void differenceFail(const MTP::Error &error);
+	void differenceDone(
+		mtpRequestId requestId,
+		const MTPupdates_Difference &result);
+	void differenceFail(
+		mtpRequestId requestId,
+		const MTP::Error &error);
 	void feedDifference(
 		const MTPVector<MTPUser> &users,
 		const MTPVector<MTPChat> &chats,
@@ -212,6 +284,7 @@ private:
 		base::flat_map<PeerId, crl::time>> _pendingSpeakingCallParticipants;
 
 	mtpRequestId _onlineRequest = 0;
+	details::UpdateRequestState _syncRequests;
 	base::Timer _idleFinishTimer;
 	crl::time _lastSetOnline = 0;
 	bool _lastWasOnline = false;

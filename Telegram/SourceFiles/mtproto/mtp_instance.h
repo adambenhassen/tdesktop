@@ -31,6 +31,12 @@ using AuthKeyPtr = std::shared_ptr<AuthKey>;
 using AuthKeysList = std::vector<AuthKeyPtr>;
 enum class Environment : uchar;
 
+[[nodiscard]] inline bool IsServerEnrollmentPausedError(
+		const Error &error) {
+	return error.code() == Error::NoError
+		&& error.type() == u"CLIENT_SERVER_ENROLLMENT_PAUSED"_q;
+}
+
 // A pinned endpoint failure together with the session that reported
 // it. The report is retired only by a successful connection of that
 // same session: any other session of the DC reaching ConnectedState
@@ -262,6 +268,7 @@ public:
 	// Start a paused instance after its endpoint and RSA key have been
 	// persisted. Calling this on an already running instance is a no-op.
 	void resume();
+	[[nodiscard]] rpl::producer<> resumed() const;
 	// Thread-safe.
 	[[nodiscard]] bool isServerEnrollmentNetworkAllowed() const;
 	[[nodiscard]] uint64 serverEnrollmentStopToken() const;

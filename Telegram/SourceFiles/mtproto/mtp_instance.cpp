@@ -28,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/network_reachability.h"
 
+#include <crl/crl_on_main.h>
+
 #include <atomic>
 
 namespace MTP {
@@ -82,6 +84,7 @@ public:
 	[[nodiscard]] rpl::producer<DcId> mainDcIdValue() const;
 
 	[[nodiscard]] rpl::producer<> writeKeysRequests() const;
+	[[nodiscard]] rpl::producer<> resumed() const;
 
 	void dcPersistentKeyChanged(DcId dcId, const AuthKeyPtr &persistentKey);
 	void dcTemporaryKeyChanged(DcId dcId);
@@ -283,6 +286,7 @@ private:
 
 	rpl::event_stream<> _writeKeysRequests;
 	rpl::event_stream<> _allKeysDestroyed;
+	rpl::event_stream<> _resumed;
 
 	// holds dcWithShift for request to this dc or -dc for request to main dc
 	std::map<mtpRequestId, ShiftedDcId> _requestsByDc;
@@ -431,12 +435,15 @@ void Instance::Private::resume() {
 	}
 	if (!result.wasStarted) {
 		start();
-		return;
+	} else {
+		for (const auto &[shiftedDcId, session] : _sessions) {
+			session->resumeAfterServerEnrollment();
+		}
+		requestConfig();
 	}
-	for (const auto &[shiftedDcId, session] : _sessions) {
-		session->resumeAfterServerEnrollment();
+	if (networkAllowed()) {
+		_resumed.fire({});
 	}
-	requestConfig();
 }
 
 void Instance::Private::stopForServerEnrollment() {
@@ -1052,6 +1059,10 @@ rpl::producer<> Instance::Private::writeKeysRequests() const {
 	return _writeKeysRequests.events();
 }
 
+rpl::producer<> Instance::Private::resumed() const {
+	return _resumed.events();
+}
+
 Config &Instance::Private::config() const {
 	return *_config;
 }
@@ -1221,6 +1232,18 @@ void Instance::Private::sendRequest(
 		mtpRequestId afterRequestId) {
 	if (!networkAllowed()) {
 		LOG(("MTP Error: refused a request while server enrollment is paused."));
+		if (callbacks.fail) {
+			crl::on_main(_instance, [
+				requestId,
+				fail = std::move(callbacks.fail)
+			]() mutable {
+				fail(
+					Error::Local(
+						"SERVER_ENROLLMENT_PAUSED",
+						"Network access is paused until server enrollment completes."),
+					Response{ .requestId = requestId });
+			});
+		}
 		return;
 	}
 	const auto session = getSession(shiftedDcId);
@@ -2209,6 +2232,10 @@ void Instance::restart() {
 
 void Instance::resume() {
 	_private->resume();
+}
+
+rpl::producer<> Instance::resumed() const {
+	return _private->resumed();
 }
 
 bool Instance::isServerEnrollmentNetworkAllowed() const {
