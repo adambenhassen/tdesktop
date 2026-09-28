@@ -57,8 +57,8 @@ qint64 LookupServerHostname(
 			} else {
 				info.setError(QHostInfo::UnknownError);
 			}
-			callback(info);
 			lookup->deleteLater();
+			callback(info);
 		});
 	const auto id = static_cast<qint64>(
 		reinterpret_cast<quintptr>(lookup));

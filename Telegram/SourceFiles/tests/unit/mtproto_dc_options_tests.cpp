@@ -243,7 +243,8 @@ private:
 
 [[nodiscard]] QByteArray MakeDnsResponse(
 		const QByteArray &query,
-		const QHostAddress &address) {
+		const QHostAddress &address,
+		bool notFound = false) {
 	if (query.size() < 12) {
 		return {};
 	}
@@ -260,7 +261,9 @@ private:
 		query.at(questionEnd + 1))) << 8)
 		| static_cast<quint16>(static_cast<uchar>(
 			query.at(questionEnd + 2)));
-	const auto answer = (type == 1) ? 1 : 0;
+	const auto answer = (!notFound && !address.isNull() && (type == 1))
+		? 1
+		: 0;
 	auto response = QByteArray();
 	response.append(query.constData(), 2);
 	const auto append16 = [&](quint16 value) {
@@ -271,7 +274,7 @@ private:
 		append16(quint16(value >> 16));
 		append16(quint16(value & 0xffff));
 	};
-	append16(0x8180);
+	append16(notFound ? 0x8183 : 0x8180);
 	append16(1);
 	append16(answer);
 	append16(0);
@@ -1111,6 +1114,7 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 	QUdpSocket dns;
 	if (!dns.bind(QHostAddress::LocalHost)) {
 		CHECK(false);
+		details::SetServerHostnameResolverTestNameserver({}, 0);
 		details::UnitProxyCheckOptions = nullptr;
 		return;
 	}
@@ -1200,6 +1204,125 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 	CHECK_EQ(dialled.value(1), answers[1].toString());
 	details::SetServerHostnameResolverTestNameserver({}, 0);
 	details::UnitProxyCheckOptions = nullptr;
+}
+
+void RunDefaultResolverOwnerRemovalCase(
+		bool proxyCheck,
+		bool dnsFailure) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "owner-removal-test.tailaa4918.ts.net";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://owner-removal-test.tailaa4918.ts.net/"
+		".well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+
+	QUdpSocket dns;
+	if (!dns.bind(QHostAddress::LocalHost)) {
+		CHECK(false);
+		details::UnitProxyCheckOptions = nullptr;
+		return;
+	}
+	auto queries = 0;
+	QObject::connect(&dns, &QUdpSocket::readyRead, &dns, [&] {
+		while (dns.hasPendingDatagrams()) {
+			QByteArray query;
+			query.resize(int(dns.pendingDatagramSize()));
+			QHostAddress sender;
+			quint16 senderPort = 0;
+			dns.readDatagram(
+				query.data(),
+				query.size(),
+				&sender,
+				&senderPort);
+			++queries;
+			dns.writeDatagram(
+				MakeDnsResponse(query, {}, dnsFailure),
+				sender,
+				senderPort);
+		}
+	});
+	details::SetServerHostnameResolverTestNameserver(
+		dns.localAddress(),
+		dns.localPort());
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.type = ProxyData::Type::Socks5;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QEventLoop loop;
+	bool failed = false;
+	if (proxyCheck) {
+		ProxyCheckConnection v4;
+		ProxyCheckConnection v6;
+		StartProxyCheck(
+			not_null<Instance*>(fakeInstance),
+			proxy,
+			false,
+			v4,
+			v6,
+			[&](details::AbstractConnection *, int) {
+				loop.quit();
+			},
+			[&](details::AbstractConnection *) {
+				failed = true;
+				ResetProxyCheckers(v4, v6);
+				loop.quit();
+			});
+		QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+		loop.exec();
+		CHECK(!v4);
+		CHECK(!v6);
+	} else {
+		auto connection = details::CreateServerConnection(
+			not_null<Instance*>(fakeInstance),
+			DcOptions::Variants::Tcp,
+			QThread::currentThread(),
+			{},
+			proxy,
+			QString::fromStdString(server.hostname),
+			false);
+		QObject::connect(
+			connection.get(),
+			&details::AbstractConnection::error,
+			[&](int) {
+				failed = true;
+				connection.reset();
+				loop.quit();
+			});
+		connection->connectToServer(
+			{},
+			server.port,
+			{},
+			server.dcId,
+			false);
+		QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+		loop.exec();
+		CHECK(!connection);
+	}
+	CHECK(failed);
+	CHECK(queries > 0);
+
+	details::SetServerHostnameResolverTestNameserver({}, 0);
+	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(DefaultResolverSurvivesProxyCheckOwnerRemoval) {
+	for (const auto dnsFailure : { false, true }) {
+		RunDefaultResolverOwnerRemovalCase(true, dnsFailure);
+	}
+}
+
+TEST_CASE(DefaultResolverSurvivesSessionTestConnectionOwnerRemoval) {
+	for (const auto dnsFailure : { false, true }) {
+		RunDefaultResolverOwnerRemovalCase(false, dnsFailure);
+	}
 }
 
 TEST_CASE(UnboundBuiltinDcRetainsHttpTransportCandidate) {
