@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_custom_server_input.h"
 #include "mtproto/mtproto_response.h"
 
+#include <crl/crl_on_main.h>
+
 #include <atomic>
 #include <utility>
 
@@ -153,6 +155,32 @@ public:
 		return { .resumed = true, .wasStarted = wasStarted };
 	}
 
+	template <typename Start, typename ResumeStarted>
+	void resumeIf(
+			bool usablePin,
+			Start &&start,
+			ResumeStarted &&resumeStarted) {
+		if (!usablePin) {
+			return;
+		}
+		const auto result = resume();
+		if (!result.resumed) {
+			return;
+		}
+		if (result.wasStarted) {
+			resumeStarted();
+		} else {
+			start();
+		}
+		if (networkAllowed()) {
+			_resumed.fire({});
+		}
+	}
+
+	[[nodiscard]] rpl::producer<> resumed() const {
+		return _resumed.events();
+	}
+
 	[[nodiscard]] bool pause() {
 		if (!_started) {
 			return false;
@@ -183,6 +211,7 @@ private:
 	std::atomic_bool _started = false;
 	std::atomic_bool _paused = false;
 	std::atomic<uint64> _stopGeneration = 0;
+	rpl::event_stream<> _resumed;
 
 };
 
@@ -190,12 +219,12 @@ private:
 		bool networkAllowed,
 		mtpRequestId requestId,
 		ResponseHandler &callbacks,
-		Fn<void(Fn<void()>)> schedule) {
+		not_null<QObject*> context) {
 	if (networkAllowed) {
 		return false;
 	}
 	if (callbacks.fail) {
-		schedule([
+		crl::on_main(context, [
 			requestId,
 			fail = std::move(callbacks.fail)
 		]() mutable {
@@ -206,6 +235,25 @@ private:
 				Response{ .requestId = requestId });
 		});
 	}
+	return true;
+}
+
+template <typename Send>
+[[nodiscard]] bool AdmitServerEnrollmentRequest(
+		bool networkAllowed,
+		mtpRequestId requestId,
+		details::SerializedRequest &&request,
+		ResponseHandler &&callbacks,
+		not_null<QObject*> context,
+		Send &&send) {
+	if (RejectServerEnrollmentRequest(
+			networkAllowed,
+			requestId,
+			callbacks,
+			context)) {
+		return false;
+	}
+	send(requestId, std::move(request), std::move(callbacks));
 	return true;
 }
 

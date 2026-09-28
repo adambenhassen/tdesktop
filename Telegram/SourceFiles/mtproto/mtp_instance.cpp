@@ -143,6 +143,14 @@ public:
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId);
+	void sendAcceptedRequest(
+		mtpRequestId requestId,
+		SerializedRequest &&request,
+		ResponseHandler &&callbacks,
+		ShiftedDcId shiftedDcId,
+		crl::time msCanWait,
+		bool needsLayer,
+		mtpRequestId afterRequestId);
 	void sendAnything(ShiftedDcId shiftedDcId, crl::time msCanWait);
 	void registerRequest(mtpRequestId requestId, ShiftedDcId shiftedDcId);
 	void unregisterRequest(mtpRequestId requestId);
@@ -286,7 +294,6 @@ private:
 
 	rpl::event_stream<> _writeKeysRequests;
 	rpl::event_stream<> _allKeysDestroyed;
-	rpl::event_stream<> _resumed;
 
 	// holds dcWithShift for request to this dc or -dc for request to main dc
 	std::map<mtpRequestId, ShiftedDcId> _requestsByDc;
@@ -424,24 +431,15 @@ void Instance::Private::start() {
 }
 
 void Instance::Private::resume() {
-	if (!CanResumeServerEnrollment(dcOptions())) {
-		return;
-	}
-	const auto result = _serverEnrollmentGate.resume();
-	if (!result.resumed) {
-		return;
-	}
-	if (!result.wasStarted) {
-		start();
-	} else {
-		for (const auto &[shiftedDcId, session] : _sessions) {
-			session->resumeAfterServerEnrollment();
-		}
-		requestConfig();
-	}
-	if (networkAllowed()) {
-		_resumed.fire({});
-	}
+	_serverEnrollmentGate.resumeIf(
+		CanResumeServerEnrollment(dcOptions()),
+		[this] { start(); },
+		[this] {
+			for (const auto &[shiftedDcId, session] : _sessions) {
+				session->resumeAfterServerEnrollment();
+			}
+			requestConfig();
+		});
 }
 
 void Instance::Private::stopForServerEnrollment() {
@@ -1058,7 +1056,7 @@ rpl::producer<> Instance::Private::writeKeysRequests() const {
 }
 
 rpl::producer<> Instance::Private::resumed() const {
-	return _resumed.events();
+	return _serverEnrollmentGate.resumed();
 }
 
 Config &Instance::Private::config() const {
@@ -1228,16 +1226,37 @@ void Instance::Private::sendRequest(
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId) {
-	if (RejectServerEnrollmentRequest(
+	if (!AdmitServerEnrollmentRequest(
 			networkAllowed(),
-		requestId,
-		callbacks,
-		[instance = _instance](Fn<void()> callback) {
-			crl::on_main(instance, std::move(callback));
-		})) {
+			requestId,
+			std::move(request),
+			std::move(callbacks),
+			_instance,
+			[this, shiftedDcId, msCanWait, needsLayer, afterRequestId](
+					mtpRequestId id,
+					SerializedRequest &&accepted,
+					ResponseHandler &&handlers) {
+				sendAcceptedRequest(
+					id,
+					std::move(accepted),
+					std::move(handlers),
+					shiftedDcId,
+					msCanWait,
+					needsLayer,
+					afterRequestId);
+			})) {
 		LOG(("MTP Error: refused a request while server enrollment is paused."));
-		return;
 	}
+}
+
+void Instance::Private::sendAcceptedRequest(
+		mtpRequestId requestId,
+		SerializedRequest &&request,
+		ResponseHandler &&callbacks,
+		ShiftedDcId shiftedDcId,
+		crl::time msCanWait,
+		bool needsLayer,
+		mtpRequestId afterRequestId) {
 	const auto session = getSession(shiftedDcId);
 
 	request->requestId = requestId;

@@ -55,6 +55,19 @@ public:
 		return true;
 	}
 
+	template <typename Apply, typename RequestDifference>
+	[[nodiscard]] bool finishState(
+			mtpRequestId requestId,
+			Apply &&apply,
+			RequestDifference &&requestDifference) {
+		return finish(Type::State, requestId, [&] {
+			apply();
+			if (std::exchange(_recovering, false)) {
+				requestDifference();
+			}
+		});
+	}
+
 	template <typename IsActive>
 	void clearInactive(IsActive &&isActive) {
 		if (_state && !isActive(_state)) {
@@ -73,6 +86,20 @@ public:
 		return networkAllowed && !_state && !_difference;
 	}
 
+	template <typename IsActive, typename Start>
+	void resumeIf(
+			bool networkAllowed,
+			IsActive &&isActive,
+			Start &&start) {
+		if (!canStart(
+				networkAllowed,
+				std::forward<IsActive>(isActive))) {
+			return;
+		}
+		_recovering = true;
+		start();
+	}
+
 	[[nodiscard]] bool pending() const {
 		return _state || _difference;
 	}
@@ -84,6 +111,7 @@ private:
 
 	mtpRequestId _state = 0;
 	mtpRequestId _difference = 0;
+	bool _recovering = false;
 };
 
 } // namespace details

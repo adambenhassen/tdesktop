@@ -8,8 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "api/api_updates.h"
+#include "data/data_pts_waiter.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
+
+#include <QtCore/QCoreApplication>
+#include <QtCore/QThread>
 
 namespace {
 
@@ -180,126 +184,18 @@ TEST_CASE(RefusedFallbackSkipsHttpTimeSpecialConfigIo) {
 	CHECK_EQ(specialConfigIoAttempts, 0);
 }
 
-TEST_CASE(EnrollmentRecoveryUsesFreshAccountScopedRequests) {
+TEST_CASE(StaleStateReplyCannotApplyAfterFreshRequestStarts) {
 	using Type = Api::details::UpdateRequestState::Type;
-	auto accountA = Api::details::UpdateRequestState();
-	auto accountB = Api::details::UpdateRequestState();
-	auto sent = std::vector<mtpRequestId>();
-	auto stored = std::vector<mtpRequestId>();
+	auto requests = Api::details::UpdateRequestState();
 	auto applied = 0;
-	auto differenceApplied = 0;
-	auto failures = 0;
-	auto gate = MTP::ServerEnrollmentGate(true);
-	auto initialFailure = MTP::ResponseHandler{
-		nullptr,
-		[&](const MTP::Error &error, const MTP::Response &response) {
-			++failures;
-			CHECK(MTP::IsServerEnrollmentPausedError(error));
-			CHECK_EQ(response.requestId, mtpRequestId(41));
-			CHECK(accountA.finish(
-				Type::State,
-				response.requestId,
-				[] {}));
-			return true;
-		}
-	};
-	auto queuedFailure = Fn<void()>();
-
-	accountA.started(Type::State, 41);
-	CHECK(accountA.pending());
-	const auto refused = MTP::RejectServerEnrollmentRequest(
-		gate.networkAllowed(),
-		mtpRequestId(41),
-		initialFailure,
-		[&](Fn<void()> callback) {
-			queuedFailure = std::move(callback);
-		});
-	CHECK(refused);
-	if (!refused) {
-		stored.push_back(mtpRequestId(41));
-	}
-	CHECK(queuedFailure);
-	CHECK_EQ(int(stored.size()), 0);
-	CHECK_EQ(failures, 0);
-	queuedFailure();
-	queuedFailure = nullptr;
-	CHECK_EQ(failures, 1);
-	CHECK(!accountA.pending());
-	CHECK(gate.resume().resumed);
-	CHECK(!gate.networkAllowed());
-	CHECK(!accountA.canStart(
-		gate.networkAllowed(),
-		[](mtpRequestId) { return false; }));
-	CHECK(sent.empty());
-
-	CHECK(gate.start());
-	auto allowedCallbacks = MTP::ResponseHandler{
-		nullptr,
-		[](const MTP::Error &, const MTP::Response &) {
-			return true;
-		}
-	};
-	auto scheduledAllowedFailure = false;
-	CHECK(!MTP::RejectServerEnrollmentRequest(
-		gate.networkAllowed(),
-		mtpRequestId(44),
-		allowedCallbacks,
-		[&](Fn<void()>) {
-			scheduledAllowedFailure = true;
-		}));
-	CHECK(allowedCallbacks.fail);
-	CHECK(!scheduledAllowedFailure);
-	auto noCallbacks = MTP::ResponseHandler();
-	if (accountA.canStart(
-			gate.networkAllowed(),
-			[](mtpRequestId) { return false; })) {
-		const auto fresh = mtpRequestId(42);
-		if (!MTP::RejectServerEnrollmentRequest(
-				gate.networkAllowed(),
-				fresh,
-				noCallbacks,
-				[](Fn<void()>) {
-				})) {
-			sent.push_back(fresh);
-			accountA.started(Type::State, fresh);
-		}
-	}
-	CHECK_EQ(int(sent.size()), 1);
-	CHECK_EQ(sent.front(), mtpRequestId(42));
-
-	CHECK(gate.pause());
-	CHECK(MTP::RejectServerEnrollmentRequest(
-		gate.networkAllowed(),
-		mtpRequestId(43),
-		noCallbacks,
-		[](Fn<void()>) {
-		}));
-	CHECK(!accountA.canStart(gate.networkAllowed(), [](mtpRequestId) {
-		return false;
-	}));
-	CHECK_EQ(int(sent.size()), 1);
-
-	CHECK(!accountA.finish(Type::State, 41, [&] { ++applied; }));
-	CHECK(accountA.pending());
-
-	accountB.started(Type::Difference, 51);
-	CHECK(accountB.pending());
-	CHECK(accountA.pending());
-
-	CHECK(accountA.finish(Type::State, 42, [&] { ++applied; }));
-	CHECK(!accountA.finish(Type::State, 42, [&] { ++applied; }));
+	requests.started(Type::State, 41);
+	requests.clearInactive([](mtpRequestId) { return false; });
+	requests.started(Type::State, 42);
+	CHECK(!requests.finish(Type::State, 41, [&] { ++applied; }));
+	CHECK(requests.pending());
+	CHECK(requests.finish(Type::State, 42, [&] { ++applied; }));
 	CHECK_EQ(applied, 1);
-	CHECK(!accountA.pending());
-	CHECK(accountB.finish(
-		Type::Difference,
-		51,
-		[&] { ++differenceApplied; }));
-	CHECK(!accountB.finish(
-		Type::Difference,
-		51,
-		[&] { ++differenceApplied; }));
-	CHECK_EQ(differenceApplied, 1);
-	CHECK(!accountB.pending());
+	CHECK(!requests.pending());
 }
 
 TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
@@ -312,7 +208,50 @@ TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
 		MTP::Error::Local("RESPONSE_PARSE_FAILED", "Empty response.")));
 }
 
-TEST_CASE(EnrollmentResumeRequiresAUsablePin) {
+TEST_CASE(ContiguousUpdateAfterEnrollmentRecoveryAppliesOnce) {
+	auto applied = 0;
+	auto waiter = PtsWaiter({
+		.startTimer = [](ChannelData *, crl::time) {},
+		.applyUpdate = [&](const MTPUpdate &) { ++applied; },
+		.applyUpdates = [](const MTPUpdates &) {},
+	});
+	waiter.init(7);
+	waiter.setRequesting(false);
+	const auto update = MTP_updateDeleteMessages(
+		MTP_vector<MTP_int>(),
+		MTP_int(8),
+		MTP_int(1));
+	CHECK(waiter.updateAndApply(nullptr, 8, 1, update));
+	CHECK(!waiter.updateAndApply(nullptr, 8, 1, update));
+	CHECK_EQ(applied, 1);
+	CHECK_EQ(waiter.current(), 8);
+}
+
+TEST_CASE(EnrollmentResumeEventsAreInstanceScopedAndLifetimeBound) {
+	auto first = MTP::ServerEnrollmentGate(true);
+	auto second = MTP::ServerEnrollmentGate(true);
+	auto firstEvents = 0;
+	auto secondEvents = 0;
+	auto firstLifetime = rpl::lifetime();
+	auto secondLifetime = rpl::lifetime();
+	first.resumed() | rpl::on_next([&] { ++firstEvents; }, firstLifetime);
+	second.resumed() | rpl::on_next([&] { ++secondEvents; }, secondLifetime);
+	first.resumeIf(true, [&] { CHECK(first.start()); }, [] {});
+	CHECK_EQ(firstEvents, 1);
+	CHECK_EQ(secondEvents, 0);
+	firstLifetime.destroy();
+	CHECK(first.pause());
+	first.resumeIf(true, [] {}, [] {});
+	CHECK_EQ(firstEvents, 1);
+	second.resumeIf(true, [&] { CHECK(second.start()); }, [] {});
+	CHECK_EQ(secondEvents, 1);
+}
+
+TEST_CASE(EnrollmentAdmissionResumesWithFreshSerializedState) {
+	using Request = MTP::details::SerializedRequest;
+	using Type = Api::details::UpdateRequestState::Type;
+	auto gate = MTP::ServerEnrollmentGate(true);
+	auto requests = Api::details::UpdateRequestState();
 	auto blocked = MTP::DcOptions(MTP::Environment::Production);
 	blocked.constructBlocked();
 	auto unenrolled = MTP::DcOptions(MTP::Environment::Production);
@@ -320,28 +259,149 @@ TEST_CASE(EnrollmentResumeRequiresAUsablePin) {
 	auto enrolled = MTP::DcOptions(MTP::Environment::Production);
 	enrolled.constructFromBuiltIn();
 
-	auto gate = MTP::ServerEnrollmentGate(true);
-	auto resumedEvents = 0;
-	auto tryResume = [&](const MTP::DcOptions &options) {
-		if (!MTP::CanResumeServerEnrollment(options)) {
-			return;
-		}
-		const auto result = gate.resume();
-		if (!result.resumed) {
-			return;
-		}
-		if (!result.wasStarted) {
-			gate.start();
-		}
-		if (gate.networkAllowed()) {
-			++resumedEvents;
-		}
+	auto sent = std::vector<std::pair<mtpRequestId, Request>>();
+	auto failures = 0;
+	auto pending = true;
+	requests.started(Type::State, 41);
+	auto callbacks = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &error, const MTP::Response &response) {
+			CHECK(QThread::currentThread()
+				== QCoreApplication::instance()->thread());
+			CHECK(MTP::IsServerEnrollmentPausedError(error));
+			CHECK_EQ(response.requestId, mtpRequestId(41));
+			pending = false;
+			++failures;
+			CHECK(requests.finish(Type::State, response.requestId, [] {}));
+			return true;
+		},
 	};
+	auto refused = Request::Serialize(MTPupdates_GetState());
+	const auto retainedRefused = refused;
+	const auto refusedIdentity = retainedRefused.operator->();
+	CHECK(!MTP::AdmitServerEnrollmentRequest(
+		gate.networkAllowed(),
+		41,
+		std::move(refused),
+		std::move(callbacks),
+		QCoreApplication::instance(),
+		[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
+			sent.emplace_back(id, std::move(request));
+		}));
+	CHECK(sent.empty());
+	CHECK(pending);
+	CHECK_EQ(failures, 0);
+	QCoreApplication::processEvents();
+	CHECK(!pending);
+	CHECK_EQ(failures, 1);
 
-	tryResume(blocked);
-	tryResume(unenrolled);
+	auto resumedEvents = 0;
+	auto lifetime = rpl::lifetime();
+	gate.resumed() | rpl::on_next([&] {
+		++resumedEvents;
+		requests.resumeIf(
+			gate.networkAllowed(),
+			[](mtpRequestId) { return false; },
+			[&] {
+				auto fresh = Request::Serialize(MTPupdates_GetState());
+				CHECK(MTP::AdmitServerEnrollmentRequest(
+						gate.networkAllowed(),
+						42,
+						std::move(fresh),
+						MTP::ResponseHandler(),
+						QCoreApplication::instance(),
+						[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
+							sent.emplace_back(id, std::move(request));
+						}));
+				requests.started(Type::State, 42);
+			});
+	}, lifetime);
+	auto start = [&] { CHECK(gate.start()); };
+	gate.resumeIf(MTP::CanResumeServerEnrollment(blocked), start, [] {});
+	gate.resumeIf(MTP::CanResumeServerEnrollment(unenrolled), start, [] {});
 	CHECK_EQ(resumedEvents, 0);
-	CHECK(!gate.networkAllowed());
-	tryResume(enrolled);
+	CHECK(sent.empty());
+	gate.resumeIf(MTP::CanResumeServerEnrollment(enrolled), start, [] {});
 	CHECK_EQ(resumedEvents, 1);
+	CHECK(gate.networkAllowed());
+	CHECK_EQ(int(sent.size()), 1);
+	CHECK_EQ(sent.front().first, mtpRequestId(42));
+	CHECK(sent.front().second.operator->() != refusedIdentity);
+	CHECK(requests.pending());
+	CHECK(requests.finishState(
+		42,
+		[] {},
+		[&] {
+			auto difference = Request::Serialize(MTPupdates_GetDifference(
+				MTP_flags(0),
+				MTP_int(7),
+				MTPint(),
+				MTPint(),
+				MTP_int(1),
+				MTP_int(0),
+				MTPint()));
+			CHECK(MTP::AdmitServerEnrollmentRequest(
+				gate.networkAllowed(),
+				43,
+				std::move(difference),
+				MTP::ResponseHandler(),
+				QCoreApplication::instance(),
+				[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
+					sent.emplace_back(id, std::move(request));
+				}));
+			requests.started(Type::Difference, 43);
+		}));
+	CHECK_EQ(int(sent.size()), 2);
+	CHECK_EQ(sent.back().first, mtpRequestId(43));
+	CHECK(!requests.finishState(42, [] {}, [] {}));
+	gate.resumeIf(MTP::CanResumeServerEnrollment(enrolled), start, [] {});
+	CHECK_EQ(resumedEvents, 1);
+	CHECK_EQ(int(sent.size()), 2);
+	CHECK_EQ(failures, 1);
+}
+
+TEST_CASE(RepausedGateRefusesFreshRecoveryRequest) {
+	using Request = MTP::details::SerializedRequest;
+	using Type = Api::details::UpdateRequestState::Type;
+	auto gate = MTP::ServerEnrollmentGate();
+	CHECK(gate.start());
+	CHECK(gate.pause());
+	auto requests = Api::details::UpdateRequestState();
+	auto sent = 0;
+	auto failures = 0;
+	auto lifetime = rpl::lifetime();
+	gate.resumed() | rpl::on_next([&] {
+		requests.resumeIf(
+			gate.networkAllowed(),
+			[](mtpRequestId) { return false; },
+			[&] {
+				CHECK(gate.pause());
+				auto request = Request::Serialize(MTPupdates_GetState());
+				auto callbacks = MTP::ResponseHandler{
+					nullptr,
+					[&](const MTP::Error &error, const MTP::Response &response) {
+						CHECK(MTP::IsServerEnrollmentPausedError(error));
+						CHECK(requests.finish(Type::State, response.requestId, [] {}));
+						++failures;
+						return true;
+					},
+				};
+				CHECK(!MTP::AdmitServerEnrollmentRequest(
+					gate.networkAllowed(),
+					55,
+					std::move(request),
+					std::move(callbacks),
+					QCoreApplication::instance(),
+					[&](mtpRequestId, Request &&, MTP::ResponseHandler &&) {
+						++sent;
+					}));
+				requests.started(Type::State, 55);
+			});
+	}, lifetime);
+	gate.resumeIf(true, [] {}, [] {});
+	CHECK_EQ(sent, 0);
+	CHECK_EQ(failures, 0);
+	QCoreApplication::processEvents();
+	CHECK_EQ(failures, 1);
+	CHECK(!requests.pending());
 }

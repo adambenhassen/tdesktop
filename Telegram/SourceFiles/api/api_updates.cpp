@@ -231,7 +231,17 @@ Updates::Updates(not_null<Main::Session*> session)
 : _session(session)
 , _noUpdatesTimer([=] { sendPing(); })
 , _onlineTimer([=] { updateOnline(); })
-, _ptsWaiter(this)
+, _ptsWaiter({
+	.startTimer = [this](ChannelData *channel, crl::time ms) {
+		ptsWaiterStartTimerFor(channel, ms);
+	},
+	.applyUpdate = [this](const MTPUpdate &update) {
+		applyUpdateNoPtsCheck(update);
+	},
+	.applyUpdates = [this](const MTPUpdates &updates) {
+		applyUpdatesNoPtsCheck(updates);
+	},
+})
 , _byPtsTimer([=] { getDifferenceByPts(); })
 , _bySeqTimer([=] { getDifference(); })
 , _byMinChannelTimer([=] { getDifference(); })
@@ -302,18 +312,15 @@ void Updates::requestState() {
 }
 
 void Updates::recoverAfterEnrollment() {
-	if (!session().mtp().isServerEnrollmentNetworkAllowed()) {
-		return;
-	}
-	if (!_syncRequests.canStart(
+	_syncRequests.resumeIf(
 			session().mtp().isServerEnrollmentNetworkAllowed(),
 			[this](mtpRequestId requestId) {
 				return session().mtp().hasCallback(requestId);
-			})) {
-		return;
-	}
-	_ptsWaiter.setRequesting(false);
-	requestState();
+			},
+			[this] {
+				_ptsWaiter.setRequesting(false);
+				requestState();
+			});
 }
 
 Main::Session &Updates::session() const {
@@ -513,10 +520,10 @@ void Updates::channelDifferenceFail(
 void Updates::stateRequestDone(
 		mtpRequestId requestId,
 		const MTPupdates_State &state) {
-	if (!_syncRequests.finish(
-		details::UpdateRequestState::Type::State,
+	if (!_syncRequests.finishState(
 		requestId,
-		[&] { stateDone(state); })) {
+		[&] { stateDone(state); },
+		[&] { getDifference(); })) {
 		return;
 	}
 }
