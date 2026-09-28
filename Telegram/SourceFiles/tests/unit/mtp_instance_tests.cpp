@@ -185,10 +185,45 @@ TEST_CASE(EnrollmentRecoveryUsesFreshAccountScopedRequests) {
 	auto accountA = Api::details::UpdateRequestState();
 	auto accountB = Api::details::UpdateRequestState();
 	auto sent = std::vector<mtpRequestId>();
+	auto stored = std::vector<mtpRequestId>();
+	auto applied = 0;
+	auto differenceApplied = 0;
+	auto failures = 0;
 	auto gate = MTP::ServerEnrollmentGate(true);
+	auto initialFailure = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &error, const MTP::Response &response) {
+			++failures;
+			CHECK(MTP::IsServerEnrollmentPausedError(error));
+			CHECK_EQ(response.requestId, mtpRequestId(41));
+			CHECK(accountA.finish(
+				Type::State,
+				response.requestId,
+				[] {}));
+			return true;
+		}
+	};
+	auto queuedFailure = Fn<void()>();
 
 	accountA.started(Type::State, 41);
-	accountA.clearInactive([](mtpRequestId) { return false; });
+	CHECK(accountA.pending());
+	const auto refused = MTP::RejectServerEnrollmentRequest(
+		gate.networkAllowed(),
+		mtpRequestId(41),
+		initialFailure,
+		[&](Fn<void()> callback) {
+			queuedFailure = std::move(callback);
+		});
+	CHECK(refused);
+	if (!refused) {
+		stored.push_back(mtpRequestId(41));
+	}
+	CHECK(queuedFailure);
+	CHECK_EQ(int(stored.size()), 0);
+	CHECK_EQ(failures, 0);
+	queuedFailure();
+	queuedFailure = nullptr;
+	CHECK_EQ(failures, 1);
 	CHECK(!accountA.pending());
 	CHECK(gate.resume().resumed);
 	CHECK(!gate.networkAllowed());
@@ -198,33 +233,73 @@ TEST_CASE(EnrollmentRecoveryUsesFreshAccountScopedRequests) {
 	CHECK(sent.empty());
 
 	CHECK(gate.start());
+	auto allowedCallbacks = MTP::ResponseHandler{
+		nullptr,
+		[](const MTP::Error &, const MTP::Response &) {
+			return true;
+		}
+	};
+	auto scheduledAllowedFailure = false;
+	CHECK(!MTP::RejectServerEnrollmentRequest(
+		gate.networkAllowed(),
+		mtpRequestId(44),
+		allowedCallbacks,
+		[&](Fn<void()>) {
+			scheduledAllowedFailure = true;
+		}));
+	CHECK(allowedCallbacks.fail);
+	CHECK(!scheduledAllowedFailure);
+	auto noCallbacks = MTP::ResponseHandler();
 	if (accountA.canStart(
 			gate.networkAllowed(),
 			[](mtpRequestId) { return false; })) {
 		const auto fresh = mtpRequestId(42);
-		sent.push_back(fresh);
-		accountA.started(Type::State, fresh);
+		if (!MTP::RejectServerEnrollmentRequest(
+				gate.networkAllowed(),
+				fresh,
+				noCallbacks,
+				[](Fn<void()>) {
+				})) {
+			sent.push_back(fresh);
+			accountA.started(Type::State, fresh);
+		}
 	}
 	CHECK_EQ(int(sent.size()), 1);
 	CHECK_EQ(sent.front(), mtpRequestId(42));
-	CHECK_EQ(accountA.current(Type::State), mtpRequestId(42));
 
 	CHECK(gate.pause());
-	CHECK(!accountA.canStart(
+	CHECK(MTP::RejectServerEnrollmentRequest(
 		gate.networkAllowed(),
-		[](mtpRequestId) { return false; }));
+		mtpRequestId(43),
+		noCallbacks,
+		[](Fn<void()>) {
+		}));
+	CHECK(!accountA.canStart(gate.networkAllowed(), [](mtpRequestId) {
+		return false;
+	}));
 	CHECK_EQ(int(sent.size()), 1);
 
-	accountA.finished(Type::State, 41);
-	CHECK_EQ(accountA.current(Type::State), mtpRequestId(42));
+	CHECK(!accountA.finish(Type::State, 41, [&] { ++applied; }));
+	CHECK(accountA.pending());
 
-	accountB.started(Type::State, 51);
+	accountB.started(Type::Difference, 51);
 	CHECK(accountB.pending());
 	CHECK(accountA.pending());
 
-	accountA.finished(Type::State, 42);
+	CHECK(accountA.finish(Type::State, 42, [&] { ++applied; }));
+	CHECK(!accountA.finish(Type::State, 42, [&] { ++applied; }));
+	CHECK_EQ(applied, 1);
 	CHECK(!accountA.pending());
-	CHECK(accountB.pending());
+	CHECK(accountB.finish(
+		Type::Difference,
+		51,
+		[&] { ++differenceApplied; }));
+	CHECK(!accountB.finish(
+		Type::Difference,
+		51,
+		[&] { ++differenceApplied; }));
+	CHECK_EQ(differenceApplied, 1);
+	CHECK(!accountB.pending());
 }
 
 TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
@@ -235,4 +310,38 @@ TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
 	CHECK(MTP::IsServerEnrollmentPausedError(error));
 	CHECK(!MTP::IsServerEnrollmentPausedError(
 		MTP::Error::Local("RESPONSE_PARSE_FAILED", "Empty response.")));
+}
+
+TEST_CASE(EnrollmentResumeRequiresAUsablePin) {
+	auto blocked = MTP::DcOptions(MTP::Environment::Production);
+	blocked.constructBlocked();
+	auto unenrolled = MTP::DcOptions(MTP::Environment::Production);
+	unenrolled.constructUnenrolled();
+	auto enrolled = MTP::DcOptions(MTP::Environment::Production);
+	enrolled.constructFromBuiltIn();
+
+	auto gate = MTP::ServerEnrollmentGate(true);
+	auto resumedEvents = 0;
+	auto tryResume = [&](const MTP::DcOptions &options) {
+		if (!MTP::CanResumeServerEnrollment(options)) {
+			return;
+		}
+		const auto result = gate.resume();
+		if (!result.resumed) {
+			return;
+		}
+		if (!result.wasStarted) {
+			gate.start();
+		}
+		if (gate.networkAllowed()) {
+			++resumedEvents;
+		}
+	};
+
+	tryResume(blocked);
+	tryResume(unenrolled);
+	CHECK_EQ(resumedEvents, 0);
+	CHECK(!gate.networkAllowed());
+	tryResume(enrolled);
+	CHECK_EQ(resumedEvents, 1);
 }

@@ -513,34 +513,32 @@ void Updates::channelDifferenceFail(
 void Updates::stateRequestDone(
 		mtpRequestId requestId,
 		const MTPupdates_State &state) {
-	if (requestId != _syncRequests.current(
-			details::UpdateRequestState::Type::State)) {
+	if (!_syncRequests.finish(
+		details::UpdateRequestState::Type::State,
+		requestId,
+		[&] { stateDone(state); })) {
 		return;
 	}
-	_syncRequests.finished(
-		details::UpdateRequestState::Type::State,
-		requestId);
-	stateDone(state);
 }
 
 void Updates::stateRequestFail(
 		mtpRequestId requestId,
 		const MTP::Error &error) {
-	if (requestId != _syncRequests.current(
-			details::UpdateRequestState::Type::State)) {
-		return;
-	}
-	_syncRequests.finished(
+	if (!_syncRequests.finish(
 		details::UpdateRequestState::Type::State,
-		requestId);
-	_ptsWaiter.setRequesting(false);
-	if (MTP::IsServerEnrollmentPausedError(error)) {
+		requestId,
+		[&] {
+			_ptsWaiter.setRequesting(false);
+			if (MTP::IsServerEnrollmentPausedError(error)) {
+				return;
+			}
+			LOG(("RPC Error in getState: %1 %2: %3").arg(
+				QString::number(error.code()),
+				error.type(),
+				error.description()));
+		})) {
 		return;
 	}
-	LOG(("RPC Error in getState: %1 %2: %3").arg(
-		QString::number(error.code()),
-		error.type(),
-		error.description()));
 }
 
 void Updates::stateDone(const MTPupdates_State &state) {
@@ -558,14 +556,12 @@ void Updates::stateDone(const MTPupdates_State &state) {
 void Updates::differenceDone(
 		mtpRequestId requestId,
 		const MTPupdates_Difference &result) {
-	if (requestId != _syncRequests.current(
-			details::UpdateRequestState::Type::Difference)) {
+	if (!_syncRequests.finish(
+		details::UpdateRequestState::Type::Difference,
+		requestId,
+		[&] { differenceDone(result); })) {
 		return;
 	}
-	_syncRequests.finished(
-		details::UpdateRequestState::Type::Difference,
-		requestId);
-	differenceDone(result);
 }
 
 void Updates::differenceDone(const MTPupdates_Difference &result) {
@@ -709,22 +705,22 @@ void Updates::feedDifference(
 void Updates::differenceFail(
 		mtpRequestId requestId,
 		const MTP::Error &error) {
-	if (requestId != _syncRequests.current(
-			details::UpdateRequestState::Type::Difference)) {
-		return;
-	}
-	_syncRequests.finished(
+	if (!_syncRequests.finish(
 		details::UpdateRequestState::Type::Difference,
-		requestId);
-	if (MTP::IsServerEnrollmentPausedError(error)) {
-		_ptsWaiter.setRequesting(false);
+		requestId,
+		[&] {
+			if (MTP::IsServerEnrollmentPausedError(error)) {
+				_ptsWaiter.setRequesting(false);
+				return;
+			}
+			LOG(("RPC Error in getDifference: %1 %2: %3").arg(
+				QString::number(error.code()),
+				error.type(),
+				error.description()));
+			failDifferenceStartTimerFor(nullptr);
+		})) {
 		return;
 	}
-	LOG(("RPC Error in getDifference: %1 %2: %3").arg(
-		QString::number(error.code()),
-		error.type(),
-		error.description()));
-	failDifferenceStartTimerFor(nullptr);
 }
 
 void Updates::getDifferenceByPts() {

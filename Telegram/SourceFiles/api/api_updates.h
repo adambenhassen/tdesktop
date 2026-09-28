@@ -39,13 +39,20 @@ public:
 	};
 
 	void started(Type type, mtpRequestId requestId) {
-		current(type) = requestId;
+		slot(type) = requestId;
 	}
 
-	void finished(Type type, mtpRequestId requestId) {
-		if (current(type) == requestId) {
-			current(type) = 0;
+	template <typename Apply>
+	[[nodiscard]] bool finish(
+			Type type,
+			mtpRequestId requestId,
+			Apply &&apply) {
+		if (slot(type) != requestId) {
+			return false;
 		}
+		slot(type) = 0;
+		apply();
+		return true;
 	}
 
 	template <typename IsActive>
@@ -70,12 +77,8 @@ public:
 		return _state || _difference;
 	}
 
-	[[nodiscard]] mtpRequestId current(Type type) const {
-		return (type == Type::State) ? _state : _difference;
-	}
-
 private:
-	mtpRequestId &current(Type type) {
+	mtpRequestId &slot(Type type) {
 		return (type == Type::State) ? _state : _difference;
 	}
 

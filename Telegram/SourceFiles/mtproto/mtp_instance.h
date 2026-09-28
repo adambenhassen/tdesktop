@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_response.h"
 
 #include <atomic>
+#include <utility>
 
 namespace MTP {
 namespace details {
@@ -184,6 +185,29 @@ private:
 	std::atomic<uint64> _stopGeneration = 0;
 
 };
+
+[[nodiscard]] inline bool RejectServerEnrollmentRequest(
+		bool networkAllowed,
+		mtpRequestId requestId,
+		ResponseHandler &callbacks,
+		Fn<void(Fn<void()>)> schedule) {
+	if (networkAllowed) {
+		return false;
+	}
+	if (callbacks.fail) {
+		schedule([
+			requestId,
+			fail = std::move(callbacks.fail)
+		]() mutable {
+			fail(
+				Error::Local(
+					u"SERVER_ENROLLMENT_PAUSED"_q,
+					u"Network access is paused until server enrollment completes."_q),
+				Response{ .requestId = requestId });
+		});
+	}
+	return true;
+}
 
 class Instance : public QObject {
 	Q_OBJECT

@@ -424,9 +424,7 @@ void Instance::Private::start() {
 }
 
 void Instance::Private::resume() {
-	if (dcOptions().blocked() || dcOptions().unenrolled()) {
-		// Only a durable enrollment pin may reopen the network gate. This
-		// also makes stale queued resume work harmless after cancellation.
+	if (!CanResumeServerEnrollment(dcOptions())) {
 		return;
 	}
 	const auto result = _serverEnrollmentGate.resume();
@@ -1230,20 +1228,14 @@ void Instance::Private::sendRequest(
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId) {
-	if (!networkAllowed()) {
+	if (RejectServerEnrollmentRequest(
+			networkAllowed(),
+		requestId,
+		callbacks,
+		[instance = _instance](Fn<void()> callback) {
+			crl::on_main(instance, std::move(callback));
+		})) {
 		LOG(("MTP Error: refused a request while server enrollment is paused."));
-		if (callbacks.fail) {
-			crl::on_main(_instance, [
-				requestId,
-				fail = std::move(callbacks.fail)
-			]() mutable {
-				fail(
-					Error::Local(
-						"SERVER_ENROLLMENT_PAUSED",
-						"Network access is paused until server enrollment completes."),
-					Response{ .requestId = requestId });
-			});
-		}
 		return;
 	}
 	const auto session = getSession(shiftedDcId);
