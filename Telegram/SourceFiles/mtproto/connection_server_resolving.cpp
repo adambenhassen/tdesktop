@@ -34,6 +34,12 @@ using HostnameLookupFunction = Fn<void(
 		bool ipv6,
 		QHostInfo &info)>;
 
+#ifdef TDESKTOP_UNIT_TESTS
+using SystemHostnameLookupFunction = ServerHostnameResolverTestSystemLookup;
+#else
+using SystemHostnameLookupFunction = HostnameLookupFunction;
+#endif
+
 struct HostnameLookupState final {
 	std::atomic_bool aborted = false;
 	std::mutex mutex;
@@ -47,7 +53,7 @@ qint64 LookupServerHostname(
 		Fn<void(const QHostInfo &)> callback) {
 	const auto state = std::make_shared<HostnameLookupState>();
 	auto testLookup = HostnameLookupFunction();
-	auto testSystemLookup = HostnameLookupFunction();
+	auto testSystemLookup = SystemHostnameLookupFunction();
 #ifdef TDESKTOP_UNIT_TESTS
 	testLookup = TestLookup;
 	testSystemLookup = TestSystemLookup;
