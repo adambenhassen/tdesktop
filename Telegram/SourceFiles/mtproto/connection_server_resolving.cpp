@@ -26,6 +26,7 @@ constexpr auto kMaxAddresses = 8;
 
 #ifdef TDESKTOP_UNIT_TESTS
 ServerHostnameResolverTestLookup TestLookup;
+ServerHostnameResolverTestSystemLookup TestSystemLookup;
 #endif
 
 using HostnameLookupFunction = Fn<void(
@@ -46,19 +47,25 @@ qint64 LookupServerHostname(
 		Fn<void(const QHostInfo &)> callback) {
 	const auto state = std::make_shared<HostnameLookupState>();
 	auto testLookup = HostnameLookupFunction();
+	auto testSystemLookup = HostnameLookupFunction();
 #ifdef TDESKTOP_UNIT_TESTS
 	testLookup = TestLookup;
+	testSystemLookup = TestSystemLookup;
 #endif
 	const auto thread = QThread::create([
 			state,
 			hostname,
 			ipv6,
-			testLookup = std::move(testLookup)] {
+			testLookup = std::move(testLookup),
+			testSystemLookup = std::move(testSystemLookup)] {
 		auto info = QHostInfo();
 		if (testLookup) {
 			testLookup(hostname, ipv6, info);
 		} else {
 			info = QHostInfo::fromName(hostname);
+			if (testSystemLookup) {
+				testSystemLookup(hostname, ipv6, info);
+			}
 		}
 		const auto lock = std::lock_guard(state->mutex);
 		state->info = std::move(info);
@@ -112,6 +119,11 @@ ServerHostnameResolver DefaultServerHostnameResolver() {
 void SetServerHostnameResolverTestLookup(
 		ServerHostnameResolverTestLookup lookup) {
 	TestLookup = std::move(lookup);
+}
+
+void SetServerHostnameResolverTestSystemLookup(
+		ServerHostnameResolverTestSystemLookup lookup) {
+	TestSystemLookup = std::move(lookup);
 }
 #endif
 

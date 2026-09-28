@@ -32,6 +32,12 @@ using ServerHostnameResolverTestLookup = Fn<void(
 		QHostInfo &info)>;
 void SetServerHostnameResolverTestLookup(
 		ServerHostnameResolverTestLookup lookup);
+using ServerHostnameResolverTestSystemLookup = Fn<void(
+		const QString &hostname,
+		bool ipv6,
+		QHostInfo &info)>;
+void SetServerHostnameResolverTestSystemLookup(
+		ServerHostnameResolverTestSystemLookup lookup);
 #endif
 
 class ServerResolvingConnection final : public AbstractConnection {

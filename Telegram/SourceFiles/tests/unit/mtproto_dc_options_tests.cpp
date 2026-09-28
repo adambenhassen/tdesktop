@@ -1149,6 +1149,116 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 	details::UnitProxyCheckOptions = nullptr;
 }
 
+TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
+	auto options = DcOptions(Environment::Production);
+	auto server = MakeCustomServer();
+	server.hostname = "example.com";
+	server.ip.clear();
+	server.port = 2443;
+	server.serverSelection = server.hostname;
+	server.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps;
+	server.discoveryOrigin =
+		"https://example.com/.well-known/telegramd/client";
+	CHECK(options.setCustomServer(server));
+	details::UnitProxyCheckOptions = &options;
+	details::SetServerHostnameResolverTestLookup({});
+
+	const auto answers = std::vector{
+		QHostAddress(u"8.8.8.8"_q),
+		QHostAddress(u"8.8.4.4"_q),
+	};
+	UnitHostResolver resolver;
+	const auto proxyTypes = std::vector{
+		ProxyData::Type::Socks5,
+		ProxyData::Type::Http,
+	};
+	for (const auto proxyType : proxyTypes) {
+		for (const auto &answer : answers) {
+			resolver.add({ .addresses = { answer } });
+		}
+	}
+	std::atomic<int> systemLookups = 0;
+	std::atomic<int> successfulSystemLookups = 0;
+	details::SetServerHostnameResolverTestSystemLookup(
+		[&resolver, &systemLookups, &successfulSystemLookups](
+				const QString &hostname,
+				bool ipv6,
+				QHostInfo &info) {
+			if (info.error() == QHostInfo::NoError
+				&& !info.addresses().isEmpty()) {
+				++successfulSystemLookups;
+			}
+			++systemLookups;
+			resolver.resolve(hostname, ipv6, info);
+		});
+
+	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
+	ProxyData proxy;
+	proxy.host = u"127.0.0.1"_q;
+	proxy.port = 1080;
+	QStringList dialled;
+	for (const auto proxyType : proxyTypes) {
+		proxy.type = proxyType;
+		for (const auto &expected : answers) {
+			ProxyCheckObservation observation;
+			bool done = false;
+			bool failed = false;
+			ProxyCheckConnection v4;
+			ProxyCheckConnection v6;
+			const details::UnitConnectionFactory factory = [&](
+				not_null<Instance*>,
+				DcOptions::Variants::Protocol protocol,
+				QThread *thread,
+				const bytes::vector &,
+				const ProxyData &data) {
+				CHECK(protocol == DcOptions::Variants::Tcp);
+				return details::ConnectionPointer::New<ProxyCheckObserver>(
+					thread,
+					data,
+					&observation);
+			};
+			details::UnitConnectionFactoryInstance = &factory;
+			QEventLoop loop;
+			StartProxyCheck(
+				not_null<Instance*>(fakeInstance),
+				proxy,
+				false,
+				v4,
+				v6,
+				[&](details::AbstractConnection *, int) {
+					done = true;
+					loop.quit();
+				},
+				[&](details::AbstractConnection *) {
+					failed = true;
+					loop.quit();
+				});
+			if (!done && !failed) {
+				QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+				loop.exec();
+			}
+			CHECK(done);
+			CHECK(!failed);
+			CHECK_EQ(observation.addressPassedToChild, expected.toString());
+			CHECK(observation.addressPassedToChild != u"example.com"_q);
+			CHECK(observation.proxyType == proxyType);
+			dialled.push_back(observation.addressPassedToChild);
+			v4.reset();
+			details::UnitConnectionFactoryInstance = nullptr;
+		}
+	}
+	const auto expectedLookups = int(answers.size() * proxyTypes.size());
+	CHECK_EQ(systemLookups.load(), expectedLookups);
+	CHECK_EQ(successfulSystemLookups.load(), expectedLookups);
+	CHECK_EQ(resolver.lookups(), expectedLookups);
+	CHECK_EQ(dialled.value(0), answers[0].toString());
+	CHECK_EQ(dialled.value(1), answers[1].toString());
+	CHECK_EQ(dialled.value(2), answers[0].toString());
+	CHECK_EQ(dialled.value(3), answers[1].toString());
+	details::SetServerHostnameResolverTestSystemLookup({});
+	details::UnitProxyCheckOptions = nullptr;
+}
+
 void RunDefaultResolverOwnerRemovalCase(
 		bool proxyCheck,
 		OwnerRemovalDnsResponse responseKind) {
