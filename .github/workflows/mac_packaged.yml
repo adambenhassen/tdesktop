@@ -144,7 +144,10 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             $DEFINE
           cmake --build build
-          ./build/test_unit
+          if ! ./build/test_unit; then
+            lldb --batch -o run -k bt -- ./build/test_unit
+            exit 1
+          fi
           macdeployqt build/Telegramd.app
 
           app="$PWD/build/Telegramd.app"
