@@ -329,10 +329,12 @@ jobs:
         run: |
           docker run --rm \
           -u $(id -u) \
+          -e HOME=/tmp/tdesktop-ci-home \
           -v $PWD:/usr/src/tdesktop \
           $IMAGE_TAG \
           bash -lc '
             cd /usr/src/tdesktop
+            install -d -m 700 "$HOME"
             /usr/src/tdesktop/out/Debug/test_unit
             TEST_STATUS=$?
             if test "$TEST_STATUS" -ne 0; then
