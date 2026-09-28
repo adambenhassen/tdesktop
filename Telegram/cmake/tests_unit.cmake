@@ -16,6 +16,16 @@
 add_executable(test_unit)
 init_target(test_unit "(tests)")
 
+if(UNIX)
+    add_library(test_unit_system_resolver SHARED
+        ${src_loc}/tests/unit/system_resolver_fixture.c
+    )
+    target_compile_features(test_unit_system_resolver PRIVATE c_std_11)
+    target_include_directories(test_unit_system_resolver PRIVATE ${src_loc})
+    target_link_libraries(test_unit_system_resolver PRIVATE ${CMAKE_DL_LIBS})
+    target_link_libraries(test_unit PRIVATE test_unit_system_resolver)
+endif()
+
 target_include_directories(test_unit PRIVATE ${src_loc})
 target_compile_definitions(test_unit PRIVATE
     TDESKTOP_UNIT_TESTS

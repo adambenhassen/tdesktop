@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include <atomic>
+#include <iterator>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -19,6 +20,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtp_instance.h"
 #include "mtproto/proxy_check.h"
 #include "mtproto/session.h"
+#ifdef Q_OS_UNIX
+#include "tests/unit/system_resolver_fixture.h"
+#endif
 
 #include <QtCore/QByteArray>
 #include <QtCore/QDataStream>
@@ -1149,6 +1153,7 @@ TEST_CASE(DefaultHostnameResolverDoesNotReusePreviousAnswer) {
 	details::UnitProxyCheckOptions = nullptr;
 }
 
+#ifdef Q_OS_UNIX
 TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 	auto options = DcOptions(Environment::Production);
 	auto server = MakeCustomServer();
@@ -1168,26 +1173,17 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 		QHostAddress(u"8.8.8.8"_q),
 		QHostAddress(u"8.8.4.4"_q),
 	};
-	UnitHostResolver resolver;
 	const auto proxyTypes = std::vector{
 		ProxyData::Type::Socks5,
 		ProxyData::Type::Http,
 	};
-	std::atomic<int> systemLookups = 0;
-	std::atomic<int> successfulSystemLookups = 0;
-	details::SetServerHostnameResolverTestSystemLookup(
-		[&resolver, &systemLookups, &successfulSystemLookups](
-				const QString &hostname,
-				bool ipv6) {
-			++systemLookups;
-			auto info = QHostInfo();
-			resolver.resolve(hostname, ipv6, info);
-			if (info.error() == QHostInfo::NoError
-				&& !info.addresses().isEmpty()) {
-				++successfulSystemLookups;
-			}
-			return info;
-		});
+	const uint32_t systemAnswers[] = {
+		0x08080808,
+		0x08080404,
+		0x08080808,
+		0x08080404,
+	};
+	UnitSystemResolverSetAnswers(systemAnswers, std::size(systemAnswers));
 
 	const auto fakeInstance = reinterpret_cast<Instance*>(quintptr(1));
 	ProxyData proxy;
@@ -1196,9 +1192,6 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 	QStringList dialled;
 	for (const auto proxyType : proxyTypes) {
 		proxy.type = proxyType;
-		for (const auto &answer : answers) {
-			resolver.add({ .addresses = { answer } });
-		}
 		for (const auto &expected : answers) {
 			ProxyCheckObservation observation;
 			bool done = false;
@@ -1249,16 +1242,15 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 		}
 	}
 	const auto expectedLookups = int(answers.size() * proxyTypes.size());
-	CHECK_EQ(systemLookups.load(), expectedLookups);
-	CHECK_EQ(successfulSystemLookups.load(), expectedLookups);
-	CHECK_EQ(resolver.lookups(), expectedLookups);
+	CHECK_EQ(UnitSystemResolverLookups(), expectedLookups);
 	CHECK_EQ(dialled.value(0), answers[0].toString());
 	CHECK_EQ(dialled.value(1), answers[1].toString());
 	CHECK_EQ(dialled.value(2), answers[0].toString());
 	CHECK_EQ(dialled.value(3), answers[1].toString());
-	details::SetServerHostnameResolverTestSystemLookup({});
+	UnitSystemResolverSetAnswers(nullptr, 0);
 	details::UnitProxyCheckOptions = nullptr;
 }
+#endif // Q_OS_UNIX
 
 void RunDefaultResolverOwnerRemovalCase(
 		bool proxyCheck,
