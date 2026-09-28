@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include <algorithm>
 #include <atomic>
 #include <iterator>
 #include <thread>
@@ -1249,6 +1250,16 @@ TEST_CASE(DefaultHostnameResolverUsesSystemResolver) {
 	CHECK_EQ(dialled.value(3), answers[1].toString());
 	UnitSystemResolverSetAnswers(nullptr, 0);
 	details::UnitProxyCheckOptions = nullptr;
+}
+
+TEST_CASE(SystemResolverFixtureForwardsLocalhost) {
+	const auto resolved = QHostInfo::fromName(u"localhost"_q);
+	const auto addresses = resolved.addresses();
+	CHECK(resolved.error() == QHostInfo::NoError);
+	CHECK(std::any_of(
+		addresses.cbegin(),
+		addresses.cend(),
+		[](const QHostAddress &address) { return address.isLoopback(); }));
 }
 #endif // Q_OS_UNIX
 

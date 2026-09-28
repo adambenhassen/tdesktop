@@ -710,7 +710,10 @@ TEST_CASE(LocalDiscoveryStartsSocketForLiteralAndLocalName) {
 			peer->deleteLater();
 		}
 		client.disconnectFromHost();
-		client.waitForDisconnected(1000);
+		if (client.state() != QAbstractSocket::UnconnectedState) {
+			CHECK(client.waitForDisconnected(1000));
+		}
+		CHECK(client.state() == QAbstractSocket::UnconnectedState);
 	}
 }
 

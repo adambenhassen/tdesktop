@@ -43,6 +43,11 @@ static int UnitGetAddrInfo(
 		const struct addrinfo *hints,
 		struct addrinfo **result) {
 	if (!node || strcmp(node, FixtureHost) != 0) {
+#ifdef __APPLE__
+		/* dyld leaves bindings in the interposing image untouched. A dynamic
+		 * lookup can resolve to this interposer and recurse on ordinary hosts. */
+		return getaddrinfo(node, service, hints, result);
+#else
 		typedef int (*GetAddrInfo)(
 			const char *,
 			const char *,
@@ -50,6 +55,7 @@ static int UnitGetAddrInfo(
 			struct addrinfo **);
 		GetAddrInfo original = (GetAddrInfo)dlsym(RTLD_NEXT, "getaddrinfo");
 		return original(node, service, hints, result);
+#endif
 	}
 	const int index = atomic_fetch_add(&NextAnswer, 1);
 	if (index >= atomic_load(&AnswerCount)) {
