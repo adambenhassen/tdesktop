@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_credits.h"
 #include "api/api_global_privacy.h"
 #include "api/api_statistics.h"
+#include "api/api_updates.h"
 #include "base/timer_rpl.h"
 #include "data/components/credits.h"
 #include "data/data_changes.h"
@@ -116,7 +117,21 @@ std::unique_ptr<Data::SavedMessages> MegagroupInfo::takeMonoforumData() {
 
 ChannelData::ChannelData(not_null<Data::Session*> owner, PeerId id)
 : PeerData(owner, id)
-, _ptsWaiter(&owner->session().updates()) {
+, _ptsWaiter({
+	.startTimer = [apiUpdates = &owner->session().updates()](
+			ChannelData *channel,
+			crl::time ms) {
+		apiUpdates->ptsWaiterStartTimerFor(channel, ms);
+	},
+	.applyUpdate = [apiUpdates = &owner->session().updates()](
+			const MTPUpdate &update) {
+		apiUpdates->applyUpdateNoPtsCheck(update);
+	},
+	.applyUpdates = [apiUpdates = &owner->session().updates()](
+			const MTPUpdates &updates) {
+		apiUpdates->applyUpdatesNoPtsCheck(updates);
+	},
+}) {
 }
 
 void ChannelData::setPhoto(const MTPChatPhoto &photo) {

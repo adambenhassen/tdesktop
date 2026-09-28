@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_config.h"
+#include "mtproto/sender.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 
@@ -87,6 +88,40 @@ int RunAccountLifecycleRegression() {
 		// A fresh account is allowed to show enrollment, but it must not
 		// carry the built-in production table while it waits there.
 		return 1;
+	}
+	// Sender destruction must cancel a refused request before queued delivery.
+	account->mtp().stopForServerEnrollment();
+	auto cancelledFailures = 0;
+	{
+		auto sender = MTP::Sender(&account->mtp());
+		const auto requestId = sender.request(MTPupdates_GetState(
+		)).fail([&](const MTP::Error &) {
+			++cancelledFailures;
+		}).send();
+		if (!sender.pending(requestId)) {
+			return 1;
+		}
+	}
+	QCoreApplication::processEvents();
+	if (cancelledFailures) {
+		return 1;
+	}
+	auto liveFailures = 0;
+	{
+		auto sender = MTP::Sender(&account->mtp());
+		const auto requestId = sender.request(MTPupdates_GetState(
+		)).fail([&](const MTP::Error &error) {
+			if (MTP::IsServerEnrollmentPausedError(error)) {
+				++liveFailures;
+			}
+		}).send();
+		if (!sender.pending(requestId)) {
+			return 1;
+		}
+		QCoreApplication::processEvents();
+		if (sender.pending(requestId) || liveFailures != 1) {
+			return 1;
+		}
 	}
 	if (!ConfigurePinnedServer(account)) {
 		return 1;

@@ -13,6 +13,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_response.h"
 
 #include <atomic>
+#include <map>
+#include <utility>
+
+#include <QtCore/QMutex>
+#include <QtCore/QObject>
 
 namespace MTP {
 namespace details {
@@ -31,6 +36,12 @@ class AuthKey;
 using AuthKeyPtr = std::shared_ptr<AuthKey>;
 using AuthKeysList = std::vector<AuthKeyPtr>;
 enum class Environment : uchar;
+
+[[nodiscard]] inline bool IsServerEnrollmentPausedError(
+		const Error &error) {
+	return error.code() == Error::NoError
+		&& error.type() == u"CLIENT_SERVER_ENROLLMENT_PAUSED"_q;
+}
 
 // A pinned endpoint failure together with the session that reported
 // it. The report is retired only by a successful connection of that
@@ -171,6 +182,32 @@ public:
 		return { .resumed = true, .wasStarted = wasStarted };
 	}
 
+	template <typename Start, typename ResumeStarted>
+	void resumeIf(
+			bool usablePin,
+			Start &&start,
+			ResumeStarted &&resumeStarted) {
+		if (!usablePin) {
+			return;
+		}
+		const auto result = resume();
+		if (!result.resumed) {
+			return;
+		}
+		if (result.wasStarted) {
+			resumeStarted();
+		} else {
+			start();
+		}
+		if (networkAllowed()) {
+			_resumed.fire({});
+		}
+	}
+
+	[[nodiscard]] rpl::producer<> resumed() const {
+		return _resumed.events();
+	}
+
 	[[nodiscard]] bool pause() {
 		if (!_started) {
 			return false;
@@ -201,8 +238,46 @@ private:
 	std::atomic_bool _started = false;
 	std::atomic_bool _paused = false;
 	std::atomic<uint64> _stopGeneration = 0;
+	rpl::event_stream<> _resumed;
 
 };
+
+// Keep refused failures cancelable until their queued main-thread delivery.
+// Serialized requests never enter this queue.
+class ServerEnrollmentRefusalQueue {
+public:
+	[[nodiscard]] bool reject(
+		bool networkAllowed,
+		mtpRequestId requestId,
+		ResponseHandler &callbacks);
+	void cancel(mtpRequestId requestId);
+	[[nodiscard]] bool pending(mtpRequestId requestId) const;
+
+private:
+	void deliver(mtpRequestId requestId);
+
+	mutable QMutex _mutex;
+	std::map<mtpRequestId, FailHandler> _failures;
+	QObject _context;
+};
+
+template <typename Send>
+[[nodiscard]] bool AdmitServerEnrollmentRequest(
+		bool networkAllowed,
+		mtpRequestId requestId,
+		details::SerializedRequest &&request,
+		ResponseHandler &&callbacks,
+		ServerEnrollmentRefusalQueue &refusals,
+		Send &&send) {
+	if (refusals.reject(
+			networkAllowed,
+			requestId,
+			callbacks)) {
+		return false;
+	}
+	send(requestId, std::move(request), std::move(callbacks));
+	return true;
+}
 
 class Instance : public QObject {
 	Q_OBJECT
@@ -289,6 +364,7 @@ public:
 	// Start a paused instance after its endpoint and RSA key have been
 	// persisted. Calling this on an already running instance is a no-op.
 	void resume();
+	[[nodiscard]] rpl::producer<> resumed() const;
 	// Thread-safe.
 	[[nodiscard]] bool isServerEnrollmentNetworkAllowed() const;
 	[[nodiscard]] uint64 serverEnrollmentStopToken() const;

@@ -68,6 +68,7 @@ PRIVATE
     core/hash_sha.cpp
     core/hash_md5.cpp
     data/data_peer_id.cpp
+    data/data_pts_waiter.cpp
     intro/intro_server_discovery.cpp
     intro/intro_username_validation.cpp
     main/main_account_persistence.cpp

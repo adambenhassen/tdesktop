@@ -272,4 +272,9 @@ private:
 
 };
 
+[[nodiscard]] inline bool CanResumeServerEnrollment(
+		const DcOptions &options) {
+	return !options.blocked() && !options.unenrolled();
+}
+
 } // namespace MTP

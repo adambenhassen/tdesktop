@@ -28,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/network_reachability.h"
 
+#include <crl/crl_on_main.h>
+
 #include <atomic>
 
 namespace MTP {
@@ -82,6 +84,7 @@ public:
 	[[nodiscard]] rpl::producer<DcId> mainDcIdValue() const;
 
 	[[nodiscard]] rpl::producer<> writeKeysRequests() const;
+	[[nodiscard]] rpl::producer<> resumed() const;
 
 	void dcPersistentKeyChanged(DcId dcId, const AuthKeyPtr &persistentKey);
 	void dcTemporaryKeyChanged(DcId dcId);
@@ -133,6 +136,14 @@ public:
 	void removeDc(ShiftedDcId shiftedDcId);
 
 	void sendRequest(
+		mtpRequestId requestId,
+		SerializedRequest &&request,
+		ResponseHandler &&callbacks,
+		ShiftedDcId shiftedDcId,
+		crl::time msCanWait,
+		bool needsLayer,
+		mtpRequestId afterRequestId);
+	void sendAcceptedRequest(
 		mtpRequestId requestId,
 		SerializedRequest &&request,
 		ResponseHandler &&callbacks,
@@ -295,6 +306,7 @@ private:
 
 	std::map<mtpRequestId, ResponseHandler> _parserMap;
 	mutable QMutex _parserMapLock;
+	ServerEnrollmentRefusalQueue _refusedRequests;
 
 	std::map<mtpRequestId, SerializedRequest> _requestMap;
 	QReadWriteLock _requestMapLock;
@@ -422,23 +434,15 @@ void Instance::Private::start() {
 }
 
 void Instance::Private::resume() {
-	if (dcOptions().blocked() || dcOptions().unenrolled()) {
-		// Only a durable enrollment pin may reopen the network gate. This
-		// also makes stale queued resume work harmless after cancellation.
-		return;
-	}
-	const auto result = _serverEnrollmentGate.resume();
-	if (!result.resumed) {
-		return;
-	}
-	if (!result.wasStarted) {
-		start();
-		return;
-	}
-	for (const auto &[shiftedDcId, session] : _sessions) {
-		session->resumeAfterServerEnrollment();
-	}
-	requestConfig();
+	_serverEnrollmentGate.resumeIf(
+		CanResumeServerEnrollment(dcOptions()),
+		[this] { start(); },
+		[this] {
+			for (const auto &[shiftedDcId, session] : _sessions) {
+				session->resumeAfterServerEnrollment();
+			}
+			requestConfig();
+		});
 }
 
 void Instance::Private::stopForServerEnrollment() {
@@ -827,6 +831,7 @@ void Instance::Private::cancel(mtpRequestId requestId) {
 	if (!requestId) return;
 
 	DEBUG_LOG(("MTP Info: Cancel request %1.").arg(requestId));
+	_refusedRequests.cancel(requestId);
 	const auto shiftedDcId = queryRequestByDc(requestId);
 	auto msgId = mtpMsgId(0);
 	{
@@ -1054,6 +1059,10 @@ rpl::producer<> Instance::Private::writeKeysRequests() const {
 	return _writeKeysRequests.events();
 }
 
+rpl::producer<> Instance::Private::resumed() const {
+	return _serverEnrollmentGate.resumed();
+}
+
 Config &Instance::Private::config() const {
 	return *_config;
 }
@@ -1221,10 +1230,37 @@ void Instance::Private::sendRequest(
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId) {
-	if (!networkAllowed()) {
+	if (!AdmitServerEnrollmentRequest(
+			networkAllowed(),
+			requestId,
+			std::move(request),
+			std::move(callbacks),
+			_refusedRequests,
+			[this, shiftedDcId, msCanWait, needsLayer, afterRequestId](
+					mtpRequestId id,
+					SerializedRequest &&accepted,
+					ResponseHandler &&handlers) {
+				sendAcceptedRequest(
+					id,
+					std::move(accepted),
+					std::move(handlers),
+					shiftedDcId,
+					msCanWait,
+					needsLayer,
+					afterRequestId);
+			})) {
 		LOG(("MTP Error: refused a request while server enrollment is paused."));
-		return;
 	}
+}
+
+void Instance::Private::sendAcceptedRequest(
+		mtpRequestId requestId,
+		SerializedRequest &&request,
+		ResponseHandler &&callbacks,
+		ShiftedDcId shiftedDcId,
+		crl::time msCanWait,
+		bool needsLayer,
+		mtpRequestId afterRequestId) {
 	const auto session = getSession(shiftedDcId);
 
 	request->requestId = requestId;
@@ -2218,6 +2254,10 @@ void Instance::restart() {
 
 void Instance::resume() {
 	_private->resume();
+}
+
+rpl::producer<> Instance::resumed() const {
+	return _private->resumed();
 }
 
 bool Instance::isServerEnrollmentNetworkAllowed() const {
