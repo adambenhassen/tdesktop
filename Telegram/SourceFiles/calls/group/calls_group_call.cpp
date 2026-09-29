@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/data_changes.h"
 #include "data/data_user.h"
 #include "data/data_chat.h"
