@@ -209,14 +209,6 @@ jobs:
           printf 'artifact_ready=%s\n' "$ready" > "$evidence/artifact-publication.txt"
           echo "ARTIFACT_READY=$ready" >> "$GITHUB_ENV"
 
-      - name: Save Telegramd evidence.
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: Telegramd-macOS-arm64-evidence
-          path: ${{ env.REPO_NAME }}/out/Debug/evidence/
-          if-no-files-found: warn
-
       - name: Move artifact.
         if: always() && env.UPLOAD_ARTIFACT == 'true' && env.ARTIFACT_READY == 'true'
         run: |
@@ -246,7 +238,20 @@ jobs:
             cd "$artifact_dir"
             zip -r "../$asset_name" Telegramd.app
           )
-          echo "RELEASE_ASSET=$REPO_NAME/out/Debug/$asset_name" >> "$GITHUB_ENV"
+          release_asset="$REPO_NAME/out/Debug/$asset_name"
+          release_asset_sha256="$(shasum -a 256 "$release_asset" | awk '{print $1}')"
+          echo "RELEASE_ASSET=$release_asset" >> "$GITHUB_ENV"
+          echo "RELEASE_ASSET_SHA256=$release_asset_sha256" >> "$GITHUB_ENV"
+          printf 'release_asset_sha256=%s\n' "$release_asset_sha256" \
+            > "$REPO_NAME/out/Debug/evidence/release-asset-sha256.txt"
+
+      - name: Save Telegramd evidence.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegramd-macOS-arm64-evidence
+          path: ${{ env.REPO_NAME }}/out/Debug/evidence/
+          if-no-files-found: warn
 
       - name: Publish GitHub release.
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.ARTIFACT_READY == 'true'
@@ -254,9 +259,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
+          RELEASE_ASSET_SHA256: ${{ env.RELEASE_ASSET_SHA256 }}
         run: |
           set -euo pipefail
-          notes=$(printf 'Tag: %s\nCommit: %s\n\nThis app is unsigned and must be opened once via right-click > Open.' "$RELEASE_TAG" "$RELEASE_SHA")
+          notes=$(printf 'Tag: %s\nCommit: %s\nArchive SHA-256: %s\n\nThis app is unsigned and must be opened once via right-click > Open.' "$RELEASE_TAG" "$RELEASE_SHA" "$RELEASE_ASSET_SHA256")
           release_repo="$GITHUB_REPOSITORY"
           is_prerelease=false
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -273,9 +279,11 @@ jobs:
               --title "$RELEASE_TAG" \
               --notes "$notes" \
               "${create_args[@]}"
+          elif [[ "$(gh release view "$RELEASE_TAG" --repo "$release_repo" --json isDraft --jq .isDraft)" != true ]]; then
+            echo "Refusing to update an already-published release." >&2
+            exit 1
           fi
 
-          # Upload before publishing so an interrupted run leaves only a draft.
           gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" \
             --repo "$release_repo" \
             --clobber
@@ -283,5 +291,4 @@ jobs:
             --repo "$release_repo" \
             --title "$RELEASE_TAG" \
             --notes "$notes" \
-            --draft=false \
-            --prerelease="$is_prerelease"
+            --draft
