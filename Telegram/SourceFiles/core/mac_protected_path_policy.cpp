@@ -443,6 +443,10 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		const HomeRoots &homes,
 		const FileSystem &filesystem) {
 	auto result = MacProtectedPathPolicy();
+	if (homes.accountDatabase.isEmpty()
+		|| homes.foundation.isEmpty()) {
+		return result;
+	}
 	result._filesystem = filesystem;
 
 	const auto values = std::vector<QByteArray>{

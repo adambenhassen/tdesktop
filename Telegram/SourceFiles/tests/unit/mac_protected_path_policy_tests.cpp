@@ -54,7 +54,9 @@ struct FakeFileSystem final {
 		"/Users/alice",
 		LstatResult{ .type = FileType::Directory, .error = FileError::None });
 	return MacProtectedPathPolicy::Build(
-		HomeRoots{ .foundation = "/Users/alice" },
+		HomeRoots{
+			.accountDatabase = "/Users/alice",
+			.foundation = "/Users/alice" },
 		fs.operations());
 }
 
@@ -188,7 +190,9 @@ TEST_CASE(CaseNormalizationAndFirmlinkAliasesMatch) {
 		unicodeHome.toUtf8(),
 		LstatResult{ .type = FileType::Directory, .error = FileError::None });
 	const auto unicodePolicy = MacProtectedPathPolicy::Build(
-		HomeRoots{ .foundation = unicodeHome.toUtf8() },
+		HomeRoots{
+			.accountDatabase = unicodeHome.toUtf8(),
+			.foundation = unicodeHome.toUtf8() },
 		unicodeFs.operations());
 	CHECK(unicodePolicy.valid());
 	const auto decomposedHome = unicodeHome.normalized(
@@ -240,6 +244,36 @@ TEST_CASE(HomeRootsFromAllSourcesAreProtected) {
 		== ProtectedClass::BundleKeyed);
 }
 
+TEST_CASE(BuildRejectsMissingRequiredHomesWithoutProbing) {
+	auto fs = FakeFileSystem();
+	for (const auto &path : std::vector<QByteArray>{
+			 "/Users",
+			 "/Users/alice",
+			 "/tmp",
+			 "/tmp/h" }) {
+		fs.entries.emplace(
+			path,
+			LstatResult{ .type = FileType::Directory, .error = FileError::None });
+	}
+	const auto missingRequiredHomes = std::vector<HomeRoots>{
+		HomeRoots{
+			.environment = "/tmp/h",
+			.foundation = "/Users/alice" },
+		HomeRoots{
+			.accountDatabase = "/Users/alice",
+			.environment = "/tmp/h" } };
+	for (const auto &homes : missingRequiredHomes) {
+		ClearCalls(fs);
+		const auto policy = MacProtectedPathPolicy::Build(
+			homes,
+			fs.operations());
+		CHECK(!policy.valid());
+		CHECK(fs.lstatCalls.empty());
+		CHECK(fs.readlinkCalls.empty());
+		CHECK(fs.openCalls.empty());
+	}
+}
+
 TEST_CASE(BuildRejectsProtectedHomeCandidateWithoutProbing) {
 	auto fs = FakeFileSystem();
 	const auto directories = std::vector<QByteArray>{
@@ -258,7 +292,9 @@ TEST_CASE(BuildRejectsProtectedHomeCandidateWithoutProbing) {
 	const auto protectedPrefix = protectedRoot + QByteArray("/");
 	const auto policy = MacProtectedPathPolicy::Build(
 		HomeRoots{
-			.environment = protectedRoot + QByteArray("/tdata") },
+			.accountDatabase = "/Users/alice",
+			.environment = protectedRoot + QByteArray("/tdata"),
+			.foundation = "/Users/alice" },
 		fs.operations());
 	CHECK(!policy.valid());
 	for (const auto &call : fs.lstatCalls) {
@@ -301,7 +337,10 @@ TEST_CASE(BuildRejectsHomeWithSymlinkDotDotIntoProtectedPath) {
 	const auto protectedPrefix = protectedRoot + QByteArray("/");
 
 	const auto policy = MacProtectedPathPolicy::Build(
-		HomeRoots{ .environment = "/safe/link/../child" },
+		HomeRoots{
+			.accountDatabase = "/Users/alice",
+			.environment = "/safe/link/../child",
+			.foundation = "/Users/alice" },
 		fs.operations());
 	CHECK(!policy.valid());
 	CHECK_EQ(int(fs.readlinkCalls.size()), 1);
@@ -537,7 +576,9 @@ TEST_CASE(RealpathHomeAliasesAndFirmlinksShareTheBoundary) {
 		"/Users/alice",
 		LstatResult{ .type = FileType::Directory, .error = FileError::None });
 	const auto policy = MacProtectedPathPolicy::Build(
-		HomeRoots{ .foundation = "/Aliases/alice" },
+		HomeRoots{
+			.accountDatabase = "/Aliases/alice",
+			.foundation = "/Aliases/alice" },
 		fs.operations());
 	CHECK(policy.valid());
 
@@ -601,7 +642,9 @@ TEST_CASE(InvalidNamesAndMissingHomesFailClosed) {
 
 	auto missingHomeFs = FakeFileSystem();
 	const auto missingHome = MacProtectedPathPolicy::Build(
-		HomeRoots{ .foundation = "/Users/alice" },
+		HomeRoots{
+			.accountDatabase = "/Users/alice",
+			.foundation = "/Users/alice" },
 		missingHomeFs.operations());
 	CHECK(!missingHome.valid());
 	const auto missingResult = missingHome.Resolve(
