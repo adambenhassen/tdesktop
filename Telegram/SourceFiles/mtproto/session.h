@@ -79,6 +79,12 @@ struct SessionOptions {
 
 };
 
+[[nodiscard]] inline bool UseTcpForProxy(
+	ProxyData::Type proxyType,
+	bool hasCustomServer) {
+	return (proxyType != ProxyData::Type::Http) || hasCustomServer;
+}
+
 class Session;
 class SessionData final {
 public:
@@ -119,7 +125,11 @@ public:
 	void queueTryToReceive();
 	void queueNeedToResumeAndSend();
 	void queueConnectionStateChange(int newState);
-	void queuePinnedServerFailure(PinnedServerFailure failure);
+	void queuePinnedServerFailure(
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	void queueResetDone();
 	void queueSendAnything(crl::time msCanWait = 0);
 
@@ -219,7 +229,11 @@ public:
 	void tryToReceive();
 	void needToResumeAndSend();
 	void connectionStateChange(int newState);
-	void pinnedServerFailure(PinnedServerFailure failure);
+	void pinnedServerFailure(
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint = 0,
+		const QString &pinnedHostname = {},
+		const QString &dialledAddress = {});
 	void stopUntilPinChange();
 	void resetDone();
 	void sendAnything(crl::time msCanWait = 0);

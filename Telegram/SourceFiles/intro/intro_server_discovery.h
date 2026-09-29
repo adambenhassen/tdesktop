@@ -17,10 +17,47 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <functional>
 #include <optional>
 
-class QTcpSocket;
+class QSocketNotifier;
 
 namespace Intro {
 namespace details {
+
+namespace internal {
+
+[[nodiscard]] bool ConfigureNativeSocketForSend(
+	qintptr descriptor,
+	int &error);
+[[nodiscard]] qint64 SendNativeSocket(
+	qintptr descriptor,
+	const char *data,
+	int size,
+	int &error);
+
+}
+
+class ServerDiscoveryFlow final {
+public:
+	struct Callbacks {
+		std::function<void()> publicHttps;
+		std::function<void()> localDirect;
+		std::function<void(bool)> failed;
+	};
+
+	[[nodiscard]] bool start(
+		const MTP::ServerSelectionCheck &selection,
+		Callbacks callbacks);
+	[[nodiscard]] bool discoveryFailed(bool connectionFailure);
+	void finish();
+	void cancel();
+
+	[[nodiscard]] bool active() const {
+		return _active;
+	}
+
+private:
+	Callbacks _callbacks;
+	bool _active = false;
+};
 
 class ServerWidgetDiscovery final : public QObject {
 public:
@@ -34,6 +71,7 @@ public:
 		std::function<void(MTP::ServerDiscoveryResult)> finished;
 		std::function<void(bool)> failed;
 		std::function<void()> candidateStarted;
+		std::function<void()> beforeRequestSend;
 	};
 
 	explicit ServerWidgetDiscovery(QObject *parent);
@@ -56,7 +94,9 @@ public:
 private:
 	void startNextAddress();
 	void sendRequest();
-	void readyRead();
+	void nativeReadyRead();
+	void finishNativeRead();
+	void closeNativeSocket();
 	void fail(bool connectionFailure);
 	void finish(MTP::ServerDiscoveryResult result);
 	void stopSocket();
@@ -68,11 +108,21 @@ private:
 	QList<QHostAddress> _addresses;
 	int _nextAddress = 0;
 	int _writeOffset = 0;
+	bool _beforeRequestSendNotified = false;
 	bool _writeClosed = false;
-	QTcpSocket *_socket = nullptr;
+	QHostAddress _resolvedAddress;
+	qintptr _nativeReadDescriptor = -1;
+	bool _connecting = false;
+	QSocketNotifier *_nativeReadNotifier = nullptr;
+	QSocketNotifier *_nativeWriteNotifier = nullptr;
 	Callbacks _callbacks;
 	bool _running = false;
 };
+
+[[nodiscard]] bool SubmitServerSelection(
+	const QString &value,
+	const std::function<void(MTP::ServerSelectionStatus)> &rejected,
+	const std::function<void(const MTP::ServerSelectionCheck &)> &accepted);
 
 } // namespace details
 } // namespace Intro

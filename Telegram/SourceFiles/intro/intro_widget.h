@@ -15,7 +15,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_cloud_password.h"
 #include "media/player/media_player_float.h"
 
+#include <memory>
 #include <optional>
+
+namespace MTP {
+struct PinnedServerFailureReport;
+} // namespace MTP
 
 namespace Main {
 class Account;
@@ -26,6 +31,7 @@ class IconButton;
 class RoundButton;
 class LinkButton;
 class FlatLabel;
+class Show;
 template <typename Widget>
 class FadeWrap;
 } // namespace Ui
@@ -122,6 +128,13 @@ enum class EnterPoint : uchar {
 	Qr,
 };
 
+void ShowServerIdentityChange(
+	not_null<Main::Account*> account,
+	const MTP::PinnedServerFailureReport &report,
+	std::shared_ptr<Ui::Show> show,
+	Fn<void()> resetDialog,
+	Fn<void()> failed);
+
 class Widget
 	: public Ui::RpWidget
 	, private Media::Player::FloatDelegate
@@ -190,6 +203,8 @@ private:
 	void appendStep(details::Step *step);
 
 	void showTerms(Fn<void()> callback);
+	void showServerIdentityChange(
+		const MTP::PinnedServerFailureReport &report);
 
 	// FloatDelegate
 	[[nodiscard]] auto floatPlayerDelegate()
@@ -241,6 +256,7 @@ private:
 
 	bool _backAvailable = false;
 	bool _nextShown = true;
+	bool _serverIdentityDialogShown = false;
 	Ui::Animations::Simple _nextShownAnimation;
 
 };

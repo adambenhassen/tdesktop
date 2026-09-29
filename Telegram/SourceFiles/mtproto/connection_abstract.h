@@ -101,6 +101,9 @@ public:
 
 	[[nodiscard]] virtual QString transport() const = 0;
 	[[nodiscard]] virtual QString tag() const = 0;
+	[[nodiscard]] virtual QString endpoint() const {
+		return {};
+	}
 
 	void setSentEncryptedWithKeyId(uint64 keyId) {
 		_sentEncryptedWithKeyId = keyId;

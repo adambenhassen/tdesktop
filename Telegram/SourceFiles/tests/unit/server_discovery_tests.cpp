@@ -8,12 +8,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include "intro/intro_server_discovery.h"
+#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QList>
+#include <QtCore/QSocketNotifier>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostInfo>
@@ -24,9 +26,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #if defined Q_OS_WIN
 #include <winsock2.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
-#include <sys/time.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -114,26 +119,6 @@ void CloseNativeTestSocket(NativeTestSocket socket) {
 #endif
 }
 
-[[nodiscard]] bool SetNativeTestReceiveTimeout(NativeTestSocket socket) {
-#if defined Q_OS_WIN
-	DWORD timeout = 1000;
-	return ::setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		reinterpret_cast<const char *>(&timeout),
-		int(sizeof(timeout))) == 0;
-#else
-	const timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
-	return ::setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		&timeout,
-		socklen_t(sizeof(timeout))) == 0;
-#endif
-}
-
 [[nodiscard]] qint64 ReceiveNativeTestSocket(
 		NativeTestSocket socket,
 		char *buffer,
@@ -185,6 +170,44 @@ TEST_CASE(PublicSelectionDefaultsToHttps) {
 	CHECK_EQ(result.operationalPort, 443);
 }
 
+TEST_CASE(PublicDiscoveryFailureDoesNotStartLocalDirect) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	auto publicAttempts = 0;
+	auto localAttempts = 0;
+	auto failures = 0;
+	auto flow = Intro::details::ServerDiscoveryFlow();
+	CHECK(flow.start(
+		selection,
+		{
+			.publicHttps = [&] { ++publicAttempts; },
+			.localDirect = [&] { ++localAttempts; },
+			.failed = [&](bool) { ++failures; },
+		}));
+	CHECK_EQ(publicAttempts, 1);
+	CHECK(flow.discoveryFailed(true));
+	CHECK(!flow.active());
+	CHECK_EQ(failures, 1);
+	CHECK_EQ(localAttempts, 0);
+	CHECK(!flow.discoveryFailed(false));
+	CHECK_EQ(failures, 1);
+}
+
+TEST_CASE(LocalSelectionStartsOnlyLocalDirect) {
+	const auto selection = CheckServerSelection(u"localhost:443"_q);
+	auto publicAttempts = 0;
+	auto localAttempts = 0;
+	auto flow = Intro::details::ServerDiscoveryFlow();
+	CHECK(flow.start(
+		selection,
+		{
+			.publicHttps = [&] { ++publicAttempts; },
+			.localDirect = [&] { ++localAttempts; },
+		}));
+	CHECK_EQ(publicAttempts, 0);
+	CHECK_EQ(localAttempts, 1);
+}
+
 TEST_CASE(LocalSelectionRequiresExplicitPort) {
 	const auto result = CheckServerSelection(u"localhost"_q);
 	CHECK(result.status == ServerSelectionStatus::NoPort);
@@ -195,17 +218,204 @@ TEST_CASE(LocalSelectionRequiresExplicitPort) {
 	CHECK_EQ(withPort.normalizedSelection, u"localhost:443"_q);
 }
 
-TEST_CASE(EveryIpLiteralUsesLocalPreflight) {
-	const auto result = CheckServerSelection(u"203.0.113.10:443"_q);
+TEST_CASE(LocalNameDiscoveryBindsToItsResolvedSpecialUseAddress) {
+	const auto selection = CheckServerSelection(u"printer.local:2443"_q);
+	const auto nonce = QByteArray(32, '\x08');
+	auto result = ParseLocalDiscoveryResponse(
+		selection,
+		nonce,
+		LocalResponse(nonce));
 	CHECK(result.valid());
-	CHECK(result.policy == ServerDiscoveryPolicy::LocalDirect);
+	result.resolvedAddress = u"169.254.1.10"_q;
 
-	const auto global = CheckServerSelection(u"8.8.8.8:443"_q);
-	CHECK(global.valid());
-	CHECK(global.policy == ServerDiscoveryPolicy::LocalDirect);
-	CHECK(IsPublicAddress(QHostAddress(u"8.8.8.8"_q)));
-	CHECK(!IsPublicAddress(QHostAddress(u"203.0.113.10"_q)));
-	CHECK(!IsPublicAddress(QHostAddress(u"10.0.0.1"_q)));
+	const auto server = BuildCustomServerFromDiscovery(selection, result);
+	CHECK(server.has_value());
+	if (!server) {
+		return;
+	}
+	CHECK_EQ(server->ip, "169.254.1.10");
+	CHECK_EQ(server->serverSelection, "printer.local:2443");
+	CHECK(server->discoveryPolicy == ServerDiscoveryPolicy::LocalDirect);
+	CHECK_EQ(server->discoveryOrigin, "local:printer.local:2443");
+	auto options = DcOptions(Environment::Production);
+	CHECK(options.setCustomServer(*server));
+	auto restored = DcOptions(Environment::Production);
+	CHECK(restored.constructFromSerialized(options.serialize()));
+	CHECK_EQ(restored.customServer().ip, "169.254.1.10");
+
+	const auto literal = CheckServerSelection(u"169.254.1.10:2443"_q);
+	CHECK(literal.status == ServerSelectionStatus::PublicIpLiteral);
+	CHECK(!BuildCustomServerFromDiscovery(literal, result).has_value());
+}
+
+TEST_CASE(LocalLiteralAllowListCoversNetworkBoundaries) {
+	const auto allowed = {
+		std::pair{ u"10.0.0.1:2443"_q, true },
+		std::pair{ u"172.16.0.1:2443"_q, true },
+		std::pair{ u"192.168.0.1:2443"_q, true },
+		std::pair{ u"100.64.0.1:2443"_q, true },
+		std::pair{ u"127.0.0.1:2443"_q, true },
+		std::pair{ u"[::1]:2443"_q, true },
+		std::pair{ u"[fc00::1]:2443"_q, true },
+		std::pair{ u"[fe80::1]:2443"_q, true },
+		std::pair{ u"11.0.0.1:2443"_q, false },
+		std::pair{ u"172.32.0.1:2443"_q, false },
+		std::pair{ u"192.169.0.1:2443"_q, false },
+		std::pair{ u"100.128.0.1:2443"_q, false },
+		std::pair{ u"128.0.0.1:2443"_q, false },
+		std::pair{ u"[::2]:2443"_q, false },
+		std::pair{ u"[fe00::1]:2443"_q, false },
+		std::pair{ u"[fec0::1]:2443"_q, false },
+		std::pair{ u"8.8.8.8:2443"_q, false },
+		std::pair{ u"169.254.1.1:2443"_q, false },
+		std::pair{ u"198.18.0.1:2443"_q, false },
+		std::pair{ u"203.0.113.1:2443"_q, false },
+		std::pair{ u"[64:ff9b::1]:2443"_q, false },
+	};
+	for (const auto &[value, shouldBeAllowed] : allowed) {
+		const auto selection = CheckServerSelection(value);
+		CHECK_EQ(selection.valid(), shouldBeAllowed);
+		if (shouldBeAllowed) {
+			CHECK(selection.policy == ServerDiscoveryPolicy::LocalDirect);
+		} else {
+			CHECK(selection.status == ServerSelectionStatus::PublicIpLiteral);
+		}
+	}
+}
+
+TEST_CASE(MappedIpv6LiteralUsesEmbeddedIpv4Policy) {
+	const auto privateAddress = CheckServerSelection(
+		u"[::ffff:192.168.1.5]:2443"_q);
+	CHECK(privateAddress.valid());
+	CHECK(privateAddress.policy == ServerDiscoveryPolicy::LocalDirect);
+
+	const auto publicAddress = CheckServerSelection(
+		u"[::ffff:8.8.8.8]:2443"_q);
+	CHECK(publicAddress.status == ServerSelectionStatus::PublicIpLiteral);
+}
+
+TEST_CASE(InetAtonNumericHostsAreRefusedBeforeLocalDiscovery) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
+	for (const auto &host : {
+		u"0x8080808"_q,
+		u"0X8080808"_q,
+		u"134744072"_q,
+		u"01002004010"_q,
+		u"１３４７４４０７２"_q,
+		u"０ｘ８０８０８０８"_q,
+	}) {
+		const auto selection = CheckServerSelection(
+			host + u":"_q + QString::number(listener.serverPort()));
+		CHECK(selection.status == ServerSelectionStatus::PublicIpLiteral);
+		CHECK(!selection.valid());
+		auto candidates = 0;
+		Intro::details::ServerWidgetDiscovery discovery(nullptr);
+		discovery.start(
+			selection,
+			QByteArray(32, '\0'),
+			{ QHostAddress(QHostAddress::LocalHost) },
+			{
+				.candidateStarted = [&] { ++candidates; },
+			});
+		CHECK(!discovery.running());
+		CHECK_EQ(candidates, 0);
+		CHECK(!listener.waitForNewConnection(100));
+	}
+}
+
+TEST_CASE(RefusedIpLiteralDoesNotStartLocalConnection) {
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	const auto selection = CheckServerSelection(
+		u"8.8.8.8:"_q + QString::number(server.serverPort()));
+	Intro::details::ServerWidgetDiscovery discovery(nullptr);
+	auto candidates = 0;
+	auto failed = false;
+	discovery.start(
+		selection,
+		QByteArray(32, '\0'),
+		{ QHostAddress(QHostAddress::LocalHost) },
+		{
+			.failed = [&](bool) { failed = true; },
+			.candidateStarted = [&] { ++candidates; },
+		});
+	CHECK(!discovery.running());
+	CHECK(failed);
+	CHECK_EQ(candidates, 0);
+	CHECK(!server.waitForNewConnection(100));
+}
+
+TEST_CASE(SubmitPathRefusesPublicIpv4AndIpv6BeforeNetwork) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
+	const auto port = QString::number(listener.serverPort());
+	for (const auto &selection : {
+		u"8.8.8.8:"_q + port,
+		u"[2001:4860::8888]:"_q + port,
+	}) {
+		auto attempts = 0;
+		auto rejected = ServerSelectionStatus::Valid;
+		const auto accepted = Intro::details::SubmitServerSelection(
+			selection,
+			[&](ServerSelectionStatus status) { rejected = status; },
+			[&](const ServerSelectionCheck &) {
+				++attempts;
+				QTcpSocket socket;
+				socket.connectToHost(
+					QHostAddress(QHostAddress::LocalHost),
+					listener.serverPort());
+				(void)socket.waitForConnected(100);
+			});
+		CHECK(!accepted);
+		CHECK(rejected == ServerSelectionStatus::PublicIpLiteral);
+		CHECK_EQ(attempts, 0);
+		CHECK(!listener.waitForNewConnection(100));
+	}
+}
+
+TEST_CASE(LocalLiteralRequiresPortWhileDottedAddressKeepsDomainRoute) {
+	CHECK(CheckServerSelection(u"10.0.0.1"_q).status
+		== ServerSelectionStatus::NoPort);
+	CHECK(CheckServerSelection(u"8.8.8.8"_q).status
+		== ServerSelectionStatus::PublicIpLiteral);
+	CHECK(CheckServerSelection(u"[::1]"_q).status
+		== ServerSelectionStatus::NoPort);
+	CHECK(CheckServerSelection(u"[2001:4860::8888]"_q).status
+		== ServerSelectionStatus::PublicIpLiteral);
+	const auto dotted = CheckServerSelection(u"8.8.8.8.:2443"_q);
+	CHECK(dotted.valid());
+	CHECK(dotted.policy == ServerDiscoveryPolicy::PublicHttps);
+}
+
+TEST_CASE(DomainAndLocalNameRoutesRemainUnchanged) {
+	for (const auto &domain : {
+		u"telegram-server.tailaa4918.ts.net"_q,
+		u"example.com"_q,
+	}) {
+		const auto selection = CheckServerSelection(domain);
+		CHECK(selection.valid());
+		CHECK(selection.policy == ServerDiscoveryPolicy::PublicHttps);
+	}
+	for (const auto &local : {
+		u"localhost:2443"_q,
+		u"server.local:2443"_q,
+		u"server.home.arpa:2443"_q,
+		u"intranet:2443"_q,
+	}) {
+		const auto selection = CheckServerSelection(local);
+		CHECK(selection.valid());
+		CHECK(selection.policy == ServerDiscoveryPolicy::LocalDirect);
+	}
 }
 
 TEST_CASE(PublicDiscoveryRejectsSpecialPurposeIpv6Addresses) {
@@ -236,6 +446,111 @@ TEST_CASE(PublicDiscoveryRejectsSpecialPurposeIpv6Addresses) {
 TEST_CASE(PublicDiscoveryNormalizesIpv4MappedAddresses) {
 	CHECK(IsPublicAddress(QHostAddress(u"::ffff:8.8.8.8"_q)));
 	CHECK(!IsPublicAddress(QHostAddress(u"::ffff:10.0.0.1"_q)));
+}
+
+TEST_CASE(PublicDiscoveryAllowsOnlyMagicDnsTailscaleAddresses) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	CHECK(IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"100.124.236.66"_q)));
+	CHECK(IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"fd7a:115c:a1e0::1234"_q)));
+	CHECK(IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"::ffff:100.124.236.66"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"8.8.8.8"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"::ffff:10.0.0.5"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"10.0.0.5"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"127.0.0.1"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		selection,
+		QHostAddress(u"fd12:3456::5"_q)));
+	CHECK(!IsPublicAddress(QHostAddress(u"100.124.236.66"_q)));
+	CHECK(!IsPublicDiscoveryAddress(
+		CheckServerSelection(u"100.124.236.66:2443"_q),
+		QHostAddress(u"100.124.236.66"_q)));
+}
+
+TEST_CASE(PublicDiscoveryUsesMagicDnsPolicyForDnsAnswers) {
+	const auto magicDns = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	const auto answers = QList<QHostAddress>{
+		QHostAddress(u"10.0.0.5"_q),
+		QHostAddress(u"100.124.236.66"_q),
+	};
+	const auto accepted = FirstSafePublicDiscoveryAddress(
+		magicDns,
+		answers);
+	CHECK(accepted.has_value());
+	if (accepted) {
+		CHECK_EQ(accepted->toString(), u"100.124.236.66"_q);
+	}
+
+	const auto privateAnswers = QList<QHostAddress>{
+		QHostAddress(u"10.0.0.5"_q),
+		QHostAddress(u"127.0.0.1"_q),
+		QHostAddress(u"fd12:3456::5"_q),
+	};
+	CHECK(!FirstSafePublicDiscoveryAddress(
+		magicDns,
+		privateAnswers).has_value());
+	CHECK(!FirstSafePublicDiscoveryAddress(
+		CheckServerSelection(u"example.com"_q),
+		{ QHostAddress(u"100.124.236.66"_q) }).has_value());
+	CHECK(!FirstSafePublicDiscoveryAddress(
+		magicDns,
+		{ QHostAddress(u"::ffff:10.0.0.5"_q) }).has_value());
+}
+
+TEST_CASE(PinnedHostnameAddressFilteringPreservesOrderAndCapsAnswers) {
+	const auto hostname = u"telegram-server.tailaa4918.ts.net"_q;
+	const auto addresses = QList<QHostAddress>{
+		QHostAddress(u"8.8.8.8"_q),
+		QHostAddress(u"127.0.0.1"_q),
+		QHostAddress(u"100.124.236.66"_q),
+		QHostAddress(u"10.0.0.5"_q),
+		QHostAddress(u"fd7a:115c:a1e0::1234"_q),
+		QHostAddress(u"192.168.1.1"_q),
+	};
+	const auto ipv4 = FilterPinnedServerAddresses(hostname, addresses, false);
+	CHECK_EQ(int(ipv4.size()), 1);
+	if (ipv4.size() == 1) {
+		CHECK(ipv4.front() == QHostAddress(u"100.124.236.66"_q));
+	}
+
+	const auto ipv6 = FilterPinnedServerAddresses(hostname, addresses, true);
+	CHECK_EQ(int(ipv6.size()), 1);
+	if (ipv6.size() == 1) {
+		CHECK(ipv6.front() == QHostAddress(u"fd7a:115c:a1e0::1234"_q));
+	}
+
+	const auto capped = FilterPinnedServerAddresses(
+		u"server.example.com"_q,
+		{
+			QHostAddress(u"8.8.8.1"_q),
+			QHostAddress(u"8.8.8.2"_q),
+			QHostAddress(u"8.8.8.3"_q),
+			QHostAddress(u"8.8.8.4"_q),
+			QHostAddress(u"8.8.8.5"_q),
+			QHostAddress(u"8.8.8.6"_q),
+			QHostAddress(u"8.8.8.7"_q),
+			QHostAddress(u"8.8.8.8"_q),
+			QHostAddress(u"8.8.8.9"_q),
+		},
+		false);
+	CHECK_EQ(int(capped.size()), 8);
+	CHECK(capped.front() == QHostAddress(u"8.8.8.1"_q));
+	CHECK(capped.back() == QHostAddress(u"8.8.8.8"_q));
 }
 
 TEST_CASE(SelectionRejectsNonRoutableIpLiterals) {
@@ -395,110 +710,11 @@ TEST_CASE(LocalDiscoveryStartsSocketForLiteralAndLocalName) {
 			peer->deleteLater();
 		}
 		client.disconnectFromHost();
-		client.waitForDisconnected(1000);
-	}
-}
-
-TEST_CASE(LocalDiscoveryRequestHalfClosesBeforeResponse) {
-	QByteArray received;
-	QTcpServer server;
-	CHECK(server.listen(QHostAddress::LocalHost));
-	if (!server.isListening()) {
-		return;
-	}
-	server.pauseAccepting();
-
-	const auto selection = CheckServerSelection(
-		u"127.0.0.1:"_q + QString::number(server.serverPort()));
-	const auto nonce = QByteArray(32, '\x04');
-	const auto request = BuildLocalDiscoveryRequest(nonce);
-	const auto response = LocalResponse(nonce);
-	QTcpSocket client;
-	CHECK(StartLocalDiscoverySocket(
-		client,
-		selection,
-		server.serverAddress()));
-	CHECK(client.waitForConnected(1000));
-	const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-#if defined Q_OS_WIN
-	const auto invalidPeer = INVALID_SOCKET;
-#else
-	const auto invalidPeer = -1;
-#endif
-	CHECK(peer != invalidPeer);
-	if (peer == invalidPeer) {
-		return;
-	}
-
-	CHECK(SetNativeTestReceiveTimeout(peer));
-	auto writeOffset = 0;
-	auto writeClosed = false;
-	auto writeSucceeded = true;
-	while (!writeClosed && writeSucceeded) {
-		writeSucceeded = SendLocalDiscoveryRequest(
-			client,
-			request,
-			writeOffset,
-			writeClosed);
-		CHECK(writeSucceeded);
-		if (!writeClosed) {
-			const auto bytesWritten = client.waitForBytesWritten(1000);
-			CHECK(bytesWritten);
-			if (!bytesWritten) {
-				break;
-			}
+		if (client.state() != QAbstractSocket::UnconnectedState) {
+			CHECK(client.waitForDisconnected(1000));
 		}
+		CHECK(client.state() == QAbstractSocket::UnconnectedState);
 	}
-	CHECK(writeClosed);
-	CHECK_EQ(writeOffset, request.size());
-
-	QByteArray peerRequest;
-	auto peerSawEof = false;
-	while (peerRequest.size() <= request.size()) {
-		char buffer[256];
-		const auto read = ReceiveNativeTestSocket(
-			peer,
-			buffer,
-			int(sizeof(buffer)));
-		if (read > 0) {
-			peerRequest.append(buffer, int(read));
-			continue;
-		}
-		if (read == 0) {
-			peerSawEof = true;
-		}
-		if (read <= 0) {
-			break;
-		}
-	}
-	CHECK(peerSawEof);
-	CHECK_EQ(peerRequest, request);
-	if (!peerSawEof || peerRequest != request) {
-		CloseNativeTestSocket(peer);
-		return;
-	}
-
-	auto responseOffset = 0;
-	while (responseOffset < response.size()) {
-		const auto written = SendNativeTestSocket(
-			peer,
-			response.constData() + responseOffset,
-			response.size() - responseOffset);
-		CHECK(written > 0);
-		if (written <= 0) {
-			break;
-		}
-		responseOffset += int(written);
-	}
-	CHECK_EQ(responseOffset, response.size());
-	CloseNativeTestSocket(peer);
-	while (client.state() != QAbstractSocket::UnconnectedState
-		&& client.waitForReadyRead(1000)) {
-		received += client.readAll();
-	}
-	received += client.readAll();
-	CHECK(IsCompleteLocalDiscoveryResponse(received));
-	CHECK(ParseLocalDiscoveryResponse(selection, nonce, received).valid());
 }
 
 TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
@@ -516,9 +732,6 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 		return;
 	}
 
-	const auto nonce = QByteArray(32, '\x05');
-	const auto request = BuildLocalDiscoveryRequest(nonce);
-	const auto response = LocalResponse(nonce);
 	const QList<QHostAddress> addresses{
 		QHostAddress(u"127.0.0.2"_q),
 		server.serverAddress(),
@@ -555,76 +768,258 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	if (peer == invalidPeer) {
 		return;
 	}
-	const auto hasReceiveTimeout = SetNativeTestReceiveTimeout(peer);
-	CHECK(hasReceiveTimeout);
-	if (!hasReceiveTimeout) {
-		CloseNativeTestSocket(peer);
+	CloseNativeTestSocket(peer);
+	client.waitForDisconnected(1000);
+}
+
+#if !defined Q_OS_WIN
+TEST_CASE(NativeDiscoverySenderSurvivesEpipe) {
+	int sockets[2] = { -1, -1 };
+	const auto pairOpened = (::socketpair(
+		AF_UNIX,
+		SOCK_STREAM,
+		0,
+		sockets) == 0);
+	CHECK(pairOpened);
+	if (!pairOpened) {
+		return;
+	}
+	auto error = 0;
+	const auto configured =
+		Intro::details::internal::ConfigureNativeSocketForSend(
+			qintptr(sockets[0]),
+			error);
+	CHECK(configured);
+	if (!configured) {
+		CloseNativeTestSocket(sockets[0]);
+		CloseNativeTestSocket(sockets[1]);
+		return;
+	}
+	CloseNativeTestSocket(sockets[1]);
+
+	const auto child = ::fork();
+	CHECK(child >= 0);
+	if (child == 0) {
+		struct sigaction action = {};
+		action.sa_handler = SIG_DFL;
+		sigemptyset(&action.sa_mask);
+		if (::sigaction(SIGPIPE, &action, nullptr) != 0) {
+			::_exit(2);
+		}
+		auto unblockedSignals = sigset_t();
+		if (sigemptyset(&unblockedSignals) != 0
+			|| sigaddset(&unblockedSignals, SIGPIPE) != 0
+			|| ::sigprocmask(SIG_UNBLOCK, &unblockedSignals, nullptr) != 0) {
+			::_exit(2);
+		}
+		auto sendError = 0;
+		const auto byte = 'x';
+		const auto sent = Intro::details::internal::SendNativeSocket(
+			qintptr(sockets[0]),
+			&byte,
+			1,
+			sendError);
+		::_exit((sent == -1 && sendError == EPIPE) ? 0 : 1);
+	}
+	if (child < 0) {
+		CloseNativeTestSocket(sockets[0]);
+		return;
+	}
+	auto status = 0;
+	auto waited = pid_t(-1);
+	do {
+		waited = ::waitpid(child, &status, 0);
+	} while (waited < 0 && errno == EINTR);
+	CHECK_EQ(waited, child);
+	if (waited == child) {
+		const auto exited = WIFEXITED(status);
+		CHECK(exited);
+		if (exited) {
+			CHECK_EQ(WEXITSTATUS(status), 0);
+		}
+	}
+	CloseNativeTestSocket(sockets[0]);
+}
+
+TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	server.pauseAccepting();
+	const auto listenerNonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(listenerNonBlocking);
+	if (!listenerNonBlocking) {
 		return;
 	}
 
-	auto writeOffset = 0;
-	auto writeClosed = false;
-	while (!writeClosed) {
-		CHECK(SendLocalDiscoveryRequest(
-			client,
-			request,
-			writeOffset,
-			writeClosed));
-		if (!writeClosed) {
-			CHECK(client.waitForBytesWritten(1000));
-		}
-	}
-	CHECK_EQ(writeOffset, request.size());
-
-	QByteArray receivedRequest;
-	auto peerSawEof = false;
-	while (receivedRequest.size() <= request.size()) {
-		char buffer[256];
-		const auto read = ReceiveNativeTestSocket(
-			peer,
-			buffer,
-			int(sizeof(buffer)));
-		if (read > 0) {
-			receivedRequest.append(buffer, int(read));
-			continue;
-		}
-		if (read == 0) {
-			peerSawEof = true;
-		}
-		break;
-	}
-	CHECK(peerSawEof);
-	CHECK_EQ(receivedRequest, request);
-	if (!peerSawEof || receivedRequest != request) {
-		CloseNativeTestSocket(peer);
+	const auto selection = CheckServerSelection(
+		u"127.0.0.1:"_q + QString::number(server.serverPort()));
+	CHECK(selection.valid());
+	if (!selection) {
 		return;
 	}
-	auto responseOffset = 0;
-	while (responseOffset < response.size()) {
-		const auto written = SendNativeTestSocket(
-			peer,
-			response.constData() + responseOffset,
-			response.size() - responseOffset);
-		CHECK(written > 0);
-		if (written <= 0) {
+	const auto nonce = QByteArray(32, '\x09');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+	NativeTestSocket responsePeer = -1;
+	auto candidatesStarted = 0;
+	auto peersAccepted = 0;
+	auto firstPeerClosed = false;
+	auto resetReachedClientBeforeSend = false;
+	auto responseSent = false;
+	auto finished = false;
+	auto failed = false;
+	auto receivedRequest = QByteArray();
+	QTimer poll;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (responsePeer == -1) {
+			responsePeer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (responsePeer == -1) {
+				return;
+			}
+			++peersAccepted;
+			const auto peerNonBlocking = SetNativeTestNonBlocking(
+				qintptr(responsePeer));
+			CHECK(peerNonBlocking);
+			if (!peerNonBlocking) {
+				CloseNativeTestSocket(responsePeer);
+				responsePeer = -1;
+				return;
+			}
+		}
+
+		while (true) {
+			char buffer[256];
+			const auto read = ReceiveNativeTestSocket(
+				responsePeer,
+				buffer,
+				int(sizeof(buffer)));
+			if (read > 0) {
+				receivedRequest.append(buffer, int(read));
+				continue;
+			}
+			if (read != 0) {
+				return;
+			}
 			break;
 		}
-		responseOffset += int(written);
-	}
-	CHECK_EQ(responseOffset, response.size());
-	CloseNativeTestSocket(peer);
-	QByteArray receivedResponse;
-	while (client.state() != QAbstractSocket::UnconnectedState
-		&& client.waitForReadyRead(1000)) {
-		receivedResponse += client.readAll();
-	}
-	receivedResponse += client.readAll();
-	CHECK(IsCompleteLocalDiscoveryResponse(receivedResponse));
-	CHECK(ParseLocalDiscoveryResponse(
+		CHECK_EQ(receivedRequest, request);
+		auto responseOffset = 0;
+		while (responseOffset < response.size()) {
+			const auto written = SendNativeTestSocket(
+				responsePeer,
+				response.constData() + responseOffset,
+				response.size() - responseOffset);
+			CHECK(written > 0);
+			if (written <= 0) {
+				break;
+			}
+			responseOffset += int(written);
+		}
+		CHECK_EQ(responseOffset, response.size());
+		responseSent = (responseOffset == response.size());
+		CloseNativeTestSocket(responsePeer);
+		responsePeer = -1;
+	});
+	poll.start(1);
+
+	discovery.start(
 		selection,
 		nonce,
-		receivedResponse).valid());
+		{ server.serverAddress(), server.serverAddress() },
+		{
+			.finished = [&](ServerDiscoveryResult result) {
+				finished = true;
+				CHECK(result.valid());
+				loop.quit();
+			},
+			.failed = [&](bool) {
+				failed = true;
+				loop.quit();
+			},
+			.candidateStarted = [&] {
+				++candidatesStarted;
+			},
+			.beforeRequestSend = [&] {
+				if (firstPeerClosed) {
+					return;
+				}
+				const auto peer = AcceptNativeTestSocket(
+					server.socketDescriptor());
+				CHECK(peer != -1);
+				if (peer == -1) {
+					return;
+				}
+				++peersAccepted;
+				const auto abortiveClose = linger{ 1, 0 };
+				const auto lingerSet = (::setsockopt(
+					peer,
+					SOL_SOCKET,
+					SO_LINGER,
+					&abortiveClose,
+					socklen_t(sizeof(abortiveClose))) == 0);
+				CHECK(lingerSet);
+				CloseNativeTestSocket(peer);
+				if (!lingerSet) {
+					return;
+				}
+				firstPeerClosed = true;
+
+				auto clientDescriptor = qintptr(-1);
+				const auto notifiers =
+					discovery.findChildren<QSocketNotifier*>();
+				for (const auto notifier : notifiers) {
+					if (notifier->type() == QSocketNotifier::Write) {
+						clientDescriptor = notifier->socket();
+						break;
+					}
+				}
+				CHECK(clientDescriptor != -1);
+				if (clientDescriptor == -1) {
+					return;
+				}
+				pollfd resetReady = {
+					int(clientDescriptor),
+					POLLIN,
+					0,
+				};
+				auto ready = 0;
+				do {
+					ready = ::poll(&resetReady, 1, 1000);
+				} while (ready < 0 && errno == EINTR);
+				CHECK(ready == 1);
+				resetReachedClientBeforeSend = (ready == 1)
+					&& (resetReady.revents & (POLLERR | POLLHUP));
+				CHECK(resetReachedClientBeforeSend);
+			},
+		});
+	loop.exec();
+	poll.stop();
+	if (responsePeer != -1) {
+		CloseNativeTestSocket(responsePeer);
+	}
+
+	CHECK_EQ(candidatesStarted, 2);
+	CHECK_EQ(peersAccepted, 2);
+	CHECK(firstPeerClosed);
+	CHECK(resetReachedClientBeforeSend);
+	CHECK_EQ(receivedRequest, request);
+	CHECK(responseSent);
+	CHECK(finished);
+	CHECK(!failed);
 }
+#endif
 
 TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	using Intro::details::ServerWidgetDiscovery;
@@ -663,43 +1058,54 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 	QEventLoop loop;
 	QTimer poll;
 	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+	constexpr auto kPendingConnectDeadline = 1000;
 
 	auto started = 0;
 	auto accepted = 0;
 	auto finished = false;
 	auto failed = false;
-	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
 #if defined Q_OS_WIN
-		const auto invalidPeer = INVALID_SOCKET;
+	const auto invalidPeer = INVALID_SOCKET;
 #else
-		const auto invalidPeer = -1;
+	const auto invalidPeer = -1;
 #endif
-		const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-		if (peer == invalidPeer) {
+	NativeTestSocket responsePeer = invalidPeer;
+	QByteArray receivedRequest;
+	auto peerSawEof = false;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (responsePeer == invalidPeer && accepted < 3) {
+			const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (peer == invalidPeer) {
+				return;
+			}
+			++accepted;
+			if (accepted == 1) {
+				CloseNativeTestSocket(peer);
+				return;
+			}
+			if (accepted == 2) {
+				CHECK(discovery.timeout());
+				CloseNativeTestSocket(peer);
+				return;
+			}
+			responsePeer = peer;
+			const auto nonBlocking = SetNativeTestNonBlocking(
+				qintptr(responsePeer));
+			CHECK(nonBlocking);
+			if (!nonBlocking) {
+				CloseNativeTestSocket(responsePeer);
+				responsePeer = invalidPeer;
+				loop.quit();
+				return;
+			}
+		}
+		if (responsePeer == invalidPeer || peerSawEof) {
 			return;
 		}
-		++accepted;
-		if (accepted == 1) {
-			CloseNativeTestSocket(peer);
-			return;
-		}
-		if (accepted == 2) {
-			CHECK(discovery.timeout());
-			CloseNativeTestSocket(peer);
-			return;
-		}
-		if (accepted != 3) {
-			CloseNativeTestSocket(peer);
-			return;
-		}
-
-		CHECK(SetNativeTestReceiveTimeout(peer));
-		QByteArray receivedRequest;
-		auto peerSawEof = false;
-		while (receivedRequest.size() <= request.size()) {
+		while (true) {
 			char buffer[256];
 			const auto read = ReceiveNativeTestSocket(
-				peer,
+				responsePeer,
 				buffer,
 				int(sizeof(buffer)));
 			if (read > 0) {
@@ -711,12 +1117,15 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			}
 			break;
 		}
+		if (!peerSawEof) {
+			return;
+		}
 		CHECK(peerSawEof);
 		CHECK_EQ(receivedRequest, request);
 		auto responseOffset = 0;
 		while (responseOffset < response.size()) {
 			const auto written = SendNativeTestSocket(
-				peer,
+				responsePeer,
 				response.constData() + responseOffset,
 				response.size() - responseOffset);
 			CHECK(written > 0);
@@ -726,7 +1135,8 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			responseOffset += int(written);
 		}
 		CHECK_EQ(responseOffset, response.size());
-		CloseNativeTestSocket(peer);
+		CloseNativeTestSocket(responsePeer);
+		responsePeer = invalidPeer;
 	});
 	poll.start(1);
 
@@ -749,15 +1159,155 @@ TEST_CASE(ServerWidgetDiscoveryAdvancesAcrossLocalFailures) {
 			},
 			.candidateStarted = [&] {
 				++started;
+				if (started == 1) {
+					QTimer::singleShot(kPendingConnectDeadline, &owner, [&] {
+						if (discovery.running() && started == 1) {
+							CHECK(discovery.timeout());
+						}
+					});
+				}
 			},
 		});
 	loop.exec();
 	poll.stop();
+	if (responsePeer != invalidPeer) {
+		CloseNativeTestSocket(responsePeer);
+	}
 
 	CHECK_EQ(started, 4);
 	CHECK_EQ(accepted, 3);
+	CHECK(peerSawEof);
 	CHECK(finished);
 	CHECK(!failed);
+}
+
+TEST_CASE(ServerWidgetDiscoveryWaitsForDelayedLocalResponse) {
+	using Intro::details::ServerWidgetDiscovery;
+
+	QTcpServer server;
+	CHECK(server.listen(QHostAddress::LocalHost));
+	if (!server.isListening()) {
+		return;
+	}
+	server.pauseAccepting();
+	const auto listenerNonBlocking = SetNativeTestNonBlocking(
+		server.socketDescriptor());
+	CHECK(listenerNonBlocking);
+	if (!listenerNonBlocking) {
+		return;
+	}
+
+	const auto selection = CheckServerSelection(
+		u"127.0.0.1:"_q + QString::number(server.serverPort()));
+	const auto nonce = QByteArray(32, '\x08');
+	const auto request = BuildLocalDiscoveryRequest(nonce);
+	const auto response = LocalResponse(nonce);
+
+	QObject owner;
+	ServerWidgetDiscovery discovery(&owner);
+	QEventLoop loop;
+	QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+#if defined Q_OS_WIN
+	const auto invalidPeer = INVALID_SOCKET;
+#else
+	const auto invalidPeer = -1;
+#endif
+	NativeTestSocket peer = invalidPeer;
+	auto receivedRequest = QByteArray();
+	auto responseScheduled = false;
+	auto responseSent = false;
+	auto finished = false;
+	auto failed = false;
+	auto discoveryWaitingAfterRequestEof = false;
+	QTimer poll;
+	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+		if (peer == invalidPeer) {
+			peer = AcceptNativeTestSocket(server.socketDescriptor());
+			if (peer == invalidPeer) {
+				return;
+			}
+			const auto peerNonBlocking = SetNativeTestNonBlocking(
+				qintptr(peer));
+			CHECK(peerNonBlocking);
+			if (!peerNonBlocking) {
+				CloseNativeTestSocket(peer);
+				peer = invalidPeer;
+				return;
+			}
+		}
+
+		auto peerSawEof = false;
+		while (!peerSawEof) {
+			char buffer[256];
+			const auto read = ReceiveNativeTestSocket(
+				peer,
+				buffer,
+				int(sizeof(buffer)));
+			if (read > 0) {
+				receivedRequest.append(buffer, int(read));
+				continue;
+			}
+			peerSawEof = (read == 0);
+			break;
+		}
+		if (!peerSawEof || responseScheduled) {
+			return;
+		}
+		responseScheduled = true;
+		CHECK_EQ(receivedRequest, request);
+		discoveryWaitingAfterRequestEof = discovery.running();
+
+		const auto responsePeer = peer;
+		QTimer::singleShot(100, &owner, [&, responsePeer] {
+			auto responseOffset = 0;
+			while (responseOffset < response.size()) {
+				const auto written = SendNativeTestSocket(
+					responsePeer,
+					response.constData() + responseOffset,
+					response.size() - responseOffset);
+				CHECK(written > 0);
+				if (written <= 0) {
+					break;
+				}
+				responseOffset += int(written);
+			}
+			CHECK_EQ(responseOffset, response.size());
+			responseSent = (responseOffset == response.size());
+			CloseNativeTestSocket(responsePeer);
+			peer = invalidPeer;
+		});
+	});
+	poll.start(1);
+
+	discovery.start(
+		selection,
+		nonce,
+		{ server.serverAddress() },
+		{
+			.finished = [&](ServerDiscoveryResult result) {
+				finished = true;
+				CHECK(result.valid());
+				loop.quit();
+			},
+			.failed = [&](bool connectionFailure) {
+				failed = true;
+				CHECK(!connectionFailure);
+				loop.quit();
+		},
+	});
+	loop.exec();
+	poll.stop();
+	if (peer != invalidPeer) {
+		CloseNativeTestSocket(peer);
+	}
+
+	CHECK_EQ(receivedRequest, request);
+	CHECK(responseScheduled);
+	CHECK(responseSent);
+	CHECK(finished);
+	CHECK(!failed);
+	CHECK(discoveryWaitingAfterRequestEof);
 }
 
 TEST_CASE(ServerWidgetDiscoveryRejectsPartialResponseOnTimeout) {
@@ -1053,14 +1603,40 @@ TEST_CASE(DiscoveryJsonRejectsConstrainedPortConflict) {
 	CHECK(result.status == ServerDiscoveryResponseStatus::EndpointMismatch);
 }
 
-TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpoint) {
+TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpointWithoutFirstUseTrust) {
+	QTcpServer listener;
+	CHECK(listener.listen(QHostAddress::LocalHost));
+	if (!listener.isListening()) {
+		return;
+	}
 	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	CHECK(selection.valid());
+	CHECK(selection.policy == ServerDiscoveryPolicy::PublicHttps);
+	const auto endpointText = u"8.8.8.8:"_q
+		+ QString::number(listener.serverPort());
+	const auto endpoint = CheckServerSelection(endpointText);
+	CHECK(endpoint.status == ServerSelectionStatus::PublicIpLiteral);
+	CHECK(!endpoint.valid());
+	CHECK(IsPublicDiscoveryEndpoint(endpoint, selection));
+	CHECK(PublicDiscoveryUrl(endpoint).isEmpty());
+	auto candidates = 0;
+	Intro::details::ServerWidgetDiscovery fallback(nullptr);
+	fallback.start(
+		endpoint,
+		QByteArray(32, '\0'),
+		{ QHostAddress(QHostAddress::LocalHost) },
+		{
+			.candidateStarted = [&] { ++candidates; },
+		});
+	CHECK(!fallback.running());
+	CHECK_EQ(candidates, 0);
+	CHECK(!listener.waitForNewConnection(100));
 	const auto key = TestKey();
 	const auto der = key.getSubjectPublicKeyInfo();
 	const auto json = QJsonDocument(QJsonObject{
 		{ u"version"_q, 1 },
 		{ u"mtproto"_q, QJsonObject{
-			{ u"endpoint"_q, u"8.8.8.8:443"_q },
+			{ u"endpoint"_q, endpointText },
 			{ u"dc_id"_q, 2 },
 			{ u"rsa_spki"_q, QString::fromLatin1(QByteArray(
 				reinterpret_cast<const char *>(der.data()),
@@ -1069,7 +1645,63 @@ TEST_CASE(DiscoveryJsonAcceptsPublicIpEndpoint) {
 	}).toJson(QJsonDocument::Compact);
 	const auto result = ParsePublicDiscoveryResponse(selection, json);
 	CHECK(result.valid());
-	CHECK_EQ(result.endpoint, u"8.8.8.8:443"_q);
+	CHECK_EQ(result.endpoint, endpointText);
+	CHECK(result.policy == ServerDiscoveryPolicy::PublicHttps);
+	CHECK(result.key.valid());
+}
+
+TEST_CASE(DiscoveryJsonAcceptsTailnetIpForMagicDnsOrigin) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	const auto result = ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"100.124.236.66:2443"_q));
+	CHECK(result.valid());
+	CHECK_EQ(result.endpoint, u"100.124.236.66:2443"_q);
+	CHECK_EQ(result.dcId, 2);
+	CHECK(result.key.valid());
+
+	const auto ipv6 = ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"[fd7a:115c:a1e0::1234]:2443"_q));
+	CHECK(ipv6.valid());
+	CHECK_EQ(ipv6.endpoint, u"[fd7a:115c:a1e0::1234]:2443"_q);
+
+	const auto mapped = ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"[::ffff:100.124.236.66]:2443"_q));
+	CHECK(mapped.valid());
+}
+
+TEST_CASE(DiscoveryJsonRejectsTailnetIpForOtherOrigins) {
+	const auto origins = {
+		u"example.com"_q,
+		u"ts.net.example.com"_q,
+		u"evilts.net"_q,
+		u"ts.net"_q,
+	};
+	for (const auto &origin : origins) {
+		const auto result = ParsePublicDiscoveryResponse(
+			CheckServerSelection(origin),
+			PublicResponse(u"100.124.236.66:2443"_q));
+		CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+	}
+}
+
+TEST_CASE(DiscoveryJsonRejectsNonTailnetPrivateIpForMagicDnsOrigin) {
+	const auto selection = CheckServerSelection(
+		u"telegram-server.tailaa4918.ts.net"_q);
+	for (const auto &endpoint : {
+		u"10.0.0.5:2443"_q,
+		u"127.0.0.1:2443"_q,
+		u"[fd12:3456::5]:2443"_q,
+		u"[::ffff:10.0.0.5]:2443"_q,
+	}) {
+		const auto result = ParsePublicDiscoveryResponse(
+			selection,
+			PublicResponse(endpoint));
+		CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+	}
 }
 
 TEST_CASE(DiscoveryJsonRequiresAnExplicitEndpointPort) {
@@ -1088,6 +1720,17 @@ TEST_CASE(DiscoveryJsonRequiresAnExplicitEndpointPort) {
 	}).toJson(QJsonDocument::Compact);
 	const auto result = ParsePublicDiscoveryResponse(selection, json);
 	CHECK(result.status == ServerDiscoveryResponseStatus::UnsafeEndpoint);
+}
+
+TEST_CASE(DiscoveryJsonRejectsHttpPort) {
+	const auto selection = CheckServerSelection(u"server.example.com"_q);
+	CHECK(!IsPublicDiscoveryEndpoint(
+		CheckServerSelection(u"server.example.com:80"_q),
+		selection));
+	CHECK(ParsePublicDiscoveryResponse(
+		selection,
+		PublicResponse(u"server.example.com:80"_q)).status
+		== ServerDiscoveryResponseStatus::UnsafeEndpoint);
 }
 
 } // namespace

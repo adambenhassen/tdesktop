@@ -11,11 +11,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_server_discovery.h"
 
 #include <QtCore/QReadWriteLock>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
-#include <map>
-#include <set>
-#include <memory>
 
 namespace MTP {
 namespace details {
@@ -27,6 +28,7 @@ class RSAPublicKey;
 // not used and a failed config load must not fall back to production.
 struct CustomServer {
 	int dcId = 0;
+	std::string hostname;
 	std::string ip;
 	int port = 0;
 	bool ipv6 = false;
@@ -42,6 +44,10 @@ struct CustomServer {
 		return !key;
 	}
 };
+
+[[nodiscard]] std::optional<CustomServer> BuildCustomServerFromDiscovery(
+	const ServerSelectionCheck &selection,
+	const ServerDiscoveryResult &result);
 
 // Authorization state is scoped to the complete verified pin, not merely to
 // an address or a DC id. Callers use this before reusing deferred key state.
@@ -196,7 +202,9 @@ public:
 
 private:
 	// Callers must hold one of the lockers.
-	void applyCustomServerUnlocked(const CustomServer &server);
+	void applyCustomServerUnlocked(
+		const CustomServer &server,
+		bool allowRestoredPreviouslyAllowedLiteral = false);
 	[[nodiscard]] bool hasCustomServerUnlocked() const;
 	[[nodiscard]] bool isAuthorizedUnlocked(DcId dcId) const;
 	[[nodiscard]] bool isCustomServerPinnedUnlocked(DcId dcId) const;
@@ -263,5 +271,10 @@ private:
 	bool _unenrolled = false;
 
 };
+
+[[nodiscard]] inline bool CanResumeServerEnrollment(
+		const DcOptions &options) {
+	return !options.blocked() && !options.unenrolled();
+}
 
 } // namespace MTP

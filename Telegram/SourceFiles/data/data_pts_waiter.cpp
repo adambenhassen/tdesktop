@@ -7,9 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_pts_waiter.h"
 
-#include "api/api_updates.h"
-
-PtsWaiter::PtsWaiter(not_null<Api::Updates*> owner) : _owner(owner) {
+PtsWaiter::PtsWaiter(Callbacks callbacks)
+: _callbacks(std::move(callbacks)) {
 }
 
 uint64 PtsWaiter::ptsKey(PtsSkippedQueue queue, int32 pts) {
@@ -21,7 +20,7 @@ uint64 PtsWaiter::ptsKey(PtsSkippedQueue queue, int32 pts) {
 
 void PtsWaiter::setWaitingForSkipped(ChannelData *channel, crl::time ms) {
 	if (ms >= 0) {
-		_owner->ptsWaiterStartTimerFor(channel, ms);
+		_callbacks.startTimer(channel, ms);
 		_waitingForSkipped = true;
 	} else {
 		_waitingForSkipped = false;
@@ -31,7 +30,7 @@ void PtsWaiter::setWaitingForSkipped(ChannelData *channel, crl::time ms) {
 
 void PtsWaiter::setWaitingForShortPoll(ChannelData *channel, crl::time ms) {
 	if (ms >= 0) {
-		_owner->ptsWaiterStartTimerFor(channel, ms);
+		_callbacks.startTimer(channel, ms);
 		_waitingForShortPoll = true;
 	} else {
 		_waitingForShortPoll = false;
@@ -41,7 +40,7 @@ void PtsWaiter::setWaitingForShortPoll(ChannelData *channel, crl::time ms) {
 
 void PtsWaiter::checkForWaiting(ChannelData *channel) {
 	if (!_waitingForSkipped && !_waitingForShortPoll) {
-		_owner->ptsWaiterStartTimerFor(channel, -1);
+		_callbacks.startTimer(channel, -1);
 	}
 }
 
@@ -60,10 +59,10 @@ void PtsWaiter::applySkippedUpdates(ChannelData *channel) {
 	for (auto i = _queue.cbegin(), e = _queue.cend(); i != e; ++i) {
 		switch (i->second) {
 		case SkippedUpdate: {
-			_owner->applyUpdateNoPtsCheck(_updateQueue[i->first]);
+			_callbacks.applyUpdate(_updateQueue[i->first]);
 		} break;
 		case SkippedUpdates: {
-			_owner->applyUpdatesNoPtsCheck(_updatesQueue[i->first]);
+			_callbacks.applyUpdates(_updatesQueue[i->first]);
 		} break;
 		}
 	}
@@ -129,7 +128,7 @@ bool PtsWaiter::updateAndApply(
 	}
 	if (!_waitingForSkipped || _queue.empty()) {
 		// Optimization - no need to put in queue and back.
-		_owner->applyUpdatesNoPtsCheck(updates);
+		_callbacks.applyUpdates(updates);
 	} else {
 		_updatesQueue.emplace(ptsKey(SkippedUpdates, pts), updates);
 		applySkippedUpdates(channel);
@@ -147,7 +146,7 @@ bool PtsWaiter::updateAndApply(
 	}
 	if (!_waitingForSkipped || _queue.empty()) {
 		// Optimization - no need to put in queue and back.
-		_owner->applyUpdateNoPtsCheck(update);
+		_callbacks.applyUpdate(update);
 	} else {
 		_updateQueue.emplace(ptsKey(SkippedUpdate, pts), update);
 		applySkippedUpdates(channel);

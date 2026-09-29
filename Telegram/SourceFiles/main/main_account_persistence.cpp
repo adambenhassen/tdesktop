@@ -10,6 +10,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_account.h"
 
 namespace Main::details {
+bool CommitServerReenrollment(
+		ServerReenrollmentPrompt prompt,
+		bool accepted,
+		Fn<bool()> commit) {
+	if (prompt != ServerReenrollmentPrompt::DestructiveConfirmation
+		|| !accepted) {
+		return false;
+	}
+	return commit();
+}
+
 bool CommitPostAuthMtpAuthorization(
 		not_null<Storage::Account*> local,
 		Fn<void()> committed,

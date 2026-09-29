@@ -383,6 +383,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_edit_caption_voice" = "Sorry, you can't edit messages when you have an unsent voice message.";
 
 "lng_intro_about" = "Welcome to the official Telegram Desktop app.\nIt's fast and secure.";
+"lng_intro_telegramd_about" = "Welcome to Telegramd.\nConnect to your server to start messaging.";
 "lng_start_msgs" = "Start Messaging";
 
 "lng_intro_next" = "Next";
@@ -416,6 +417,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_address_bad_port"  = "The port must be a number from 1 to 65535.";
 "lng_intro_server_address_empty_host" = "Enter a server name or IP address before the port.";
 "lng_intro_server_address_invalid"   = "This is not a valid address. Use host:port, for example server.example.com:443.";
+"lng_intro_server_use_domain"        = "Use the server's domain name.";
 "lng_intro_server_address_too_long"  = "This server name is too long. Enter a shorter server name or IP address.";
 "lng_intro_server_address_ipv6"      = "Put the IPv6 address in brackets, for example [2001:db8::1]:443.";
 "lng_intro_server_connecting"        = "Connecting…";
@@ -424,13 +426,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_save_failed"       = "Could not save this server on this device. Try again.";
 "lng_intro_server_key_mismatch"      = "This server no longer matches this account. Connection is blocked. Contact your server administrator.";
 "lng_intro_server_dc_mismatch"       = "This server's configuration does not match this account. Connection is blocked. Contact your server administrator.";
+"lng_intro_server_identity_title"     = "Server identity changed";
+"lng_intro_server_identity_changed"   = "The identity of the server pinned to this account has changed.\n\nPinned fingerprint: {pinned_fingerprint}\nPresented fingerprint: {presented_fingerprint}\n\nThe client cannot distinguish a legitimate key rotation from an interception, so the connection is blocked.\n\nCancel keeps this account and its current pin unchanged. Continue opens a final confirmation. Nothing is deleted until that final confirmation is explicitly accepted.";
+"lng_intro_server_identity_cancel"    = "Cancel";
+"lng_intro_server_identity_continue"  = "Continue to confirmation";
+"lng_intro_server_identity_confirm_title" = "Confirm account deletion";
+"lng_intro_server_identity_confirm"   = "This is the final confirmation. Accepting permanently deletes this account's server-scoped keys, sessions, cached messages and peers, endpoint, and server identity before returning to enrollment. This cannot be undone.";
+"lng_intro_server_identity_confirm_forget" = "Delete account data and trust a new server identity";
+"lng_intro_server_reenrollment_failed" = "The account could not be prepared for re-enrollment. It remains blocked.";
 
 "lng_intro_username_title"        = "Your username";
 "lng_intro_username_desc"         = "Enter your username on {server}.";
 "lng_intro_username_ph"           = "Username";
 
 "lng_intro_username_empty"        = "Enter your username.";
-"lng_intro_username_bad"          = "Usernames are 5 to 32 characters: letters, digits and underscores, starting with a letter.";
+"lng_intro_username_bad"          = "Usernames are 2 to 32 characters: letters, digits and underscores, starting with a letter.";
 "lng_intro_username_unavailable"  = "That username can't be used on this server. Try another one.";
 "lng_intro_username_flood"        = "Too many sign-in attempts from this network. Try again in {duration}.";
 
@@ -550,8 +560,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_username_title" = "Username";
 "lng_username_description1" = "You can choose a username on Telegram. If you do, other people will be able to find you by this username and contact you without knowing your phone number.";
-"lng_username_description2" = "You can use **a-z**, **0-9** and **underscores**.\nMinimum length is **5 characters**.";
+"lng_username_description2" = "You can use **a-z**, **0-9** and **underscores**.\nLength is **2 to 32 characters**.";
 "lng_username_choose" = "Choose your username.";
+"lng_username_check_unavailable" = "Availability is checked when you save.";
 "lng_username_invalid" = "This username is invalid.";
 "lng_username_occupied" = "This username is already occupied.";
 "lng_username_too_short" = "This username is too short.";
@@ -2560,7 +2571,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_create_group_skip" = "Skip";
 
-"lng_create_channel_link_about" = "You can use a-z, 0-9 and underscores.\nMinimum length is 5 characters.";
+"lng_create_channel_link_about" = "You can use a-z, 0-9 and underscores.\nLength is 2 to 32 characters.";
 
 "lng_create_channel_link_invalid" = "This link is invalid";
 "lng_create_channel_link_occupied" = "Sorry, this link is already occupied";

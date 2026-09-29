@@ -7,17 +7,52 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "api/api_updates.h"
+#include "data/data_pts_waiter.h"
+#include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
+
+#include <QtCore/QCoreApplication>
+#include <QtCore/QThread>
+
+#include <utility>
 
 namespace {
 
 using namespace MTP;
 
+const char kPinnedServerKey[] = "\
+-----BEGIN RSA PUBLIC KEY-----\n\
+MIIBCgKCAQEA6LszBcC1LGzyr992NzE0ieY+BSaOW622Aa9Bd4ZHLl+TuFQ4lo4g\n\
+5nKaMBwK/BIb9xUfg0Q29/2mgIR6Zr9krM7HjuIcCzFvDtr+L0GQjae9H0pRB2OO\n\
+62cECs5HKhT5DZ98K33vmWiLowc621dQuwKWSQKjWf50XYFw42h21P2KXUGyp2y/\n\
++aEyZ+uVgLLQbRA1dEjSDZ2iGRy12Mk5gpYc397aYp438fsJoHIgJ2lgMv5h7WY9\n\
+t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs\n\
+5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB\n\
+-----END RSA PUBLIC KEY-----";
+
+[[nodiscard]] std::shared_ptr<details::RSAPublicKey> MakePinnedServerKey() {
+	return std::make_shared<details::RSAPublicKey>(bytes::make_span(
+		kPinnedServerKey,
+		sizeof(kPinnedServerKey) - 1));
+}
+
 [[nodiscard]] PinnedServerFailureReport Report(
 		ShiftedDcId shiftedDcId,
-		PinnedServerFailure failure) {
-	return { shiftedDcId, failure };
+		PinnedServerFailure failure,
+		uint64 pinnedFingerprint = 0,
+		uint64 presentedFingerprint = 0,
+		QString pinnedHostname = {},
+		QString dialledAddress = {}) {
+	return {
+		shiftedDcId,
+		failure,
+		pinnedFingerprint,
+		presentedFingerprint,
+		std::move(pinnedHostname),
+		std::move(dialledAddress),
+	};
 }
 
 // Collects every value the channel emits from now on. The initial
@@ -47,6 +82,46 @@ private:
 
 } // namespace
 
+TEST_CASE(KeyMismatchReportPreservesPinAndEndpointIdentity) {
+	const auto key = MakePinnedServerKey();
+	const auto pinned = CustomServer{
+		.dcId = 2,
+		.hostname = "telegram-server.tailaa4918.ts.net",
+		.port = 2443,
+		.key = key,
+		.serverSelection = "telegram-server.tailaa4918.ts.net",
+		.discoveryPolicy = ServerDiscoveryPolicy::PublicHttps,
+		.discoveryOrigin =
+			"https://telegram-server.tailaa4918.ts.net/"
+			".well-known/telegramd/client",
+	};
+	const auto before = pinned;
+	const auto report = MakePinnedServerFailureReport(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		456,
+		pinned,
+		u"telegram-server.tailaa4918.ts.net"_q,
+		u"100.124.236.66"_q);
+
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+	CHECK(channel.current().has_value());
+	if (channel.current()) {
+		CHECK_EQ(
+			channel.current()->pinnedFingerprint,
+			uint64(key->fingerprint()));
+		CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
+		CHECK_EQ(
+			channel.current()->pinnedHostname,
+			u"telegram-server.tailaa4918.ts.net"_q);
+		CHECK_EQ(
+			channel.current()->dialledAddress,
+			u"100.124.236.66"_q);
+	}
+	CHECK(SameCustomServerPin(pinned, before));
+}
+
 // The swallow finding: a repeated identical failure must emit again.
 // A compare-then-assign holder would drop the second emission, and a
 // step that cleared its error label on navigation would then show
@@ -70,6 +145,46 @@ TEST_CASE(LateSubscriberSeesHeldReport) {
 	CHECK_EQ(emissions.count(), 1);
 	CHECK(emissions.at(0) == report);
 	CHECK(channel.current().has_value());
+}
+
+TEST_CASE(PinnedServerFailureKeepsBothFingerprints) {
+	const auto report = Report(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		123,
+		456);
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+
+	CHECK(channel.current().has_value());
+	CHECK_EQ(channel.current()->pinnedFingerprint, uint64(123));
+	CHECK_EQ(channel.current()->presentedFingerprint, uint64(456));
+}
+
+TEST_CASE(PinnedServerFailureKeepsEndpointIdentity) {
+	const auto report = Report(
+		2,
+		PinnedServerFailure::KeyMismatch,
+		123,
+		456,
+		u"server.example.com"_q,
+		u"100.124.236.66"_q);
+	PinnedServerFailureChannel channel;
+	channel.report(report);
+
+	CHECK(channel.current().has_value());
+	CHECK_EQ(channel.current()->pinnedHostname, u"server.example.com"_q);
+	CHECK_EQ(channel.current()->dialledAddress, u"100.124.236.66"_q);
+}
+
+TEST_CASE(AuthorizedKeyMismatchUsesTheIdentityChangeFlow) {
+	const auto mismatch = Report(2, PinnedServerFailure::KeyMismatch);
+	const auto dcMismatch = Report(2, PinnedServerFailure::DcIdMismatch);
+
+	CHECK(MTP::ShouldShowPinnedServerIdentityChange(mismatch, true, true));
+	CHECK(!MTP::ShouldShowPinnedServerIdentityChange(mismatch, false, true));
+	CHECK(!MTP::ShouldShowPinnedServerIdentityChange(mismatch, true, false));
+	CHECK(!MTP::ShouldShowPinnedServerIdentityChange(dcMismatch, true, true));
 }
 
 // The clear side: only the reporting session's own successful
@@ -146,4 +261,283 @@ TEST_CASE(RefusedFallbackSkipsHttpTimeSpecialConfigIo) {
 	}
 
 	CHECK_EQ(specialConfigIoAttempts, 0);
+}
+
+TEST_CASE(StaleStateReplyCannotApplyAfterFreshRequestStarts) {
+	using Type = Api::details::UpdateRequestState::Type;
+	auto requests = Api::details::UpdateRequestState();
+	auto applied = 0;
+	requests.started(Type::State, 41);
+	requests.clearInactive([](mtpRequestId) { return false; });
+	requests.started(Type::State, 42);
+	CHECK(!requests.finish(Type::State, 41, [&] { ++applied; }));
+	CHECK(requests.pending());
+	CHECK(requests.finish(Type::State, 42, [&] { ++applied; }));
+	CHECK_EQ(applied, 1);
+	CHECK(!requests.pending());
+}
+
+TEST_CASE(EnrollmentPausedFailureHasTerminalLocalIdentity) {
+	const auto error = MTP::Error::Local(
+		"SERVER_ENROLLMENT_PAUSED",
+		"Network access is paused until server enrollment completes.");
+	CHECK_EQ(error.code(), MTP::Error::NoError);
+	CHECK(MTP::IsServerEnrollmentPausedError(error));
+	CHECK(!MTP::IsServerEnrollmentPausedError(
+		MTP::Error::Local("RESPONSE_PARSE_FAILED", "Empty response.")));
+}
+
+TEST_CASE(CancelledEnrollmentRefusalDoesNotDeliver) {
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
+	auto delivered = 0;
+	auto callbacks = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &, const MTP::Response &) {
+			++delivered;
+			return true;
+		},
+	};
+	CHECK(refusals.reject(false, 61, callbacks));
+	CHECK(refusals.pending(61));
+	refusals.cancel(61);
+	CHECK(!refusals.pending(61));
+	QCoreApplication::processEvents();
+	CHECK_EQ(delivered, 0);
+}
+
+TEST_CASE(LiveEnrollmentRefusalDeliversExactlyOnce) {
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
+	auto delivered = 0;
+	auto callbacks = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &error, const MTP::Response &response) {
+			CHECK(MTP::IsServerEnrollmentPausedError(error));
+			CHECK_EQ(response.requestId, mtpRequestId(62));
+			++delivered;
+			return true;
+		},
+	};
+	CHECK(refusals.reject(false, 62, callbacks));
+	CHECK(refusals.pending(62));
+	QCoreApplication::processEvents();
+	QCoreApplication::processEvents();
+	CHECK_EQ(delivered, 1);
+	CHECK(!refusals.pending(62));
+}
+
+TEST_CASE(DestroyedEnrollmentRefusalQueueDropsDelivery) {
+	auto delivered = 0;
+	{
+		auto refusals = MTP::ServerEnrollmentRefusalQueue();
+		auto callbacks = MTP::ResponseHandler{
+			nullptr,
+			[&](const MTP::Error &, const MTP::Response &) {
+				++delivered;
+				return true;
+			},
+		};
+		CHECK(refusals.reject(false, 63, callbacks));
+	}
+	QCoreApplication::processEvents();
+	CHECK_EQ(delivered, 0);
+}
+
+TEST_CASE(ContiguousUpdateAfterEnrollmentRecoveryAppliesOnce) {
+	auto applied = 0;
+	auto waiter = PtsWaiter({
+		.startTimer = [](ChannelData *, crl::time) {},
+		.applyUpdate = [&](const MTPUpdate &) { ++applied; },
+		.applyUpdates = [](const MTPUpdates &) {},
+	});
+	waiter.init(7);
+	waiter.setRequesting(false);
+	const auto update = MTP_updateDeleteMessages(
+		MTP_vector<MTPint>(),
+		MTP_int(8),
+		MTP_int(1));
+	CHECK(waiter.updateAndApply(nullptr, 8, 1, update));
+	CHECK(!waiter.updateAndApply(nullptr, 8, 1, update));
+	CHECK_EQ(applied, 1);
+	CHECK_EQ(waiter.current(), 8);
+}
+
+TEST_CASE(EnrollmentResumeEventsAreInstanceScopedAndLifetimeBound) {
+	auto first = MTP::ServerEnrollmentGate(true);
+	auto second = MTP::ServerEnrollmentGate(true);
+	auto firstEvents = 0;
+	auto secondEvents = 0;
+	auto firstLifetime = rpl::lifetime();
+	auto secondLifetime = rpl::lifetime();
+	first.resumed() | rpl::on_next([&] { ++firstEvents; }, firstLifetime);
+	second.resumed() | rpl::on_next([&] { ++secondEvents; }, secondLifetime);
+	first.resumeIf(true, [&] { CHECK(first.start()); }, [] {});
+	CHECK_EQ(firstEvents, 1);
+	CHECK_EQ(secondEvents, 0);
+	firstLifetime.destroy();
+	CHECK(first.pause());
+	first.resumeIf(true, [] {}, [] {});
+	CHECK_EQ(firstEvents, 1);
+	second.resumeIf(true, [&] { CHECK(second.start()); }, [] {});
+	CHECK_EQ(secondEvents, 1);
+}
+
+TEST_CASE(EnrollmentAdmissionResumesWithFreshSerializedState) {
+	using Request = MTP::details::SerializedRequest;
+	using Type = Api::details::UpdateRequestState::Type;
+	auto gate = MTP::ServerEnrollmentGate(true);
+	auto requests = Api::details::UpdateRequestState();
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
+	auto blocked = MTP::DcOptions(MTP::Environment::Production);
+	blocked.constructBlocked();
+	auto unenrolled = MTP::DcOptions(MTP::Environment::Production);
+	unenrolled.constructUnenrolled();
+	auto enrolled = MTP::DcOptions(MTP::Environment::Production);
+	enrolled.constructFromBuiltIn();
+
+	auto sent = std::vector<std::pair<mtpRequestId, Request>>();
+	auto failures = 0;
+	auto pending = true;
+	requests.started(Type::State, 41);
+	auto callbacks = MTP::ResponseHandler{
+		nullptr,
+		[&](const MTP::Error &error, const MTP::Response &response) {
+			CHECK(QThread::currentThread()
+				== QCoreApplication::instance()->thread());
+			CHECK(MTP::IsServerEnrollmentPausedError(error));
+			CHECK_EQ(response.requestId, mtpRequestId(41));
+			pending = false;
+			++failures;
+			CHECK(requests.finish(Type::State, response.requestId, [] {}));
+			return true;
+		},
+	};
+	auto refused = Request::Serialize(MTPupdates_GetState());
+	const auto retainedRefused = refused;
+	const auto refusedIdentity = retainedRefused.operator->();
+	CHECK(!MTP::AdmitServerEnrollmentRequest(
+		gate.networkAllowed(),
+		41,
+		std::move(refused),
+		std::move(callbacks),
+		refusals,
+		[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
+			sent.emplace_back(id, std::move(request));
+		}));
+	CHECK(sent.empty());
+	CHECK(pending);
+	CHECK_EQ(failures, 0);
+	QCoreApplication::processEvents();
+	CHECK(!pending);
+	CHECK_EQ(failures, 1);
+
+	auto resumedEvents = 0;
+	auto lifetime = rpl::lifetime();
+	gate.resumed() | rpl::on_next([&] {
+		++resumedEvents;
+		requests.resumeIf(
+			gate.networkAllowed(),
+			[](mtpRequestId) { return false; },
+			[&] {
+				auto fresh = Request::Serialize(MTPupdates_GetState());
+				CHECK(MTP::AdmitServerEnrollmentRequest(
+						gate.networkAllowed(),
+						42,
+						std::move(fresh),
+						MTP::ResponseHandler(),
+						refusals,
+						[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
+							sent.emplace_back(id, std::move(request));
+						}));
+				requests.started(Type::State, 42);
+			});
+	}, lifetime);
+	auto start = [&] { CHECK(gate.start()); };
+	gate.resumeIf(MTP::CanResumeServerEnrollment(blocked), start, [] {});
+	gate.resumeIf(MTP::CanResumeServerEnrollment(unenrolled), start, [] {});
+	CHECK_EQ(resumedEvents, 0);
+	CHECK(sent.empty());
+	gate.resumeIf(MTP::CanResumeServerEnrollment(enrolled), start, [] {});
+	CHECK_EQ(resumedEvents, 1);
+	CHECK(gate.networkAllowed());
+	CHECK_EQ(int(sent.size()), 1);
+	CHECK_EQ(sent.front().first, mtpRequestId(42));
+	CHECK(sent.front().second.operator->() != refusedIdentity);
+	CHECK(requests.pending());
+	CHECK(requests.finishState(
+		42,
+		[] {},
+		[&] {
+			auto difference = Request::Serialize(MTPupdates_GetDifference(
+				MTP_flags(0),
+				MTP_int(7),
+				MTPint(),
+				MTPint(),
+				MTP_int(1),
+				MTP_int(0),
+				MTPint()));
+			CHECK(MTP::AdmitServerEnrollmentRequest(
+				gate.networkAllowed(),
+				43,
+				std::move(difference),
+				MTP::ResponseHandler(),
+				refusals,
+				[&](mtpRequestId id, Request &&request, MTP::ResponseHandler &&) {
+					sent.emplace_back(id, std::move(request));
+				}));
+			requests.started(Type::Difference, 43);
+		}));
+	CHECK_EQ(int(sent.size()), 2);
+	CHECK_EQ(sent.back().first, mtpRequestId(43));
+	CHECK(!requests.finishState(42, [] {}, [] {}));
+	gate.resumeIf(MTP::CanResumeServerEnrollment(enrolled), start, [] {});
+	CHECK_EQ(resumedEvents, 1);
+	CHECK_EQ(int(sent.size()), 2);
+	CHECK_EQ(failures, 1);
+}
+
+TEST_CASE(RepausedGateRefusesFreshRecoveryRequest) {
+	using Request = MTP::details::SerializedRequest;
+	using Type = Api::details::UpdateRequestState::Type;
+	auto gate = MTP::ServerEnrollmentGate();
+	CHECK(gate.start());
+	CHECK(gate.pause());
+	auto requests = Api::details::UpdateRequestState();
+	auto refusals = MTP::ServerEnrollmentRefusalQueue();
+	auto sent = 0;
+	auto failures = 0;
+	auto lifetime = rpl::lifetime();
+	gate.resumed() | rpl::on_next([&] {
+		requests.resumeIf(
+			gate.networkAllowed(),
+			[](mtpRequestId) { return false; },
+			[&] {
+				CHECK(gate.pause());
+				auto request = Request::Serialize(MTPupdates_GetState());
+				auto callbacks = MTP::ResponseHandler{
+					nullptr,
+					[&](const MTP::Error &error, const MTP::Response &response) {
+						CHECK(MTP::IsServerEnrollmentPausedError(error));
+						CHECK(requests.finish(Type::State, response.requestId, [] {}));
+						++failures;
+						return true;
+					},
+				};
+				CHECK(!MTP::AdmitServerEnrollmentRequest(
+					gate.networkAllowed(),
+					55,
+					std::move(request),
+					std::move(callbacks),
+					refusals,
+					[&](mtpRequestId, Request &&, MTP::ResponseHandler &&) {
+						++sent;
+					}));
+				requests.started(Type::State, 55);
+			});
+	}, lifetime);
+	gate.resumeIf(true, [] {}, [] {});
+	CHECK_EQ(sent, 0);
+	CHECK_EQ(failures, 0);
+	QCoreApplication::processEvents();
+	CHECK_EQ(failures, 1);
+	CHECK(!requests.pending());
 }

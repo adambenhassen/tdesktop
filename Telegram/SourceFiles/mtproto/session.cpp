@@ -82,9 +82,17 @@ void SessionData::queueConnectionStateChange(int newState) {
 	});
 }
 
-void SessionData::queuePinnedServerFailure(PinnedServerFailure failure) {
+void SessionData::queuePinnedServerFailure(
+	PinnedServerFailure failure,
+	uint64 presentedFingerprint,
+	const QString &pinnedHostname,
+	const QString &dialledAddress) {
 	withSession([=](not_null<Session*> session) {
-		session->pinnedServerFailure(failure);
+		session->pinnedServerFailure(
+			failure,
+			presentedFingerprint,
+			pinnedHostname,
+			dialledAddress);
 	});
 }
 
@@ -297,7 +305,9 @@ void Session::refreshOptions() {
 	const auto &proxy = settings.selected();
 	const auto isEnabled = settings.isEnabled();
 	const auto proxyType = (isEnabled ? proxy.type : ProxyData::Type::None);
-	const auto useTcp = (proxyType != ProxyData::Type::Http);
+	const auto useTcp = UseTcpForProxy(
+		proxyType,
+		_instance->dcOptions().hasCustomServer());
 	const auto useHttp = (proxyType != ProxyData::Type::Mtproto);
 	const auto useIPv4 = true;
 	const auto useIPv6 = settings.tryIPv6();
@@ -403,8 +413,17 @@ void Session::connectionStateChange(int newState) {
 	_instance->onStateChange(_shiftedDcId, newState);
 }
 
-void Session::pinnedServerFailure(PinnedServerFailure failure) {
-	_instance->onPinnedServerFailure(_shiftedDcId, failure);
+void Session::pinnedServerFailure(
+		PinnedServerFailure failure,
+		uint64 presentedFingerprint,
+		const QString &pinnedHostname,
+		const QString &dialledAddress) {
+	_instance->onPinnedServerFailure(
+		_shiftedDcId,
+		failure,
+		presentedFingerprint,
+		pinnedHostname,
+		dialledAddress);
 }
 
 void Session::stopUntilPinChange() {

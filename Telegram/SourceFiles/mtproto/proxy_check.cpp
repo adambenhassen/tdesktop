@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/proxy_check.h"
 
+#include "mtproto/connection_server_resolving.h"
 #include "mtproto/facade.h"
 #include "mtproto/mtproto_dc_options.h"
 
@@ -45,21 +46,29 @@ void StartProxyCheck(
 		ProxyCheckConnection &v4,
 		ProxyCheckConnection &v6,
 		Fn<void(Connection *raw, int ping)> done,
-		Fn<void(Connection *raw)> fail) {
+		Fn<void(Connection *raw)> fail,
+		details::ServerHostnameResolver resolver) {
 	using Variants = DcOptions::Variants;
 
 	ResetProxyCheckers(v4, v6);
-	const auto connType = (proxy.type == ProxyData::Type::Http)
-		? Variants::Http
-		: Variants::Tcp;
+	const auto connType = ProxyCheckProtocol(
+		proxy.type,
+		mtproto->dcOptions().hasCustomServer());
 	const auto dcId = mtproto->mainDcId();
-	const auto setup = [&](ProxyCheckConnection &checker, const bytes::vector &secret) {
-		checker = Connection::Create(
+	const auto pin = mtproto->dcOptions().customServer();
+	const auto setup = [&](
+			ProxyCheckConnection &checker,
+			const bytes::vector &secret,
+			bool ipv6) {
+		checker = details::CreateServerConnection(
 			mtproto,
 			connType,
 			QThread::currentThread(),
 			secret,
-			proxy);
+			proxy,
+			QString::fromStdString(pin.hostname),
+			ipv6,
+			resolver);
 		const auto raw = checker.get();
 		raw->connect(raw, &Connection::connected, [=] {
 			if (done) {
@@ -76,7 +85,7 @@ void StartProxyCheck(
 	};
 	if (proxy.type == ProxyData::Type::Mtproto) {
 		const auto secret = proxy.secretFromMtprotoPassword();
-		setup(v4, secret);
+		setup(v4, secret, false);
 		v4->connectToServer(
 			proxy.host,
 			proxy.port,
@@ -96,7 +105,7 @@ void StartProxyCheck(
 			return;
 		}
 		const auto &endpoint = list.front();
-		setup(checker, endpoint.secret);
+		setup(checker, endpoint.secret, address == Variants::IPv6);
 		checker->connectToServer(
 			QString::fromStdString(endpoint.ip),
 			endpoint.port,

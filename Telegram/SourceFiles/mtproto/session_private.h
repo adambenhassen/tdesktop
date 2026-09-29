@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_serialized_request.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "mtproto/persistent_key_rejection.h"
 #include "mtproto/connection_abstract.h"
 #include "mtproto/facade.h"
 #include "base/timer.h"
@@ -81,10 +82,11 @@ private:
 	void doDisconnect();
 	void restart();
 	void requestCDNConfig();
-	void handleError(int errorCode);
+	void handleError(int errorCode, ConnectionErrorInfo context);
 	void onError(
 		not_null<AbstractConnection*> connection,
-		qint32 errorCode);
+		qint32 errorCode,
+		ConnectionErrorInfo context);
 	void onConnected(not_null<AbstractConnection*> connection);
 	void onDisconnected(not_null<AbstractConnection*> connection);
 	void onSentSome(uint64 size);
@@ -149,7 +151,8 @@ private:
 		DcOptions::Variants::Protocol protocol,
 		const QString &ip,
 		int port,
-		const bytes::vector &protocolSecret);
+		const bytes::vector &protocolSecret,
+		bool ipv6 = false);
 
 	// if badTime received - search for ids in sessionData->haveSent and sessionData->wereAcked and sync time/salt, return true if found
 	bool requestsFixTimeSalt(const QVector<MTPlong> &ids, const OuterInfo &info);
@@ -211,6 +214,10 @@ private:
 	// not a retry: only a corrected pin (dcOptionsChanged or the explicit
 	// enrollment resume) clears it.
 	bool _gaveUpOnPinnedFailure = false;
+	// A proxy can inject unauthenticated -404 errors. Keep the persistent
+	// key and stop reconnecting until the connection settings are restarted.
+	bool _gaveUpOnProxyError = false;
+	uint64 _presentedServerKeyFingerprint = 0;
 
 	base::Timer _oldConnectionTimer;
 	bool _oldConnection = true;
@@ -234,6 +241,7 @@ private:
 	std::unique_ptr<SessionOptions> _options;
 	AuthKeyPtr _encryptionKey;
 	uint64 _keyId = 0;
+	uint8 _persistentKey404LoggedMask = 0;
 	uint64 _sessionId = 0;
 	uint64 _sessionSalt = 0;
 	uint32 _messagesCounter = 0;

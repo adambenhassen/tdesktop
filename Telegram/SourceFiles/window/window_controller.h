@@ -192,6 +192,7 @@ private:
 	FloatDelegate *_defaultFloatPlayerDelegate = nullptr;
 	FloatDelegate *_replacementFloatPlayerDelegate = nullptr;
 	rpl::variable<FloatDelegate*> _floatPlayerDelegate = nullptr;
+	bool _serverIdentityDialogShown = false;
 
 	QString _highlightControlId;
 

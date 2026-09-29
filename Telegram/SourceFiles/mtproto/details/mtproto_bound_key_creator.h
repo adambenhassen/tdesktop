@@ -18,6 +18,7 @@ class BoundKeyCreator final {
 public:
 	struct Delegate {
 		Fn<void(base::expected<DcKeyResult, DcKeyError>)> unboundReady;
+		Fn<void(uint64)> publicKeyMismatch;
 		Fn<void(uint64)> sentSome;
 		Fn<void()> receivedSome;
 	};

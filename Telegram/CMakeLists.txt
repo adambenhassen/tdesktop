@@ -1581,6 +1581,8 @@ PRIVATE
     mtproto/connection_http.h
     mtproto/connection_resolving.cpp
     mtproto/connection_resolving.h
+    mtproto/connection_server_resolving.cpp
+    mtproto/connection_server_resolving.h
     mtproto/connection_tcp.cpp
     mtproto/connection_tcp.h
     mtproto/core_types.h

@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_pts_waiter.h"
 #include "base/timer.h"
 
+#include <utility>
+
 class ApiWrap;
 class History;
 
@@ -26,6 +28,93 @@ struct EmojiInteractionsBunch;
 } // namespace ChatHelpers
 
 namespace Api {
+
+namespace details {
+
+class UpdateRequestState final {
+public:
+	enum class Type {
+		State,
+		Difference,
+	};
+
+	void started(Type type, mtpRequestId requestId) {
+		slot(type) = requestId;
+	}
+
+	template <typename Apply>
+	[[nodiscard]] bool finish(
+			Type type,
+			mtpRequestId requestId,
+			Apply &&apply) {
+		if (slot(type) != requestId) {
+			return false;
+		}
+		slot(type) = 0;
+		apply();
+		return true;
+	}
+
+	template <typename Apply, typename RequestDifference>
+	[[nodiscard]] bool finishState(
+			mtpRequestId requestId,
+			Apply &&apply,
+			RequestDifference &&requestDifference) {
+		return finish(Type::State, requestId, [&] {
+			apply();
+			if (std::exchange(_recovering, false)) {
+				requestDifference();
+			}
+		});
+	}
+
+	template <typename IsActive>
+	void clearInactive(IsActive &&isActive) {
+		if (_state && !isActive(_state)) {
+			_state = 0;
+		}
+		if (_difference && !isActive(_difference)) {
+			_difference = 0;
+		}
+	}
+
+	template <typename IsActive>
+	[[nodiscard]] bool canStart(
+			bool networkAllowed,
+			IsActive &&isActive) {
+		clearInactive(std::forward<IsActive>(isActive));
+		return networkAllowed && !_state && !_difference;
+	}
+
+	template <typename IsActive, typename Start>
+	void resumeIf(
+			bool networkAllowed,
+			IsActive &&isActive,
+			Start &&start) {
+		if (!canStart(
+				networkAllowed,
+				std::forward<IsActive>(isActive))) {
+			return;
+		}
+		_recovering = true;
+		start();
+	}
+
+	[[nodiscard]] bool pending() const {
+		return _state || _difference;
+	}
+
+private:
+	mtpRequestId &slot(Type type) {
+		return (type == Type::State) ? _state : _difference;
+	}
+
+	mtpRequestId _state = 0;
+	mtpRequestId _difference = 0;
+	bool _recovering = false;
+};
+
+} // namespace details
 
 class Updates final {
 public:
@@ -105,12 +194,26 @@ private:
 	void sendPing();
 	void getDifferenceByPts();
 	void getDifferenceAfterFail();
+	void requestState();
+	void recoverAfterEnrollment();
+	void clearStaleSyncRequests();
+	void stateRequestDone(
+		mtpRequestId requestId,
+		const MTPupdates_State &state);
+	void stateRequestFail(
+		mtpRequestId requestId,
+		const MTP::Error &error);
 
 	void getChannelDifference(
 		not_null<ChannelData*> channel,
 		ChannelDifferenceRequest from = ChannelDifferenceRequest::Unknown);
 	void differenceDone(const MTPupdates_Difference &result);
-	void differenceFail(const MTP::Error &error);
+	void differenceDone(
+		mtpRequestId requestId,
+		const MTPupdates_Difference &result);
+	void differenceFail(
+		mtpRequestId requestId,
+		const MTP::Error &error);
 	void feedDifference(
 		const MTPVector<MTPUser> &users,
 		const MTPVector<MTPChat> &chats,
@@ -212,6 +315,7 @@ private:
 		base::flat_map<PeerId, crl::time>> _pendingSpeakingCallParticipants;
 
 	mtpRequestId _onlineRequest = 0;
+	details::UpdateRequestState _syncRequests;
 	base::Timer _idleFinishTimer;
 	crl::time _lastSetOnline = 0;
 	bool _lastWasOnline = false;
