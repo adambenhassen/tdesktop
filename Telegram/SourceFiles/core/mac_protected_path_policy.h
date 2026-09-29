@@ -163,6 +163,8 @@ private:
 
 	[[nodiscard]] ProtectedClass ClassifyComponents(
 		const Components &components) const;
+	[[nodiscard]] ProtectedClass ClassifyAncestorComponents(
+		const Components &components) const;
 
 	[[nodiscard]] bool IsHomeRoot(const Components &components) const;
 

@@ -213,6 +213,14 @@ struct WalkResult {
 	return left == right;
 }
 
+[[nodiscard]] bool IsDestructive(Operation operation) {
+	return operation == Operation::Rename
+		|| operation == Operation::Link
+		|| operation == Operation::Unlink
+		|| operation == Operation::Rmdir
+		|| operation == Operation::RecursiveDelete;
+}
+
 [[nodiscard]] MacProtectedPathPolicy::Components ComponentsFromAscii(
 		std::initializer_list<const char *> values) {
 	MacProtectedPathPolicy::Components result;
@@ -297,7 +305,7 @@ template <typename Classify, typename IsHome>
 
 		resolved.push_back(component);
 		const auto components = FoldedComponents(resolved);
-		const auto protectedClass = classify(components);
+		const auto protectedClass = classify(components, pending.empty());
 		if (protectedClass != ProtectedClass::None) {
 			return {
 				.status = WalkResult::Status::Refused,
@@ -354,6 +362,14 @@ template <typename Classify, typename IsHome>
 		if (!pending.empty() && lstat.type != FileType::Directory) {
 			return {};
 		}
+	}
+
+	const auto protectedClass = classify(FoldedComponents(resolved), true);
+	if (protectedClass != ProtectedClass::None) {
+		return {
+			.status = WalkResult::Status::Refused,
+			.components = std::move(resolved),
+			.protectedClass = protectedClass };
 	}
 
 	return {
@@ -499,7 +515,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 	}
 	auto classifier = MacProtectedPathPolicy();
 	classifier._valid = true;
-	const auto classify = [&](const Components &components) {
+	const auto classify = [&](const Components &components, bool) {
 		classifier._homeRoots = preflightHomes;
 		// A symlink can reveal a home only as traversal reaches it.
 		for (auto i = 1; i < int(components.size()); ++i) {
@@ -512,7 +528,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		return classifier.ClassifyComponents(components);
 	};
 	for (const auto &candidate : candidates) {
-		if (classify(candidate.folded) != ProtectedClass::None) {
+		if (classify(candidate.folded, true) != ProtectedClass::None) {
 			return result;
 		}
 		const auto resolved = Walk(
@@ -638,6 +654,44 @@ ProtectedClass MacProtectedPathPolicy::ClassifyComponents(
 	return ProtectedClass::None;
 }
 
+ProtectedClass MacProtectedPathPolicy::ClassifyAncestorComponents(
+		const Components &components) const {
+	const auto library = Fold(QByteArray("Library"));
+	const auto parents = std::vector<std::pair<QString, ProtectedClass>>{
+		{ Fold(QByteArray("Application Support")),
+			ProtectedClass::ApplicationSupport },
+		{ Fold(QByteArray("Containers")), ProtectedClass::Container },
+		{ Fold(QByteArray("Group Containers")), ProtectedClass::GroupContainer },
+		{ Fold(QByteArray("Preferences")), ProtectedClass::BundleKeyed },
+		{ Fold(QByteArray("Caches")), ProtectedClass::BundleKeyed },
+		{ Fold(QByteArray("HTTPStorages")), ProtectedClass::BundleKeyed },
+		{ Fold(QByteArray("WebKit")), ProtectedClass::BundleKeyed },
+		{ Fold(QByteArray("Saved Application State")),
+			ProtectedClass::BundleKeyed } };
+	for (const auto &home : _homeRoots) {
+		if (StartsWith(home, components)) {
+			return ProtectedClass::ApplicationSupport;
+		}
+		if (!StartsWith(components, home)) {
+			continue;
+		}
+		const auto offset = home.size();
+		if (components.size() == offset + 1
+			&& components[offset] == library) {
+			return ProtectedClass::ApplicationSupport;
+		}
+		if (components.size() == offset + 2
+			&& components[offset] == library) {
+			for (const auto &[parent, protectedClass] : parents) {
+				if (components[offset + 1] == parent) {
+					return protectedClass;
+				}
+			}
+		}
+	}
+	return ProtectedClass::None;
+}
+
 bool MacProtectedPathPolicy::IsHomeRoot(
 		const Components &components) const {
 	return std::any_of(
@@ -691,13 +745,25 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 			parsedAnchor.components.end());
 		parsed.absolute = true;
 	}
+	const auto classify = [&](const Components &components, bool final) {
+		const auto protectedClass = ClassifyComponents(components);
+		return (protectedClass == ProtectedClass::None
+			&& final
+			&& IsDestructive(operation))
+			? ClassifyAncestorComponents(components)
+			: protectedClass;
+	};
+	const auto lexical = classify(
+		FoldedComponents(CanonicalRawComponents(parsed.components)),
+		true);
+	if (lexical != ProtectedClass::None) {
+		return Refused(operation, lexical, callsite, refusals);
+	}
 
 	const auto walked = Walk(
 		parsed,
 		_filesystem,
-		[&](const Components &components) {
-			return ClassifyComponents(components);
-		},
+		classify,
 		[&](const Components &components) {
 			return IsHomeRoot(components);
 		},

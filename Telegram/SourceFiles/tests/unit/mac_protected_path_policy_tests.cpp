@@ -703,3 +703,94 @@ TEST_CASE(OperationAndPairChecksCoverBothEndpoints) {
 		CHECK(policy.Classify(call) == ProtectedClass::None);
 	}
 }
+
+TEST_CASE(DestructiveOperationsRefuseProtectedAncestors) {
+	auto fs = FakeFileSystem();
+	const auto policy = TestPolicy(fs);
+	CHECK(policy.valid());
+	const auto ancestors = std::vector<QByteArray>{
+		"/",
+		"/Users",
+		"/Users/alice",
+		"/Users/alice/Library",
+		"/Users/alice/Library/Application Support",
+		"/Users/alice/Library/Containers",
+		"/Users/alice/Library/Group Containers",
+		"/Users/alice/Library/Preferences",
+		"/Users/alice/Library/Caches",
+		"/Users/alice/Library/HTTPStorages",
+		"/Users/alice/Library/WebKit",
+		"/Users/alice/Library/Saved Application State",
+		"/System/Volumes/Data/Users/alice/Library/Group Containers" };
+	const auto destructive = std::vector<Operation>{
+		Operation::Rename,
+		Operation::Link,
+		Operation::Unlink,
+		Operation::Rmdir,
+		Operation::RecursiveDelete };
+	for (const auto operation : destructive) {
+		for (const auto &path : ancestors) {
+			ClearCalls(fs);
+			const auto result = policy.Resolve(
+				operation,
+				path,
+				{},
+				u"unit.ancestor"_q);
+			CHECK(!result.allowed());
+			CHECK(result.refusal.protectedClass != ProtectedClass::None);
+			CHECK(fs.openCalls.empty());
+			for (const auto &call : fs.lstatCalls) {
+				CHECK(call != path);
+				CHECK(policy.Classify(call) == ProtectedClass::None);
+			}
+			for (const auto &call : fs.readlinkCalls) {
+				CHECK(policy.Classify(call) == ProtectedClass::None);
+			}
+		}
+	}
+	const auto allowed = QByteArray(
+		"/Users/alice/Library/Application Support/Telegramd/x");
+	CHECK(policy.Resolve(
+		Operation::Open,
+		"/Users/alice/Library/Group Containers",
+		{},
+		u"unit.ancestor.read"_q).allowed());
+	fs.entries.emplace(
+		"/safe",
+		LstatResult{ .type = FileType::Directory, .error = FileError::None });
+	fs.entries.emplace(
+		"/safe/link",
+		LstatResult{ .type = FileType::Symlink, .error = FileError::None });
+	fs.links.emplace(
+		"/safe/link",
+		ReadlinkResult{
+			.target = "/Users/alice/Library/Group Containers",
+			.error = FileError::None });
+	ClearCalls(fs);
+	CHECK(!policy.Resolve(
+		Operation::Rename,
+		"/safe/link",
+		{},
+		u"unit.ancestor.alias"_q).allowed());
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(call != QByteArray("/Users/alice/Library/Group Containers"));
+	}
+	CHECK(policy.Resolve(
+		Operation::Rename,
+		allowed,
+		{},
+		u"unit.ancestor.allowed"_q).allowed());
+	const auto source = QByteArray("/safe/source");
+	CHECK(!policy.ResolvePair(
+		Operation::Rename,
+		"/Users/alice/Library/Group Containers",
+		source,
+		{},
+		u"unit.ancestor.first"_q).allowed());
+	CHECK(!policy.ResolvePair(
+		Operation::Rename,
+		source,
+		"/Users/alice/Library/Group Containers",
+		{},
+		u"unit.ancestor.second"_q).allowed());
+}
