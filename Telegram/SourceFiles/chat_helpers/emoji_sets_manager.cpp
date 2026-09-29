@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
 #include "storage/storage_cloud_blob.h"
@@ -176,7 +177,12 @@ void Loader::unpack(const QString &path) {
 	const auto weak = base::make_weak(this);
 	crl::async([=] {
 		if (UnpackSet(path, folder)) {
-			QFile(path).remove();
+			if (Core::MacProtectedPath::CheckPath(
+					Core::MacProtectedPath::Operation::Unlink,
+					path,
+					Q_FUNC_INFO)) {
+				QFile(path).remove();
+			}
 			SwitchToSet(id(), crl::guard(weak, [=](bool success) {
 				if (success) {
 					destroy();

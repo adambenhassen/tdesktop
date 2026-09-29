@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/details/storage_file_utilities.h"
 
 #include "core/version.h"
+#include "core/mac_protected_path_runtime.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "base/platform/base_platform_file_utilities.h"
 #include "base/openssl_help.h"
@@ -20,6 +21,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Storage {
 namespace details {
 namespace {
+
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckPath(Operation operation, const QString &path) {
+	return Core::MacProtectedPath::CheckPath(
+		operation,
+		path,
+		"Storage::details");
+}
+
+[[nodiscard]] bool CheckPair(
+		Operation operation,
+		const QString &first,
+		const QString &second) {
+	return Core::MacProtectedPath::CheckPair(
+		operation,
+		first,
+		second,
+		"Storage::details");
+}
 
 constexpr char TdfMagic[] = { 'T', 'D', 'F', '$' };
 constexpr auto TdfMagicLen = int(sizeof(TdfMagic));
@@ -111,9 +132,13 @@ bool WriteManager::writeNow(WriteEntry &&entry) {
 	const auto backup = path('1');
 	QSaveFile save;
 	if (open(save, 's') && write(save)) {
-		if (save.commit()) {
-			QFile::remove(simple);
-			QFile::remove(backup);
+		if (CheckPath(Operation::Rename, safe) && save.commit()) {
+			if (CheckPath(Operation::Unlink, simple)) {
+				QFile::remove(simple);
+			}
+			if (CheckPath(Operation::Unlink, backup)) {
+				QFile::remove(backup);
+			}
 			return true;
 		}
 		LOG(("Storage Error: Could not commit '%1'.").arg(safe));
@@ -123,11 +148,16 @@ bool WriteManager::writeNow(WriteEntry &&entry) {
 		base::Platform::FlushFileData(plain);
 		plain.close();
 
-		QFile::remove(backup);
-		if (base::Platform::RenameWithOverwrite(simple, safe)) {
+		if (CheckPath(Operation::Unlink, backup)) {
+			QFile::remove(backup);
+		}
+		if (CheckPair(Operation::Rename, simple, safe)
+			&& base::Platform::RenameWithOverwrite(simple, safe)) {
 			return true;
 		}
-		QFile::remove(simple);
+		if (CheckPath(Operation::Unlink, simple)) {
+			QFile::remove(simple);
+		}
 		LOG(("Storage Error: Could not rename '%1' to '%2', removing temporary file.").arg(
 			simple,
 			safe));
@@ -153,13 +183,21 @@ bool WriteManager::writeOneScheduledNow() {
 }
 
 bool WriteManager::writeHeader(const QString &basePath, QFileDevice &file) {
+	if (!CheckPath(Operation::Write, file.fileName())) {
+		return false;
+	}
 	if (!file.open(QIODevice::WriteOnly)) {
+		if (!CheckPath(Operation::Stat, basePath)) {
+			return false;
+		}
 		const auto dir = QDir(basePath);
 		if (dir.exists()) {
 			return false;
-		} else if (!QDir().mkpath(dir.absolutePath())) {
+		} else if (!CheckPath(Operation::Mkdir, dir.absolutePath())
+			|| !QDir().mkpath(dir.absolutePath())) {
 			return false;
-		} else if (!file.open(QIODevice::WriteOnly)) {
+		} else if (!CheckPath(Operation::Write, file.fileName())
+			|| !file.open(QIODevice::WriteOnly)) {
 			return false;
 		}
 	}
@@ -254,14 +292,23 @@ QString ToFilePart(FileKey val) {
 
 bool KeyAlreadyUsed(QString &name) {
 	name += '0';
+	if (!CheckPath(Operation::Stat, name)) {
+		return false;
+	}
 	if (QFileInfo::exists(name)) {
 		return true;
 	}
 	name[name.size() - 1] = '1';
+	if (!CheckPath(Operation::Stat, name)) {
+		return false;
+	}
 	if (QFileInfo::exists(name)) {
 		return true;
 	}
 	name[name.size() - 1] = 's';
+	if (!CheckPath(Operation::Stat, name)) {
+		return false;
+	}
 	if (QFileInfo::exists(name)) {
 		return true;
 	}
@@ -286,11 +333,17 @@ void ClearKey(const FileKey &key, const QString &basePath) {
 	QString name;
 	name.reserve(basePath.size() + 0x11);
 	name.append(basePath).append(ToFilePart(key)).append('0');
-	QFile::remove(name);
+	if (CheckPath(Operation::Unlink, name)) {
+		QFile::remove(name);
+	}
 	name[name.size() - 1] = '1';
-	QFile::remove(name);
+	if (CheckPath(Operation::Unlink, name)) {
+		QFile::remove(name);
+	}
 	name[name.size() - 1] = 's';
-	QFile::remove(name);
+	if (CheckPath(Operation::Unlink, name)) {
+		QFile::remove(name);
+	}
 }
 
 bool CheckStreamStatus(QDataStream &stream) {
@@ -484,16 +537,29 @@ bool ReadFile(
 	// detect order of read attempts
 	QString toTry[2];
 	const auto modern = base + 's';
+	if (!CheckPath(Operation::Stat, modern)) {
+		return false;
+	}
 	if (QFileInfo::exists(modern)) {
 		toTry[0] = modern;
 	} else {
 		// Legacy way.
 		toTry[0] = base + '0';
+		if (!CheckPath(Operation::Stat, toTry[0])) {
+			return false;
+		}
 		QFileInfo toTry0(toTry[0]);
 		if (toTry0.exists()) {
 			toTry[1] = basePath + name + '1';
+			if (!CheckPath(Operation::Stat, toTry[1])) {
+				return false;
+			}
 			QFileInfo toTry1(toTry[1]);
 			if (toTry1.exists()) {
+				if (!CheckPath(Operation::Stat, toTry[0])
+					|| !CheckPath(Operation::Stat, toTry[1])) {
+					return false;
+				}
 				QDateTime mod0 = toTry0.lastModified();
 				QDateTime mod1 = toTry1.lastModified();
 				if (mod0 < mod1) {
@@ -511,7 +577,8 @@ bool ReadFile(
 		if (fname.isEmpty()) break;
 
 		QFile f(fname);
-		if (!f.open(QIODevice::ReadOnly)) {
+		if (!CheckPath(Operation::Read, fname)
+			|| !f.open(QIODevice::ReadOnly)) {
 			DEBUG_LOG(("App Info: failed to open '%1' for reading"
 				).arg(name));
 			continue;
@@ -578,7 +645,9 @@ bool ReadFile(
 		result.stream.setVersion(QDataStream::Qt_5_1);
 
 		if ((i == 0 && !toTry[1].isEmpty()) || i == 1) {
-			QFile::remove(toTry[1 - i]);
+			if (CheckPath(Operation::Unlink, toTry[1 - i])) {
+				QFile::remove(toTry[1 - i]);
+			}
 		}
 
 		return true;

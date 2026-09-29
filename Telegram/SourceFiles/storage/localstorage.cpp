@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_location.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/version.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
@@ -57,6 +58,14 @@ const auto kThemeNewPathRelativeTag = u"special://new_tag"_q;
 
 using namespace Storage::details;
 using Storage::FileKey;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckProfilePath(
+		Operation operation,
+		const QString &path,
+		const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 
 using Database = Storage::Cache::Database;
 
@@ -151,7 +160,8 @@ void applyReadContext(ReadSettingsContext &&context) {
 bool _readOldSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	auto file = QFile(cWorkingDir() + u"tdata/config"_q);
-	if (file.open(QIODevice::ReadOnly)) {
+	if (CheckProfilePath(Operation::Read, file.fileName(), Q_FUNC_INFO)
+		&& file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old config..."));
 		QDataStream stream(&file);
 		stream.setVersion(QDataStream::Qt_5_1);
@@ -174,7 +184,13 @@ bool _readOldSettings(bool remove, ReadSettingsContext &context) {
 		file.close();
 		result = true;
 	}
-	if (remove) file.remove();
+	if (remove
+		&& CheckProfilePath(
+			Operation::Unlink,
+			file.fileName(),
+			Q_FUNC_INFO)) {
+		file.remove();
+	}
 	return result;
 }
 
@@ -250,14 +266,21 @@ bool _readOldUserSettings(bool remove, ReadSettingsContext &context) {
 	//const auto testPrefix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPrefix = QString();
 	QFile file(cWorkingDir() + cDataFile() + testPrefix + u"_config"_q);
-	if (file.open(QIODevice::ReadOnly)) {
+	if (CheckProfilePath(Operation::Read, file.fileName(), Q_FUNC_INFO)
+		&& file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old user config..."));
 		qint32 version = 0;
 		_readOldUserSettingsFields(&file, version, context);
 		file.close();
 		result = true;
 	}
-	if (remove) file.remove();
+	if (remove
+		&& CheckProfilePath(
+			Operation::Unlink,
+			file.fileName(),
+			Q_FUNC_INFO)) {
+		file.remove();
+	}
 	return result;
 }
 
@@ -331,14 +354,21 @@ bool _readOldMtpData(bool remove, ReadSettingsContext &context) {
 	//const auto testPostfix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPostfix = QString();
 	QFile file(cWorkingDir() + cDataFile() + testPostfix);
-	if (file.open(QIODevice::ReadOnly)) {
+	if (CheckProfilePath(Operation::Read, file.fileName(), Q_FUNC_INFO)
+		&& file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old keys..."));
 		qint32 version = 0;
 		_readOldMtpDataFields(&file, version, context);
 		file.close();
 		result = true;
 	}
-	if (remove) file.remove();
+	if (remove
+		&& CheckProfilePath(
+			Operation::Unlink,
+			file.fileName(),
+			Q_FUNC_INFO)) {
+		file.remove();
+	}
 	return result;
 }
 
@@ -363,7 +393,14 @@ void start() {
 	_localLoader = new TaskQueue(kFileLoaderQueueStopTimeout);
 
 	_basePath = cWorkingDir() + u"tdata/"_q;
-	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
+	if (!CheckProfilePath(Operation::Stat, _basePath, Q_FUNC_INFO)) {
+		return;
+	}
+	if (!QDir().exists(_basePath)
+		&& (!CheckProfilePath(Operation::Mkdir, _basePath, Q_FUNC_INFO)
+			|| !QDir().mkpath(_basePath))) {
+		return;
+	}
 
 	ReadSettingsContext context;
 	FileReadDescriptor settingsData;
@@ -446,7 +483,14 @@ void writeSettings() {
 		return;
 	}
 
-	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
+	if (!CheckProfilePath(Operation::Stat, _basePath, Q_FUNC_INFO)) {
+		return;
+	}
+	if (!QDir().exists(_basePath)
+		&& (!CheckProfilePath(Operation::Mkdir, _basePath, Q_FUNC_INFO)
+			|| !QDir().mkpath(_basePath))) {
+		return;
+	}
 
 	// We dropped old test authorizations when migrated to multi auth.
 	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
@@ -553,7 +597,8 @@ const QString &readAutoupdatePrefixRaw() {
 		return result;
 	}
 	QFile f(autoupdatePrefixFile());
-	if (f.open(QIODevice::ReadOnly)) {
+	if (CheckProfilePath(Operation::Read, f.fileName(), Q_FUNC_INFO)
+		&& f.open(QIODevice::ReadOnly)) {
 		const auto value = QString::fromUtf8(f.readAll());
 		if (!value.isEmpty()) {
 			return AutoupdatePrefix(value);
@@ -572,7 +617,8 @@ void writeAutoupdatePrefix(const QString &prefix) {
 	if (current != prefix) {
 		AutoupdatePrefix(prefix);
 		QFile f(autoupdatePrefixFile());
-		if (f.open(QIODevice::WriteOnly)) {
+		if (CheckProfilePath(Operation::Write, f.fileName(), Q_FUNC_INFO)
+			&& f.open(QIODevice::WriteOnly)) {
 			f.write(prefix.toUtf8());
 			f.close();
 		}
@@ -921,11 +967,26 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 	auto ignoreCache = false;
 	if (!object.cloud.id) {
 		auto file = QFile(object.pathRelative);
+		if (!object.pathRelative.isEmpty()
+			&& !CheckProfilePath(
+				Operation::Stat,
+				file.fileName(),
+				Q_FUNC_INFO)) {
+			return {};
+		}
 		if (object.pathRelative.isEmpty() || !file.exists()) {
 			file.setFileName(object.pathAbsolute);
 		}
 		if (!file.fileName().isEmpty()
+			&& CheckProfilePath(
+				Operation::Stat,
+				file.fileName(),
+				Q_FUNC_INFO)
 			&& file.exists()
+			&& CheckProfilePath(
+				Operation::Read,
+				file.fileName(),
+				Q_FUNC_INFO)
 			&& file.open(QIODevice::ReadOnly)) {
 			if (file.size() > kThemeFileSizeLimit) {
 				LOG(("Error: theme file too large: %1 "

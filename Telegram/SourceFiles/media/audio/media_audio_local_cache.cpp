@@ -7,8 +7,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/audio/media_audio_local_cache.h"
 
+#include "core/mac_protected_path_runtime.h"
+
 #include "ffmpeg/ffmpeg_bytes_io_wrap.h"
 #include "ffmpeg/ffmpeg_utility.h"
+
+#ifdef Q_OS_MAC
+#include <cerrno>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif // Q_OS_MAC
 
 namespace Media::Audio {
 namespace {
@@ -303,7 +311,16 @@ LocalSound LocalCache::sound(
 
 LocalDiskCache::LocalDiskCache(const QString &folder)
 : _base(folder + '/') {
-	QDir().mkpath(_base);
+	if (Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::OpenDir,
+			_base,
+			Q_FUNC_INFO)
+		&& Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Mkdir,
+			_base,
+			Q_FUNC_INFO)) {
+		QDir().mkpath(_base);
+	}
 }
 
 QString LocalDiskCache::name(const LocalSound &sound) {
@@ -315,16 +332,88 @@ QString LocalDiskCache::name(const LocalSound &sound) {
 		return i->second;
 	}
 
-	auto result = u"TD_%1"_q.arg(sound.id
+	const auto integrationTest
+		= Core::MacProtectedPath::IntegrationTestActive();
+	const auto prefix = integrationTest
+		? u"Telegramd_%1"_q
+		: u"TD_%1"_q;
+	auto result = prefix.arg(sound.id
 		? QString::number(sound.id, 16).toUpper()
 		: u"Default"_q);
 	const auto path = _base + u"%1.wav"_q.arg(result);
 
 	auto f = QFile(path);
-	if (f.open(QIODevice::WriteOnly)) {
+	if (integrationTest) {
+		if (!Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Write,
+				path,
+				Q_FUNC_INFO)
+			|| !f.open(QIODevice::WriteOnly)
+			|| (f.write(sound.wav) != sound.wav.size())) {
+			return {};
+		}
+		f.close();
+	} else if (f.open(QIODevice::WriteOnly)) {
 		f.write(sound.wav);
 		f.close();
 	}
+
+#ifdef Q_OS_MAC
+	if (integrationTest) {
+		const auto soundsDirectory
+			= Core::MacProtectedPath::NotificationSoundsDirectory();
+		const auto notificationPath
+			= soundsDirectory + '/' + result + u".wav"_q;
+		if (soundsDirectory.isEmpty()
+			|| !Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::OpenDir,
+				soundsDirectory,
+				Q_FUNC_INFO)
+			|| !Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Mkdir,
+				soundsDirectory,
+				Q_FUNC_INFO)
+			|| !QDir().mkpath(soundsDirectory)
+			|| !Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Stat,
+				path,
+				Q_FUNC_INFO)
+			|| !Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Lstat,
+				notificationPath,
+				Q_FUNC_INFO)) {
+			return {};
+		}
+		const auto source = QFile::encodeName(path);
+		const auto destination = QFile::encodeName(notificationPath);
+		struct stat sourceInfo = {};
+		if (::stat(source.constData(), &sourceInfo)) {
+			return {};
+		}
+		struct stat destinationInfo = {};
+		if (::lstat(destination.constData(), &destinationInfo)) {
+			if (errno != ENOENT
+				|| !Core::MacProtectedPath::CheckPair(
+					Core::MacProtectedPath::Operation::Link,
+					path,
+					notificationPath,
+					Q_FUNC_INFO)
+				|| ::link(source.constData(), destination.constData())) {
+				return {};
+			}
+		} else {
+			if (!Core::MacProtectedPath::CheckPath(
+					Core::MacProtectedPath::Operation::Stat,
+					notificationPath,
+					Q_FUNC_INFO)
+				|| ::stat(destination.constData(), &destinationInfo)
+				|| (sourceInfo.st_dev != destinationInfo.st_dev)
+				|| (sourceInfo.st_ino != destinationInfo.st_ino)) {
+				return {};
+			}
+		}
+	}
+#endif // Q_OS_MAC
 
 	_paths.emplace(sound.id, result);
 	return result;

@@ -3127,17 +3127,34 @@ bool GroupCall::tryCreateController() {
 	if (Logs::DebugEnabled()) {
 		auto callLogFolder = cWorkingDir() + u"DebugLogs"_q;
 		auto callLogPath = callLogFolder + u"/last_group_call_log.txt"_q;
-		auto callLogNative = QDir::toNativeSeparators(callLogPath);
-		descriptor.config.need_log = true;
+		if (Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::OpenDir,
+				callLogFolder,
+				Q_FUNC_INFO)
+			&& Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Mkdir,
+				callLogFolder,
+				Q_FUNC_INFO)
+			&& Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Unlink,
+				callLogPath,
+				Q_FUNC_INFO)
+			&& Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Write,
+				callLogPath,
+				Q_FUNC_INFO)
+			&& QDir().mkpath(callLogFolder)) {
+			auto callLogNative = QDir::toNativeSeparators(callLogPath);
+			descriptor.config.need_log = true;
 #ifdef Q_OS_WIN
-		descriptor.config.logPath.data = callLogNative.toStdWString();
+			descriptor.config.logPath.data = callLogNative.toStdWString();
 #else // Q_OS_WIN
-		const auto callLogUtf = QFile::encodeName(callLogNative);
-		descriptor.config.logPath.data.resize(callLogUtf.size());
-		ranges::copy(callLogUtf, descriptor.config.logPath.data.begin());
+			const auto callLogUtf = QFile::encodeName(callLogNative);
+			descriptor.config.logPath.data.resize(callLogUtf.size());
+			ranges::copy(callLogUtf, descriptor.config.logPath.data.begin());
 #endif // Q_OS_WIN
-		QFile(callLogPath).remove();
-		QDir().mkpath(callLogFolder);
+			QFile(callLogPath).remove();
+		}
 	} else {
 		descriptor.config.need_log = false;
 	}

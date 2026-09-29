@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "chat_helpers/bot_command.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/local_url_handlers.h"
 #include "core/file_utilities.h"
 #include "mainwidget.h"
@@ -168,14 +169,28 @@ void ExportToCalendar(TimeId date, const QString &messageText) {
 			.arg(date)
 			.arg(summary)
 			.arg(description)
-			.arg(uid, 0, 16);
+		.arg(uid, 0, 16);
 	const auto dir = cWorkingDir() + u"tdata/temp"_q;
-	QDir().mkpath(dir);
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::OpenDir,
+			dir,
+			Q_FUNC_INFO)
+		|| !Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Mkdir,
+			dir,
+			Q_FUNC_INFO)
+		|| !QDir().mkpath(dir)) {
+		return;
+	}
 	const auto path = u"%1/event_%2.ics"_q
 		.arg(dir)
 		.arg(date);
 	auto file = QFile(path);
-	if (file.open(QIODevice::WriteOnly)) {
+	if (Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Write,
+			path,
+			Q_FUNC_INFO)
+		&& file.open(QIODevice::WriteOnly)) {
 		file.write(content.toUtf8());
 		file.close();
 		File::Launch(path);

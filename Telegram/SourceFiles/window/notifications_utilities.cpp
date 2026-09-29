@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/base_platform_file_utilities.h"
 #include "base/random.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/data_peer.h"
 #include "ui/empty_userpic.h"
 #include "styles/style_window.h"
@@ -33,13 +34,28 @@ QImage GenerateUserpic(not_null<PeerData*> peer, Ui::PeerUserpicView &view) {
 
 CachedUserpics::CachedUserpics()
 : _clearTimer([=] { clear(); }) {
-	QDir().mkpath(cWorkingDir() + u"tdata/temp"_q);
+	const auto directory = cWorkingDir() + u"tdata/temp"_q;
+	if (Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::OpenDir,
+			directory,
+			Q_FUNC_INFO)
+		&& Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Mkdir,
+			directory,
+			Q_FUNC_INFO)) {
+		QDir().mkpath(directory);
+	}
 }
 
 CachedUserpics::~CachedUserpics() {
 	if (_someSavedFlag) {
 		for (const auto &item : std::as_const(_images)) {
-			QFile(item.path).remove();
+			if (Core::MacProtectedPath::CheckPath(
+					Core::MacProtectedPath::Operation::Unlink,
+					item.path,
+					Q_FUNC_INFO)) {
+				QFile(item.path).remove();
+			}
 		}
 
 		// This works about 1200ms on Windows for a folder with one image O_o
@@ -69,10 +85,15 @@ QString CachedUserpics::get(
 		v.path = u"%1tdata/temp/%2.png"_q.arg(
 			cWorkingDir(),
 			QString::number(base::RandomValue<uint64>(), 16));
-		if (key.first || key.second) {
-			GenerateUserpic(peer, view).save(v.path, "PNG");
-		} else {
-			LogoNoMargin().save(v.path, "PNG");
+		if (Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Write,
+				v.path,
+				Q_FUNC_INFO)) {
+			if (key.first || key.second) {
+				GenerateUserpic(peer, view).save(v.path, "PNG");
+			} else {
+				LogoNoMargin().save(v.path, "PNG");
+			}
 		}
 		i = _images.insert(key, v);
 		_someSavedFlag = true;
@@ -88,7 +109,12 @@ crl::time CachedUserpics::clear(crl::time ms) {
 			continue;
 		}
 		if (i->until <= ms) {
-			QFile(i->path).remove();
+			if (Core::MacProtectedPath::CheckPath(
+					Core::MacProtectedPath::Operation::Unlink,
+					i->path,
+					Q_FUNC_INFO)) {
+				QFile(i->path).remove();
+			}
 			i = _images.erase(i);
 		} else {
 			if (!result) {

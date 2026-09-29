@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/mac_protected_path_policy.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QMutexLocker>
 
 #include <algorithm>
 #include <deque>
@@ -221,6 +222,15 @@ struct WalkResult {
 		|| operation == Operation::RecursiveDelete;
 }
 
+[[nodiscard]] bool FollowsFinalComponent(Operation operation) {
+	return operation != Operation::Lstat
+		&& operation != Operation::Mkdir
+		&& operation != Operation::Link
+		&& operation != Operation::Rename
+		&& operation != Operation::Unlink
+		&& operation != Operation::Rmdir;
+}
+
 [[nodiscard]] MacProtectedPathPolicy::Components ComponentsFromAscii(
 		std::initializer_list<const char *> values) {
 	MacProtectedPathPolicy::Components result;
@@ -269,7 +279,8 @@ template <typename Classify, typename IsHome>
 		const FileSystem &filesystem,
 		Classify &&classify,
 		IsHome &&isHome,
-		bool allowMissingSuffix) {
+		bool allowMissingSuffix,
+		bool followFinalComponent) {
 	if (!path.absolute || !filesystem.lstat || !filesystem.readlink) {
 		return {};
 	}
@@ -311,6 +322,10 @@ template <typename Classify, typename IsHome>
 				.status = WalkResult::Status::Refused,
 				.components = std::move(resolved),
 				.protectedClass = protectedClass };
+		}
+		if (pending.empty() && !followFinalComponent) {
+			resolvedTypes.push_back(FileType::Other);
+			break;
 		}
 
 		if (missingSuffix) {
@@ -388,7 +403,7 @@ template <typename Classify, typename IsHome>
 		RefusalLog *refusals) {
 	const auto refusal = RefusalRecord{ operation, protectedClass, callsite };
 	if (refusals) {
-		refusals->record(refusal);
+		static_cast<void>(refusals->record(refusal));
 	}
 	return {
 		.status = ResolutionStatus::Refused,
@@ -413,7 +428,8 @@ RefusalLog::RefusalLog(std::function<qint64()> clock)
 }) {
 }
 
-void RefusalLog::record(const RefusalRecord &refusal) {
+bool RefusalLog::record(const RefusalRecord &refusal) {
+	QMutexLocker lock(&_mutex);
 	const auto key = std::pair(
 		int(refusal.operation),
 		int(refusal.protectedClass));
@@ -421,10 +437,11 @@ void RefusalLog::record(const RefusalRecord &refusal) {
 	const auto i = _last.find(key);
 	if (i != _last.end()
 		&& (now < i->second || now - i->second < kRefusalInterval)) {
-		return;
+		return false;
 	}
 	_last[key] = now;
 	_records.push_back(refusal);
+	return true;
 }
 
 const std::vector<RefusalRecord> &RefusalLog::records() const {
@@ -439,10 +456,36 @@ bool PairResolution::allowed() const {
 	return first.allowed() && second.allowed();
 }
 
+QByteArray TelegramdProfileRoot(
+		const HomeRoots &homes,
+		bool appSandboxed) {
+	auto result = appSandboxed
+		? homes.foundation
+		: homes.accountDatabase;
+	if (result.isEmpty()) {
+		return {};
+	}
+	while (result.size() > 1 && result.endsWith('/')) {
+		result.chop(1);
+	}
+	if (!result.endsWith('/')) {
+		result.append('/');
+	}
+	result.append("Library/Application Support/Telegramd");
+	return result;
+}
+
 MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		const HomeRoots &homes,
-		const FileSystem &filesystem) {
+		const FileSystem &filesystem,
+		RefusalRecord *failure) {
 	auto result = MacProtectedPathPolicy();
+	if (failure) {
+		*failure = {
+			.operation = Operation::Open,
+			.protectedClass = ProtectedClass::Invalid,
+			.callsite = u"profile.home"_q };
+	}
 	if (homes.accountDatabase.isEmpty()
 		|| homes.foundation.isEmpty()) {
 		return result;
@@ -532,7 +575,11 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		return classifier.ClassifyComponents(components);
 	};
 	for (const auto &candidate : candidates) {
-		if (classify(candidate.folded, true) != ProtectedClass::None) {
+		const auto candidateClass = classify(candidate.folded, true);
+		if (candidateClass != ProtectedClass::None) {
+			if (failure) {
+				failure->protectedClass = candidateClass;
+			}
 			return result;
 		}
 		const auto resolved = Walk(
@@ -540,10 +587,14 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 			filesystem,
 			classify,
 			[](const Components &) { return false; },
-			false);
+			false,
+			true);
 		if (resolved.status != WalkResult::Status::Allowed
 			|| resolved.components.empty()
 			|| resolved.finalType != FileType::Directory) {
+			if (failure && resolved.status == WalkResult::Status::Refused) {
+				failure->protectedClass = resolved.protectedClass;
+			}
 			return result;
 		}
 		addHomeCandidates(resolved.components, preflightHomes);
@@ -771,7 +822,8 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 		[&](const Components &components) {
 			return IsHomeRoot(components);
 		},
-		true);
+		true,
+		FollowsFinalComponent(operation));
 	if (walked.status == WalkResult::Status::Refused) {
 		return Refused(
 			operation,

@@ -39,6 +39,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/data_drafts.h"
 #include "export/export_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "webview/webview_interface.h"
 #include "window/themes/window_theme.h"
 
@@ -46,6 +47,14 @@ namespace Storage {
 namespace {
 
 using namespace details;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckAccountPath(
+		Operation operation,
+		const QString &path,
+		const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 using Database = Cache::Database;
 
 constexpr auto kDelayedWriteTimeout = crl::time(1000);
@@ -661,14 +670,34 @@ void Account::reset() {
 	_cacheBigFileTotalTimeLimit = Database::Settings().totalTimeLimit;
 	_mediaLastPlaybackPosition.clear();
 
-	const auto wvbots = _webviewStorageIdBots.path;
-	const auto wvother = _webviewStorageIdOther.path;
-	const auto wvclear = [](Webview::StorageId &storageId) {
-		Webview::ClearStorageDataByToken(
-			base::take(storageId).token.toStdString());
+	const auto wvbots = _webviewStorageIdBots.token.isEmpty()
+		? QString()
+		: !_webviewStorageIdBots.path.isEmpty()
+		? _webviewStorageIdBots.path
+		: (_webviewStorageIdBots.token == Webview::LegacyStorageIdToken())
+		? BaseGlobalPath() + u"webview"_q
+		: _databasePath + u"wvbots"_q;
+	const auto wvother = _webviewStorageIdOther.token.isEmpty()
+		? QString()
+		: !_webviewStorageIdOther.path.isEmpty()
+		? _webviewStorageIdOther.path
+		: _databasePath + u"wvother"_q;
+	const auto wvclear = [](Webview::StorageId &storageId, const QString &path) {
+		const auto token = base::take(storageId).token.toStdString();
+		if (!token.empty()
+			&& CheckAccountPath(
+				Operation::OpenDir,
+				path,
+				"Storage::Account::clearWebview")
+			&& CheckAccountPath(
+				Operation::RecursiveDelete,
+				path,
+				"Storage::Account::clearWebview")) {
+			Webview::ClearStorageDataByToken(token);
+		}
 	};
-	wvclear(_webviewStorageIdBots);
-	wvclear(_webviewStorageIdOther);
+	wvclear(_webviewStorageIdBots, wvbots);
+	wvclear(_webviewStorageIdOther, wvother);
 
 	_mapChanged = true;
 	writeMap();
@@ -686,17 +715,44 @@ void Account::reset() {
 				&& !name.endsWith(u"map1"_q)
 				&& !name.endsWith(u"maps"_q)
 				&& !name.endsWith(u"configs"_q)) {
-				QFile::remove(base + name);
+				const auto path = base + name;
+				if (CheckAccountPath(
+						Operation::Unlink,
+						path,
+						"Storage::Account::remove")) {
+					QFile::remove(path);
+				}
 			}
 		}
-		QDir(LegacyTempDirectory()).removeRecursively();
+		const auto legacyTemp = LegacyTempDirectory();
+		if (CheckAccountPath(
+				Operation::RecursiveDelete,
+				legacyTemp,
+				"Storage::Account::remove")) {
+			QDir(legacyTemp).removeRecursively();
+		}
 		if (!wvbots.isEmpty()) {
-			QDir(wvbots).removeRecursively();
+			if (CheckAccountPath(
+					Operation::RecursiveDelete,
+					wvbots,
+					"Storage::Account::remove")) {
+				QDir(wvbots).removeRecursively();
+			}
 		}
 		if (!wvother.isEmpty()) {
-			QDir(wvother).removeRecursively();
+			if (CheckAccountPath(
+					Operation::RecursiveDelete,
+					wvother,
+					"Storage::Account::remove")) {
+				QDir(wvother).removeRecursively();
+			}
 		}
-		QDir(temp).removeRecursively();
+		if (CheckAccountPath(
+				Operation::RecursiveDelete,
+				temp,
+				"Storage::Account::remove")) {
+			QDir(temp).removeRecursively();
+		}
 	});
 
 	Local::sync();

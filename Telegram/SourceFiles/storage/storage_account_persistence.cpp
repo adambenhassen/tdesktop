@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/const_string.h"
 #include "main/main_account.h"
 #include "mtproto/mtproto_config.h"
+#include "core/mac_protected_path_runtime.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/details/storage_settings_scheme.h"
 #include "storage/serialize_common.h"
@@ -24,6 +25,14 @@ namespace Storage {
 namespace {
 
 using namespace details;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckPersistencePath(
+		Operation operation,
+		const QString &path,
+		const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 
 constexpr auto kDelayedWriteTimeout = crl::time(1000);
 
@@ -89,7 +98,14 @@ const auto kServerReenrollmentTombstonePrefix
 	auto result = true;
 	for (const auto suffix : { 's', '0', '1' }) {
 		const auto path = base + suffix;
-		if (QFileInfo::exists(path) && !QFile::remove(path)) {
+		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
+			result = false;
+		} else if (QFileInfo::exists(path)
+			&& (!CheckPersistencePath(
+				Operation::Unlink,
+				path,
+				Q_FUNC_INFO)
+				|| !QFile::remove(path))) {
 			result = false;
 		}
 	}
@@ -100,13 +116,22 @@ const auto kServerReenrollmentTombstonePrefix
 	if (path.isEmpty()) {
 		return true;
 	}
+	if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
+		return false;
+	}
 	const auto info = QFileInfo(path);
 	if (!info.exists()) {
 		return true;
 	}
-	return info.isDir()
-		? QDir(path).removeRecursively()
-		: QFile::remove(path);
+	if (info.isDir()) {
+		return CheckPersistencePath(
+				Operation::RecursiveDelete,
+				path,
+				Q_FUNC_INFO)
+			&& QDir(path).removeRecursively();
+	}
+	return CheckPersistencePath(Operation::Unlink, path, Q_FUNC_INFO)
+		&& QFile::remove(path);
 }
 
 [[nodiscard]] bool IsKnownWebviewPath(
@@ -316,9 +341,14 @@ bool Account::writeServerReenrollmentTombstone() {
 bool Account::serverReenrollmentPending() const {
 	const auto name = ServerReenrollmentTombstoneName(_dataNameKey);
 	const auto base = BaseGlobalPath() + name;
-	return QFileInfo::exists(base + 's')
-		|| QFileInfo::exists(base + '0')
-		|| QFileInfo::exists(base + '1');
+	for (const auto suffix : { 's', '0', '1' }) {
+		const auto path = base + suffix;
+		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)
+			|| QFileInfo::exists(path)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 std::unique_ptr<MTP::Config> Account::startServerReenrollment() {
@@ -539,9 +569,15 @@ void Account::readMtpAuthorizationFailureMarkerForTest() {
 
 void Account::readMtpAuthorizationFailureMarker() {
 	const auto base = _basePath + kMtpAuthorizationWriteFailedFile;
-	const auto exists = QFileInfo::exists(base + 's')
-		|| QFileInfo::exists(base + '0')
-		|| QFileInfo::exists(base + '1');
+	auto exists = false;
+	for (const auto suffix : { 's', '0', '1' }) {
+		const auto path = base + suffix;
+		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
+			_mtpAuthorizationWriteFailed = true;
+			return;
+		}
+		exists = QFileInfo::exists(path) || exists;
+	}
 	if (!exists) {
 		return;
 	}
@@ -571,7 +607,14 @@ bool Account::clearMtpAuthorizationFailureMarker() {
 	auto result = true;
 	for (const auto suffix : { 's', '0', '1' }) {
 		const auto path = base + suffix;
-		if (QFileInfo::exists(path) && !QFile::remove(path)) {
+		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
+			result = false;
+		} else if (QFileInfo::exists(path)
+			&& (!CheckPersistencePath(
+				Operation::Unlink,
+				path,
+				Q_FUNC_INFO)
+				|| !QFile::remove(path))) {
 			result = false;
 		}
 	}
@@ -600,8 +643,14 @@ bool Account::writeMap(bool sync) {
 		return true;
 	}
 
+	if (!CheckPersistencePath(Operation::Stat, _basePath, Q_FUNC_INFO)) {
+		return false;
+	}
 	if (!QDir().exists(_basePath)) {
-		QDir().mkpath(_basePath);
+		if (!CheckPersistencePath(Operation::Mkdir, _basePath, Q_FUNC_INFO)
+			|| !QDir().mkpath(_basePath)) {
+			return false;
+		}
 	}
 
 	FileWriteDescriptor map(u"map"_q, _basePath, sync);

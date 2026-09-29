@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/mac/notifications_manager_mac_un.h"
 
+#include "core/mac_protected_path_runtime.h"
+
 #include "base/options.h"
 #include "base/platform/mac/base_utilities_mac.h"
 #include "base/random.h"
@@ -94,6 +96,9 @@ struct InFlightRequest {
 }
 
 [[nodiscard]] QString ResolveSoundsFolder() {
+	if (Core::MacProtectedPath::IntegrationTestActive()) {
+		return cWorkingDir() + u"tdata/sounds"_q;
+	}
 	NSArray *paths = NSSearchPathForDirectoriesInDomains(
 		NSLibraryDirectory,
 		NSUserDomainMask,
@@ -260,7 +265,17 @@ UNManager::Private::Private(UNManager *manager)
 , _managerIdString(QString::number(_managerId))
 , _manager(manager)
 , _sounds(ResolveSoundsFolder()) {
-	QDir().mkpath(cWorkingDir() + u"tdata/temp"_q);
+	const auto directory = cWorkingDir() + u"tdata/temp"_q;
+	if (Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::OpenDir,
+			directory,
+			Q_FUNC_INFO)
+		&& Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Mkdir,
+			directory,
+			Q_FUNC_INFO)) {
+		QDir().mkpath(directory);
+	}
 	if (@available(macOS 10.14, *)) {
 		_delegate = [[UserNotificationsDelegate alloc]
 			initWithManager:manager
@@ -408,23 +423,44 @@ void UNManager::Private::showNotification(
 			const auto path = u"%1tdata/temp/%2.png"_q.arg(
 				cWorkingDir(),
 				QString::number(base::RandomValue<uint64>(), 16));
-			if (Window::Notifications::GenerateUserpic(peer, userpicView)
+			if (Core::MacProtectedPath::CheckPath(
+					Core::MacProtectedPath::Operation::Write,
+					path,
+					Q_FUNC_INFO)
+				&& Window::Notifications::GenerateUserpic(peer, userpicView)
 					.save(path, "PNG")) {
-				NSError *error = nil;
-				UNNotificationAttachment *attachment
-					= [UNNotificationAttachment
-						attachmentWithIdentifier:@"userpic"
-						URL:[NSURL fileURLWithPath:Q2NSString(path)]
-						options:nil
-						error:&error];
-				if (attachment) {
-					[content setAttachments:@[attachment]];
-				} else {
-					if (error) {
-						LOG(("App Error: Notification attachment error: %1"
-							).arg(NS2QString(error.localizedDescription)));
+				if (!Core::MacProtectedPath::CheckPath(
+						Core::MacProtectedPath::Operation::Read,
+						path,
+						Q_FUNC_INFO)) {
+					if (Core::MacProtectedPath::CheckPath(
+							Core::MacProtectedPath::Operation::Unlink,
+							path,
+							Q_FUNC_INFO)) {
+						QFile(path).remove();
 					}
-					QFile(path).remove();
+				} else {
+					NSError *error = nil;
+					UNNotificationAttachment *attachment
+						= [UNNotificationAttachment
+							attachmentWithIdentifier:@"userpic"
+							URL:[NSURL fileURLWithPath:Q2NSString(path)]
+							options:nil
+							error:&error];
+					if (attachment) {
+						[content setAttachments:@[attachment]];
+					} else {
+						if (error) {
+							LOG(("App Error: Notification attachment error: %1"
+								).arg(NS2QString(error.localizedDescription)));
+						}
+						if (Core::MacProtectedPath::CheckPath(
+								Core::MacProtectedPath::Operation::Unlink,
+								path,
+								Q_FUNC_INFO)) {
+							QFile(path).remove();
+						}
+					}
 				}
 			}
 		}

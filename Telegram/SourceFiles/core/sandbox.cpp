@@ -22,6 +22,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/local_url_handlers.h"
 #include "core/update_checker.h"
 #include "core/deadlock_detector.h"
+#ifdef Q_OS_MAC
+#include "core/mac_protected_path_runtime.h"
+#endif // Q_OS_MAC
 #include "base/timer.h"
 #include "base/concurrent_timer.h"
 #include "base/invoke_queued.h"
@@ -36,6 +39,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #endif // Q_OS_MAC
 
 #include <QtCore/QLockFile>
+#include <QtCore/QFileInfo>
 #include <QtGui/QSessionManager>
 #include <QtGui/QScreen>
 #include <QtGui/qpa/qplatformscreen.h>
@@ -75,6 +79,28 @@ int Sandbox::start() {
 		_localServerName = Platform::SingleInstanceLocalServerName(h);
 	}
 
+#ifdef Q_OS_MAC
+	if (MacProtectedPath::IntegrationTestActive()) {
+		const auto socketDirectory = QFileInfo(_localServerName).absolutePath();
+		if (!MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Open,
+				_localServerName,
+				Q_FUNC_INFO)
+			|| !MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::OpenDir,
+				socketDirectory,
+				Q_FUNC_INFO)
+			|| !MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Mkdir,
+				socketDirectory,
+				Q_FUNC_INFO)
+			|| !QDir().mkpath(socketDirectory)) {
+			LOG(("Could not prepare single-instance IPC path."));
+			return 1;
+		}
+	}
+#endif // Q_OS_MAC
+
 	if (cLaunchMode() == LaunchModeCleanup) {
 		const auto result = stopRunningInstance();
 		psCleanup();
@@ -91,7 +117,32 @@ int Sandbox::start() {
 		QByteArray h;
 		h.resize(32);
 		hashMd5Hex(d.constData(), d.size(), h.data());
+#ifdef Q_OS_MAC
+		if (MacProtectedPath::IntegrationTestActive()) {
+			const auto lockPath = MacProtectedPath::IpcDirectory()
+				+ u"/Telegramd-lock-"_q
+				+ QString::fromLatin1(h.left(16));
+			if (!MacProtectedPath::CheckPath(
+					MacProtectedPath::Operation::Stat,
+					lockPath,
+					Q_FUNC_INFO)
+				|| !MacProtectedPath::CheckPath(
+					MacProtectedPath::Operation::Unlink,
+					lockPath,
+					Q_FUNC_INFO)
+				|| !MacProtectedPath::CheckPath(
+					MacProtectedPath::Operation::Lock,
+					lockPath,
+					Q_FUNC_INFO)) {
+				return 1;
+			}
+			_lockFile = std::make_unique<QLockFile>(lockPath);
+		} else {
+			_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h + '-' + cGUIDStr());
+		}
+#else // Q_OS_MAC
 		_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h + '-' + cGUIDStr());
+#endif // !Q_OS_MAC
 		_lockFile->setStaleLockTime(0);
 		if (!_lockFile->tryLock()
 			&& Launcher::Instance().customWorkingDir()) {
@@ -171,6 +222,14 @@ int Sandbox::start() {
 	});
 
 	LOG(("Connecting local socket to %1...").arg(_localServerName));
+#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(
+			MacProtectedPath::Operation::Open,
+			_localServerName,
+			Q_FUNC_INFO)) {
+		return 1;
+	}
+#endif // Q_OS_MAC
 	_localSocket.connectToServer(_localServerName);
 
 	if (QuitOnStartRequested) {
@@ -183,6 +242,14 @@ int Sandbox::start() {
 
 int Sandbox::stopRunningInstance() {
 	LOG(("Cleanup: connecting to %1...").arg(_localServerName));
+#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(
+			MacProtectedPath::Operation::Open,
+			_localServerName,
+			Q_FUNC_INFO)) {
+		return 1;
+	}
+#endif // Q_OS_MAC
 	_localSocket.connectToServer(_localServerName);
 	if (!_localSocket.waitForConnected(int(kCleanupIpcTimeout))) {
 		if (_localSocket.error() == QLocalSocket::ServerNotFoundError) {
@@ -415,6 +482,22 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 
 	// Local server does not work in WinRT build.
 #ifndef Q_OS_WINRT
+	#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Stat,
+				_localServerName,
+				Q_FUNC_INFO)
+		|| !MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Unlink,
+				_localServerName,
+				Q_FUNC_INFO)
+		|| !MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Open,
+				_localServerName,
+				Q_FUNC_INFO)) {
+		return Quit();
+	}
+	#endif // Q_OS_MAC
 	psCheckLocalSocket(_localServerName);
 
 	if (!_localServer.listen(_localServerName)) {

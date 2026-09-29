@@ -12,15 +12,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "main/main_account.h"
 #include "main/main_session.h"
+#include "core/mac_protected_path_runtime.h"
 
 namespace Storage::CloudBlob {
 
 namespace {
 
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckBlobPath(
+		Operation operation,
+		const QString &path,
+		const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
+
 QByteArray ReadFinalFile(const QString &path) {
 	constexpr auto kMaxZipSize = 10 * 1024 * 1024;
 	auto file = QFile(path);
-	if (file.size() > kMaxZipSize || !file.open(QIODevice::ReadOnly)) {
+	if (!CheckBlobPath(Operation::Stat, path, Q_FUNC_INFO)
+		|| file.size() > kMaxZipSize
+		|| !CheckBlobPath(Operation::Read, path, Q_FUNC_INFO)
+		|| !file.open(QIODevice::ReadOnly)) {
 		return QByteArray();
 	}
 	return file.readAll();
@@ -33,7 +46,8 @@ bool ExtractZipFile(zlib::FileToRead &zip, const QString path) {
 		return false;
 	}
 	auto file = QFile(path);
-	return file.open(QIODevice::WriteOnly)
+	return CheckBlobPath(Operation::Write, path, Q_FUNC_INFO)
+		&& file.open(QIODevice::WriteOnly)
 		&& (file.write(content) == content.size());
 }
 
@@ -52,6 +66,11 @@ bool UnpackBlob(
 		return false;
 	}
 	const auto cleanFolder = QDir::cleanPath(folder);
+	if (!CheckBlobPath(Operation::OpenDir, cleanFolder, Q_FUNC_INFO)
+		|| !CheckBlobPath(Operation::Mkdir, cleanFolder, Q_FUNC_INFO)
+		|| !QDir().mkpath(cleanFolder)) {
+		return false;
+	}
 	do {
 		const auto name = zip.getCurrentFileName();
 		const auto path = folder + '/' + name;
@@ -145,6 +164,13 @@ void BlobLoader::setImplementation(
 		unpack(filepath);
 	}, _implementation->lifetime());
 
+	if (!CheckBlobPath(
+			Operation::RecursiveDelete,
+			_folder,
+			Q_FUNC_INFO)) {
+		fail();
+		return;
+	}
 	QDir(_folder).removeRecursively();
 	_implementation->start();
 }
