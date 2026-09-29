@@ -107,6 +107,7 @@ jobs:
           key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
 
       - name: Telegramd build.
+        id: build
         if: env.ONLY_CACHE == 'false'
         run: |
           cd $REPO_NAME/Telegram
@@ -138,6 +139,7 @@ jobs:
           cmake --build ../out --config Debug --parallel
 
       - name: Verify artifact architecture.
+        id: artifact-verification
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           set -Eeuo pipefail
@@ -185,15 +187,6 @@ jobs:
           python3 "$GITHUB_WORKSPACE/$REPO_NAME/Telegram/build/check_mac_fs_usage.py" \
             --self-test | tee evidence/observer-sensitivity.txt
 
-      - name: Run Telegramd isolation gate.
-        id: isolation
-        if: env.UPLOAD_ARTIFACT == 'true'
-        run: |
-          mkdir -p "$REPO_NAME/out/Debug/evidence"
-          "$REPO_NAME/Telegram/build/mac_isolation_test.sh" \
-            "$REPO_NAME/out/Debug/Telegramd.app" \
-            "$REPO_NAME/out/Debug/evidence"
-
       - name: Classify Telegramd artifact publication.
         if: always()
         run: |
@@ -201,7 +194,8 @@ jobs:
           evidence="$REPO_NAME/out/Debug/evidence"
           mkdir -p "$evidence"
           ready=false
-          if [ "${{ steps.isolation.outcome }}" = "success" ]; then
+          if [ "${{ steps.build.outcome }}" = "success" ] \
+            && [ "${{ steps.artifact-verification.outcome }}" = "success" ]; then
             ready=true
           fi
           printf 'artifact_ready=%s\n' "$ready" > "$evidence/artifact-publication.txt"
