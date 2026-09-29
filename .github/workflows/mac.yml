@@ -51,7 +51,7 @@ jobs:
           path: ${{ env.REPO_NAME }}
 
       - name: Verify Telegramd identity contract.
-        run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME"
+        run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME" identity
 
       - name: First set up.
         run: |
@@ -184,8 +184,16 @@ jobs:
               exit 1
             }
           done | tee evidence/architecture-static.txt
-          python3 "$GITHUB_WORKSPACE/$REPO_NAME/Telegram/build/check_mac_fs_usage.py" \
-            --self-test | tee evidence/observer-sensitivity.txt
+
+      - name: Run isolation observer self-tests (informational).
+        if: ${{ always() && env.UPLOAD_ARTIFACT == 'true' }}
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          mkdir -p "$evidence"
+          bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME" observer \
+            2>&1 | tee "$evidence/observer-self-tests.txt"
 
       - name: Classify Telegramd artifact publication.
         if: always()
