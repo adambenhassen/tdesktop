@@ -314,6 +314,15 @@ TEST_CASE(DotSegmentsAreResolvedBeforeFilesystemProbes) {
 		ProtectedClass::ApplicationSupport);
 
 	ClearCalls(fs);
+	for (const auto &directory : std::vector<QByteArray>{
+			 "/Users/alice/Library",
+			 "/Users/alice/Library/Application Support",
+			 "/Users/alice/Library/Application Support/Telegramd",
+			 "/Users/alice/Library/Application Support/Telegramd/tdata" }) {
+		fs.entries[directory] = LstatResult{
+			.type = FileType::Directory,
+			.error = FileError::None };
+	}
 	const auto allowed = policy.Resolve(
 		Operation::Open,
 		"/Users/alice/Library/Application Support/Telegramd/./tdata/../x",
