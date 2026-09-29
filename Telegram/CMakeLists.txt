@@ -581,6 +581,8 @@ PRIVATE
     core/launcher.h
     core/local_url_handlers.cpp
     core/local_url_handlers.h
+    core/mac_protected_path_policy.cpp
+    core/mac_protected_path_policy.h
     core/phone_click_handler.cpp
     core/phone_click_handler.h
     core/sandbox.cpp
