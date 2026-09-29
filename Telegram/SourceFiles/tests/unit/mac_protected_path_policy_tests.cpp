@@ -942,11 +942,13 @@ TEST_CASE(DestructiveOperationsRefuseProtectedAncestors) {
 		{},
 		u"unit.ancestor.alias"_q).allowed());
 	CHECK(fs.readlinkCalls.empty());
-	CHECK(!policy.Resolve(
+	const auto aliasChild = policy.Resolve(
 		Operation::Rename,
 		"/safe/link/entry",
 		{},
-		u"unit.ancestor.alias-parent"_q).allowed());
+		u"unit.ancestor.alias-parent"_q);
+	CHECK(!aliasChild.allowed());
+	CHECK(aliasChild.refusal.protectedClass == ProtectedClass::GroupContainer);
 	for (const auto &call : fs.lstatCalls) {
 		CHECK(call != QByteArray("/Users/alice/Library/Group Containers"));
 	}
