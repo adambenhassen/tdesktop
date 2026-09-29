@@ -489,6 +489,46 @@ TEST_CASE(SymlinkTargetsAreSplicedPhysically) {
 		ProtectedClass::Container);
 }
 
+TEST_CASE(FinalSymlinkOperationsKeepNoFollowSemantics) {
+	auto fs = FakeFileSystem();
+	const auto policy = TestPolicy(fs);
+	fs.entries.emplace(
+		"/safe",
+		LstatResult{ .type = FileType::Directory, .error = FileError::None });
+	fs.entries.emplace(
+		"/safe/link",
+		LstatResult{ .type = FileType::Symlink, .error = FileError::None });
+	fs.links.emplace(
+		"/safe/link",
+		ReadlinkResult{
+			.target = "/Users/alice/Library/Application Support/Telegram Desktop",
+			.error = FileError::None });
+
+	for (const auto operation : {
+			Operation::Lstat,
+			Operation::Unlink,
+			Operation::Rename }) {
+		ClearCalls(fs);
+		const auto result = policy.Resolve(
+			operation,
+			"/safe/link",
+			{},
+			u"unit.final-symlink"_q);
+		CHECK(result.allowed());
+		CHECK_EQ(result.resolvedPath, QByteArray("/safe/link"));
+		CHECK(fs.readlinkCalls.empty());
+	}
+
+	ClearCalls(fs);
+	const auto followed = policy.Resolve(
+		Operation::Open,
+		"/safe/link",
+		{},
+		u"unit.followed-symlink"_q);
+	CHECK(!followed.allowed());
+	CHECK(fs.readlinkCalls == std::vector<QByteArray>{ "/safe/link" });
+}
+
 TEST_CASE(SymlinkHopLimitAndFilesystemErrorsFailClosed) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);
