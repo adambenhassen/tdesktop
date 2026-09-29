@@ -273,11 +273,12 @@ struct WalkResult {
 	return result;
 }
 
-template <typename Classify, typename IsHome>
+template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
 [[nodiscard]] WalkResult Walk(
 		const ParsedPath &path,
 		const FileSystem &filesystem,
 		Classify &&classify,
+		ClassifySymlinkTarget &&classifySymlinkTarget,
 		IsHome &&isHome,
 		bool allowMissingSuffix,
 		bool followFinalComponent) {
@@ -365,6 +366,21 @@ template <typename Classify, typename IsHome>
 			ParsedPath target;
 			if (!ParsePath(readlink.target, &target)) {
 				return {};
+			}
+			auto targetComponents = target.absolute
+				? std::vector<QByteArray>()
+				: std::vector<QByteArray>(resolved.begin(), resolved.end() - 1);
+			targetComponents.insert(
+				targetComponents.end(),
+				target.components.begin(),
+				target.components.end());
+			const auto targetClass = classifySymlinkTarget(
+				FoldedComponents(CanonicalRawComponents(targetComponents)));
+			if (targetClass != ProtectedClass::None) {
+				return {
+					.status = WalkResult::Status::Refused,
+					.components = std::move(resolved),
+					.protectedClass = targetClass };
 			}
 			resolved.pop_back();
 			if (target.absolute) {
@@ -594,6 +610,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 			ParsedPath{ .absolute = true, .components = candidate.traversal },
 			filesystem,
 			classify,
+			[](const Components &) { return ProtectedClass::None; },
 			[](const Components &) { return false; },
 			false,
 			true);
@@ -851,6 +868,18 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 		parsed,
 		_filesystem,
 		classify,
+		[&](const Components &components) {
+			if (!IsDestructive(operation)) {
+				return ProtectedClass::None;
+			}
+			for (const auto &home : _homeRoots) {
+				if (StartsWith(components, home)
+					&& components.size() > home.size()) {
+					return ClassifyAncestorComponents(components);
+				}
+			}
+			return ProtectedClass::None;
+		},
 		[&](const Components &components) {
 			return IsHomeRoot(components);
 		},
