@@ -272,6 +272,51 @@ TEST_CASE(BuildRejectsProtectedHomeCandidateWithoutProbing) {
 	CHECK(fs.openCalls.empty());
 }
 
+TEST_CASE(BuildRejectsHomeWithSymlinkDotDotIntoProtectedPath) {
+	auto fs = FakeFileSystem();
+	const auto directories = std::vector<QByteArray>{
+		"/safe",
+		"/Users",
+		"/Users/alice",
+		"/Users/alice/Library",
+		"/Users/alice/Library/Group Containers",
+		"/safe/child" };
+	for (const auto &path : directories) {
+		fs.entries.emplace(
+			path,
+			LstatResult{ .type = FileType::Directory, .error = FileError::None });
+	}
+	fs.entries.emplace(
+		"/safe/link",
+		LstatResult{ .type = FileType::Symlink, .error = FileError::None });
+	fs.links.emplace(
+		"/safe/link",
+		ReadlinkResult{
+			.target = "/Users/alice/Library/Group Containers/"
+				"6N38VWS5BX.ru.keepcoder.Telegram/inner",
+			.error = FileError::None });
+	const auto protectedRoot = QByteArray(
+		"/Users/alice/Library/Group Containers/"
+		"6N38VWS5BX.ru.keepcoder.Telegram");
+	const auto protectedPrefix = protectedRoot + QByteArray("/");
+
+	const auto policy = MacProtectedPathPolicy::Build(
+		HomeRoots{ .environment = "/safe/link/../child" },
+		fs.operations());
+	CHECK(!policy.valid());
+	CHECK_EQ(int(fs.readlinkCalls.size()), 1);
+	CHECK_EQ(fs.readlinkCalls.front(), QByteArray("/safe/link"));
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(call != protectedRoot);
+		CHECK(!call.startsWith(protectedPrefix));
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(call != protectedRoot);
+		CHECK(!call.startsWith(protectedPrefix));
+	}
+	CHECK(fs.openCalls.empty());
+}
+
 TEST_CASE(RelativeInputsRequireAnAnchorAndResolveAgainstIt) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);

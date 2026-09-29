@@ -434,6 +434,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		homes.environment,
 		homes.foundation };
 	struct HomeCandidate {
+		std::vector<QByteArray> traversal;
 		std::vector<QByteArray> raw;
 		Components folded;
 	};
@@ -481,13 +482,17 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		if (!ParsePath(value, &parsed) || !IsAbsoluteHome(parsed)) {
 			return result;
 		}
-		auto raw = CanonicalRawComponents(parsed.components);
+		auto traversal = std::move(parsed.components);
+		auto raw = CanonicalRawComponents(traversal);
 		auto folded = FoldedComponents(raw);
 		if (folded.empty()) {
 			return result;
 		}
 		addHomeCandidates(raw, preflightHomes);
-		candidates.push_back({ std::move(raw), std::move(folded) });
+		candidates.push_back({
+			std::move(traversal),
+			std::move(raw),
+			std::move(folded) });
 	}
 	if (candidates.empty()) {
 		return result;
@@ -511,7 +516,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 			return result;
 		}
 		const auto resolved = Walk(
-			ParsedPath{ .absolute = true, .components = candidate.raw },
+			ParsedPath{ .absolute = true, .components = candidate.traversal },
 			filesystem,
 			classify,
 			[](const Components &) { return false; },
