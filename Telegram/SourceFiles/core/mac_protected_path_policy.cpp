@@ -282,9 +282,11 @@ template <typename Classify, typename IsHome>
 			continue;
 		}
 		if (component == "..") {
+			if (missingSuffix) {
+				return {};
+			}
 			if (!resolved.empty()) {
-				if (!missingSuffix
-					&& resolvedTypes.back() != FileType::Directory) {
+				if (resolvedTypes.back() != FileType::Directory) {
 					return {};
 				}
 				resolved.pop_back();
@@ -431,7 +433,46 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		homes.accountDatabase,
 		homes.environment,
 		homes.foundation };
-	auto seen = std::vector<Components>();
+	struct HomeCandidate {
+		std::vector<QByteArray> raw;
+		Components folded;
+	};
+	auto candidates = std::vector<HomeCandidate>();
+	auto preflightHomes = std::vector<Components>();
+	const auto library = Fold(QByteArray("Library"));
+	const auto addHomeRoot = [](
+			std::vector<Components> &roots,
+			Components root) {
+		if (root.empty()) {
+			return;
+		}
+		if (std::none_of(
+				roots.begin(),
+				roots.end(),
+				[&](const auto &existing) {
+					return SameComponents(existing, root);
+				})) {
+				roots.push_back(std::move(root));
+			}
+		};
+	// A home beneath Library needs the prefix before Library for classification.
+	// Seed every candidate before the first filesystem probe.
+	const auto addHomeCandidates = [&](
+			const std::vector<QByteArray> &raw,
+			std::vector<Components> &roots) {
+		addHomeRoot(roots, FoldedComponents(raw));
+		addHomeRoot(roots, FoldedComponents(FirmlinkAlias(raw)));
+		for (auto i = 1; i < int(raw.size()); ++i) {
+			if (Fold(raw[i]) != library) {
+				continue;
+			}
+			const auto prefix = std::vector<QByteArray>(
+				raw.begin(),
+				raw.begin() + i);
+			addHomeRoot(roots, FoldedComponents(prefix));
+			addHomeRoot(roots, FoldedComponents(FirmlinkAlias(prefix)));
+		}
+	};
 	for (const auto &value : values) {
 		if (value.isEmpty()) {
 			continue;
@@ -440,15 +481,39 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		if (!ParsePath(value, &parsed) || !IsAbsoluteHome(parsed)) {
 			return result;
 		}
-		const auto raw = CanonicalRawComponents(parsed.components);
-		const auto folded = FoldedComponents(raw);
+		auto raw = CanonicalRawComponents(parsed.components);
+		auto folded = FoldedComponents(raw);
 		if (folded.empty()) {
 			return result;
 		}
+		addHomeCandidates(raw, preflightHomes);
+		candidates.push_back({ std::move(raw), std::move(folded) });
+	}
+	if (candidates.empty()) {
+		return result;
+	}
+	auto classifier = MacProtectedPathPolicy();
+	classifier._valid = true;
+	const auto classify = [&](const Components &components) {
+		classifier._homeRoots = preflightHomes;
+		// A symlink can reveal a home only as traversal reaches it.
+		for (auto i = 1; i < int(components.size()); ++i) {
+			if (components[i] == library) {
+				addHomeRoot(
+					classifier._homeRoots,
+					Components(components.begin(), components.begin() + i));
+			}
+		}
+		return classifier.ClassifyComponents(components);
+	};
+	for (const auto &candidate : candidates) {
+		if (classify(candidate.folded) != ProtectedClass::None) {
+			return result;
+		}
 		const auto resolved = Walk(
-			ParsedPath{ .absolute = true, .components = raw },
+			ParsedPath{ .absolute = true, .components = candidate.raw },
 			filesystem,
-			[](const Components &) { return ProtectedClass::None; },
+			classify,
 			[](const Components &) { return false; },
 			false);
 		if (resolved.status != WalkResult::Status::Allowed
@@ -456,21 +521,22 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 			|| resolved.finalType != FileType::Directory) {
 			return result;
 		}
+		addHomeCandidates(resolved.components, preflightHomes);
+
 		const auto physical = FoldedComponents(resolved.components);
-		const auto candidates = std::vector<Components>{
-			folded,
+		const auto accepted = std::vector<Components>{
+			candidate.folded,
 			physical,
-			FoldedComponents(FirmlinkAlias(raw)),
+			FoldedComponents(FirmlinkAlias(candidate.raw)),
 			FoldedComponents(FirmlinkAlias(resolved.components)) };
-		for (const auto &candidate : candidates) {
+		for (const auto &root : accepted) {
 			if (std::none_of(
-					seen.begin(),
-					seen.end(),
+					result._homeRoots.begin(),
+					result._homeRoots.end(),
 					[&](const auto &existing) {
-						return SameComponents(existing, candidate);
+						return SameComponents(existing, root);
 					})) {
-				seen.push_back(candidate);
-				result._homeRoots.push_back(candidate);
+				result._homeRoots.push_back(root);
 			}
 		}
 	}

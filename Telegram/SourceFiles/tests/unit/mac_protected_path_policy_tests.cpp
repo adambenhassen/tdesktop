@@ -240,6 +240,38 @@ TEST_CASE(HomeRootsFromAllSourcesAreProtected) {
 		== ProtectedClass::BundleKeyed);
 }
 
+TEST_CASE(BuildRejectsProtectedHomeCandidateWithoutProbing) {
+	auto fs = FakeFileSystem();
+	const auto directories = std::vector<QByteArray>{
+		"/Users",
+		"/Users/alice",
+		"/Users/alice/Library",
+		"/Users/alice/Library/Group Containers" };
+	for (const auto &path : directories) {
+		fs.entries.emplace(
+			path,
+			LstatResult{ .type = FileType::Directory, .error = FileError::None });
+	}
+	const auto protectedRoot = QByteArray(
+		"/Users/alice/Library/Group Containers/"
+		"6N38VWS5BX.ru.keepcoder.Telegram");
+	const auto protectedPrefix = protectedRoot + QByteArray("/");
+	const auto policy = MacProtectedPathPolicy::Build(
+		HomeRoots{
+			.environment = protectedRoot + QByteArray("/tdata") },
+		fs.operations());
+	CHECK(!policy.valid());
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(call != protectedRoot);
+		CHECK(!call.startsWith(protectedPrefix));
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(call != protectedRoot);
+		CHECK(!call.startsWith(protectedPrefix));
+	}
+	CHECK(fs.openCalls.empty());
+}
+
 TEST_CASE(RelativeInputsRequireAnAnchorAndResolveAgainstIt) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);
@@ -291,6 +323,32 @@ TEST_CASE(DotSegmentsAreResolvedBeforeFilesystemProbes) {
 	CHECK_EQ(
 		allowed.resolvedPath,
 		QByteArray("/Users/alice/Library/Application Support/Telegramd/x"));
+}
+
+TEST_CASE(DotDotAfterMissingComponentFailsClosed) {
+	auto fs = FakeFileSystem();
+	const auto policy = TestPolicy(fs);
+	fs.entries["/safe"] =
+		LstatResult{ .type = FileType::Directory, .error = FileError::None };
+	fs.entries["/safe/link"] =
+		LstatResult{ .type = FileType::Symlink, .error = FileError::None };
+	fs.links["/safe/link"] = ReadlinkResult{
+		.target = "/Users/alice/Library/Group Containers/telegramd",
+		.error = FileError::None };
+
+	ClearCalls(fs);
+	const auto result = policy.Resolve(
+		Operation::Open,
+		"/safe/missing/../link/tdata",
+		{},
+		u"unit.missing-parent"_q);
+	CHECK(!result.allowed());
+	CHECK(result.refusal.protectedClass == ProtectedClass::Invalid);
+	CHECK_EQ(int(fs.lstatCalls.size()), 2);
+	CHECK_EQ(fs.lstatCalls[0], QByteArray("/safe"));
+	CHECK_EQ(fs.lstatCalls[1], QByteArray("/safe/missing"));
+	CHECK(fs.readlinkCalls.empty());
+	CHECK(fs.openCalls.empty());
 }
 
 TEST_CASE(SymlinkTargetsAreSplicedPhysically) {
