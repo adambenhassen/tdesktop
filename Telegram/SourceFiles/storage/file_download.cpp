@@ -14,7 +14,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwindow.h"
 #include "core/application.h"
 #include "core/file_location.h"
-#include "core/mac_protected_path_runtime.h"
 #include "storage/storage_account.h"
 #include "storage/file_download_mtproto.h"
 #include "storage/file_download_web.h"
@@ -25,13 +24,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 
 namespace {
-
-[[nodiscard]] bool CheckDownloadPath(
-		Core::MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
-	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
-}
 
 class FromMemoryLoader final : public FileLoader {
 public:
@@ -134,21 +126,8 @@ void FileLoader::finishWithBytes(const QByteArray &data) {
 	_data = data;
 	_localStatus = LocalStatus::Loaded;
 	if (!_filename.isEmpty() && _toCache == LoadToCacheAsWell) {
+		if (!_fileIsOpen) _fileIsOpen = _file.open(QIODevice::WriteOnly);
 		if (!_fileIsOpen) {
-			_fileIsOpen = CheckDownloadPath(
-					Core::MacProtectedPath::Operation::Write,
-					_filename,
-					Q_FUNC_INFO)
-				&& _file.open(QIODevice::WriteOnly);
-		}
-		if (!_fileIsOpen) {
-			cancel(FailureReason::FileWriteFailure);
-			return;
-		}
-		if (!CheckDownloadPath(
-				Core::MacProtectedPath::Operation::Write,
-				_filename,
-				Q_FUNC_INFO)) {
 			cancel(FailureReason::FileWriteFailure);
 			return;
 		}
@@ -275,11 +254,7 @@ bool FileLoader::checkForOpen() {
 		|| _fileIsOpen) {
 		return true;
 	}
-	_fileIsOpen = CheckDownloadPath(
-			Core::MacProtectedPath::Operation::Write,
-			_filename,
-			Q_FUNC_INFO)
-		&& _file.open(QIODevice::WriteOnly);
+	_fileIsOpen = _file.open(QIODevice::WriteOnly);
 	if (_fileIsOpen) {
 		return true;
 	}
@@ -367,12 +342,7 @@ void FileLoader::cancel(FailureReason fail) {
 	if (_fileIsOpen) {
 		_file.close();
 		_fileIsOpen = false;
-		if (CheckDownloadPath(
-				Core::MacProtectedPath::Operation::Unlink,
-				_filename,
-				Q_FUNC_INFO)) {
-			_file.remove();
-		}
+		_file.remove();
 	}
 	_data = QByteArray();
 
@@ -438,21 +408,11 @@ QByteArray FileLoader::readLoadedPartBack(int64 offset, int size) {
 	if (_fileIsOpen) {
 		if (_file.openMode() == QIODevice::WriteOnly) {
 			_file.close();
-			_fileIsOpen = CheckDownloadPath(
-					Core::MacProtectedPath::Operation::Write,
-					_filename,
-					Q_FUNC_INFO)
-				&& _file.open(QIODevice::ReadWrite);
+			_fileIsOpen = _file.open(QIODevice::ReadWrite);
 			if (!_fileIsOpen) {
 				cancel(FailureReason::FileWriteFailure);
 				return QByteArray();
 			}
-		}
-		if (!CheckDownloadPath(
-				Core::MacProtectedPath::Operation::Read,
-				_filename,
-				Q_FUNC_INFO)) {
-			return QByteArray();
 		}
 		if (!_file.seek(offset)) {
 			return QByteArray();
@@ -470,18 +430,7 @@ bool FileLoader::finalizeResult() {
 
 	if (!_filename.isEmpty() && (_toCache == LoadToCacheAsWell)) {
 		if (!_fileIsOpen) {
-			_fileIsOpen = CheckDownloadPath(
-					Core::MacProtectedPath::Operation::Write,
-					_filename,
-					Q_FUNC_INFO)
-				&& _file.open(QIODevice::WriteOnly);
-		}
-		if (!CheckDownloadPath(
-				Core::MacProtectedPath::Operation::Write,
-				_filename,
-				Q_FUNC_INFO)) {
-			cancel(FailureReason::FileWriteFailure);
-			return false;
+			_fileIsOpen = _file.open(QIODevice::WriteOnly);
 		}
 		_file.seek(0);
 		if (!_fileIsOpen || _file.write(_data) != qint64(_data.size())) {
