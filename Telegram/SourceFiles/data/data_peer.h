@@ -226,6 +226,7 @@ public:
 	[[nodiscard]] Data::Session &owner() const;
 	[[nodiscard]] Main::Session &session() const;
 	[[nodiscard]] Main::Account &account() const;
+	[[nodiscard]] bool usesCustomServer() const;
 
 	[[nodiscard]] uint8 colorIndex() const {
 		return _colorIndex;

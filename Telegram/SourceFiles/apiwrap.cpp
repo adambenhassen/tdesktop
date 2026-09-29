@@ -1371,6 +1371,15 @@ void ApiWrap::migrateChat(
 					"Chat is already deactivated").type());
 		});
 		return;
+	} else if (chat->usesCustomServer()) {
+		crl::on_main([=] {
+			migrateFail(
+				chat,
+				MTP::Error::Local(
+					"BAD_MIGRATION",
+					"Migration is unavailable for this server").type());
+		});
+		return;
 	} else if (!chat->amCreator()) {
 		crl::on_main([=] {
 			migrateFail(

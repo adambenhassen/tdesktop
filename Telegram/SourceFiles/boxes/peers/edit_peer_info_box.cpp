@@ -821,7 +821,8 @@ object_ptr<Ui::RpWidget> Controller::createTitleEdit() {
 object_ptr<Ui::RpWidget> Controller::createDescriptionEdit() {
 	Expects(_wrap != nullptr);
 
-	if (!canEditInformation()) {
+	if (!canEditInformation()
+		|| (_peer->isChat() && _peer->usesCustomServer())) {
 		return nullptr;
 	}
 
@@ -1531,7 +1532,7 @@ void Controller::fillManageSection() {
 		: chat->canEditPreHistoryHidden();
 	const auto canEditForum = isChannel
 		? (channel->isMegagroup() && channel->amCreator())
-		: chat->amCreator();
+		: (chat->amCreator() && !chat->usesCustomServer());
 	const auto canEditPermissions = isChannel
 		? channel->canEditPermissions()
 		: chat->canEditPermissions();
@@ -2240,6 +2241,8 @@ void Controller::submitTitle() {
 	} else if (_controls.description) {
 		_controls.description->setFocus();
 		_box->scrollToWidget(_controls.description);
+	} else {
+		save();
 	}
 }
 
