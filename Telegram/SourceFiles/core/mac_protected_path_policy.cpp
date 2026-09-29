@@ -293,7 +293,6 @@ template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
 	std::vector<FileType> resolvedTypes;
 	auto missingSuffix = false;
 	auto symlinkHops = 0;
-	auto traversedSymlink = false;
 
 	while (!pending.empty()) {
 		auto component = std::move(pending.front());
@@ -318,10 +317,7 @@ template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
 
 		resolved.push_back(component);
 		const auto components = FoldedComponents(resolved);
-		const auto protectedClass = classify(
-			components,
-			pending.empty(),
-			traversedSymlink);
+		const auto protectedClass = classify(components, pending.empty());
 		if (protectedClass != ProtectedClass::None) {
 			return {
 				.status = WalkResult::Status::Refused,
@@ -355,7 +351,6 @@ template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
 			return {};
 		}
 		if (lstat.type == FileType::Symlink) {
-			traversedSymlink = true;
 			if (++symlinkHops > kSymlinkHopLimit) {
 				return {};
 			}
@@ -400,10 +395,7 @@ template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
 		}
 	}
 
-	const auto protectedClass = classify(
-		FoldedComponents(resolved),
-		true,
-		traversedSymlink);
+	const auto protectedClass = classify(FoldedComponents(resolved), true);
 	if (protectedClass != ProtectedClass::None) {
 		return {
 			.status = WalkResult::Status::Refused,
@@ -586,7 +578,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 	}
 	auto classifier = MacProtectedPathPolicy();
 	classifier._valid = true;
-	const auto classify = [&](const Components &components, bool, bool) {
+	const auto classify = [&](const Components &components, bool) {
 		classifier._homeRoots = preflightHomes;
 		// A symlink can reveal a home only as traversal reaches it.
 		for (auto i = 1; i < int(components.size()); ++i) {
@@ -599,7 +591,7 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		return classifier.ClassifyComponents(components);
 	};
 	for (const auto &candidate : candidates) {
-		const auto candidateClass = classify(candidate.folded, true, false);
+		const auto candidateClass = classify(candidate.folded, true);
 		if (candidateClass != ProtectedClass::None) {
 			if (failure) {
 				failure->protectedClass = candidateClass;
@@ -825,37 +817,13 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 			parsedAnchor.components.end());
 		parsed.absolute = true;
 	}
-	const auto library = Fold(QByteArray("Library"));
-	const auto groupContainers = Fold(QByteArray("Group Containers"));
-	const auto classify = [&](
-			const Components &components,
-			bool final,
-			bool traversedSymlink) {
+	const auto classify = [&](const Components &components, bool final) {
 		const auto protectedClass = ClassifyComponents(components);
-		if (protectedClass != ProtectedClass::None) {
-			return protectedClass;
-		}
-		if (!IsDestructive(operation)) {
-			return ProtectedClass::None;
-		}
-		const auto ancestorClass = ClassifyAncestorComponents(components);
-		if (final && ancestorClass != ProtectedClass::None) {
-			return ancestorClass;
-		}
-		if (traversedSymlink
-			&& ancestorClass == ProtectedClass::GroupContainer
-			&& std::any_of(
-				_homeRoots.begin(),
-				_homeRoots.end(),
-				[&](const auto &home) {
-					return components.size() == home.size() + 2
-						&& StartsWith(components, home)
-						&& components[home.size()] == library
-						&& components[home.size() + 1] == groupContainers;
-				})) {
-			return ancestorClass;
-		}
-		return ProtectedClass::None;
+		return (protectedClass == ProtectedClass::None
+			&& final
+			&& IsDestructive(operation))
+			? ClassifyAncestorComponents(components)
+			: protectedClass;
 	};
 	const auto lexical = classify(
 		FoldedComponents(CanonicalRawComponents(parsed.components)),
