@@ -67,6 +67,7 @@ PRIVATE
     passport/passport_encryption.cpp
     core/hash_sha.cpp
     core/hash_md5.cpp
+    core/mac_protected_path_policy.cpp
     data/data_peer_id.cpp
     data/data_pts_waiter.cpp
     intro/intro_server_discovery.cpp
@@ -76,6 +77,7 @@ PRIVATE
     storage/storage_account_persistence.cpp
     storage/storage_domain.cpp
     tests/unit/intro_username_validation_tests.cpp
+    tests/unit/mac_protected_path_policy_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
     tests/unit/mtp_instance_tests.cpp
