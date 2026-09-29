@@ -525,12 +525,13 @@ TEST_CASE(RefusalRecordsAreRateLimitedWithoutPaths) {
 	CHECK_EQ(log.records().front().callsite, u"unit.first"_q);
 
 	now = 160;
-	policy.Resolve(
+	const auto third = policy.Resolve(
 		Operation::Open,
 		"/Users/alice/Library/Group Containers/telegramd/z",
 		{},
 		u"unit.third"_q,
 		&log);
+	CHECK(!third.allowed());
 	CHECK_EQ(int(log.records().size()), 2);
 	CHECK_EQ(log.records().back().callsite, u"unit.third"_q);
 }
