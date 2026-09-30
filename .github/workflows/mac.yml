@@ -198,7 +198,7 @@ jobs:
 
           BUILD_ARGS=()
           if [ "$BUILD_VARIANT" = "build_macstore" ]; then
-            BUILD_ARGS+=(-D build_macstore=ON)
+            BUILD_ARGS+=(-D DESKTOP_APP_SPECIAL_TARGET:STRING=macstore)
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             BUILD_ARGS+=(-D TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=ON)
@@ -223,6 +223,9 @@ jobs:
             exit "$configure_status"
           fi
 
+          if [ "$BUILD_VARIANT" = "build_macstore" ]; then
+            grep -F 'DESKTOP_APP_SPECIAL_TARGET:STRING=macstore' ../out/CMakeCache.txt
+          fi
           grep -F 'DESKTOP_APP_DISABLE_AUTOUPDATE:BOOL=ON' ../out/CMakeCache.txt
           build_status=0
           cmake --build ../out --config Debug --parallel 2>&1 | tee -a "$BUILD_LOG" || build_status=$?
