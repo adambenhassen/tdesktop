@@ -75,18 +75,18 @@ if [[ "$REFUSAL_STATUS" -eq 0 ]]; then
 	cat "$REFUSAL_LOG" >&2
 	exit 1
 fi
-if ! rg -F -q "class=group-container callsite=profile.home" "$REFUSAL_LOG"; then
+if ! grep -F -q "class=group-container callsite=profile.home" "$REFUSAL_LOG"; then
 	echo "profile refusal did not identify the protected home source." >&2
 	cat "$REFUSAL_LOG" >&2
 	exit 1
 fi
-if rg -F -q "Working dir: $PROFILE/" "$REFUSAL_LOG" \
-	|| rg -F -q "Connecting local socket to $SOCKET_PATH" "$REFUSAL_LOG"; then
+if grep -F -q "Working dir: $PROFILE/" "$REFUSAL_LOG" \
+	|| grep -F -q "Connecting local socket to $SOCKET_PATH" "$REFUSAL_LOG"; then
 	echo "profile refusal occurred after profile or socket startup began." >&2
 	cat "$REFUSAL_LOG" >&2
 	exit 1
 fi
-if find "$IPC_DIRECTORY" -maxdepth 1 -name "Telegramd-lock-$LOCK_SUFFIX*" -print -quit | rg -q .; then
+if find "$IPC_DIRECTORY" -maxdepth 1 -name "Telegramd-lock-$LOCK_SUFFIX*" -print -quit | grep -q .; then
 	echo "profile refusal created or found an IPC lock." >&2
 	exit 1
 fi
@@ -104,9 +104,9 @@ FIRST_PID=$!
 
 READY=false
 for ((attempt = 0; attempt < 150; ++attempt)); do
-	if rg -F -q "Working dir: $PROFILE/" "$PROFILE/log.txt" 2>/dev/null; then
-		if rg -F -q "Connecting local socket to $SOCKET_PATH" "$PROFILE/log.txt" 2>/dev/null; then
-			if find "$IPC_DIRECTORY" -maxdepth 1 -name "Telegramd-lock-$LOCK_SUFFIX*" -print -quit | rg -q .; then
+	if grep -F -q "Working dir: $PROFILE/" "$PROFILE/log.txt" 2>/dev/null; then
+		if grep -F -q "Connecting local socket to $SOCKET_PATH" "$PROFILE/log.txt" 2>/dev/null; then
+			if find "$IPC_DIRECTORY" -maxdepth 1 -name "Telegramd-lock-$LOCK_SUFFIX*" -print -quit | grep -q .; then
 				if [[ -S "$SOCKET_PATH" ]]; then
 					READY=true
 					break
