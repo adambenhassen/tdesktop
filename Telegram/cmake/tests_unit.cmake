@@ -76,6 +76,7 @@ PRIVATE
     storage/details/storage_file_utilities.cpp
     storage/storage_account_persistence.cpp
     storage/storage_domain.cpp
+    tests/unit/data_chat_participants_tests.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mac_protected_path_policy_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
