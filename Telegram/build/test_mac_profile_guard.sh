@@ -212,12 +212,14 @@ QUIT_STATUS=$?
 set -e
 report_result second_instance_exit "$([[ "$QUIT_STATUS" -eq 0 ]] && printf true || printf false)" \
 	"status=$QUIT_STATUS" || FAILURES=$((FAILURES + 1))
-if grep -E -q "Mac profile IPC cleanup response: RES:${FIRST_PID}_[0-9]+;" "$QUIT_LOG"; then
+QUIT_RESPONSE="$(grep -hF \
+	"Show command response received, processId = $FIRST_PID, windowId = 0" \
+	"$PROFILE"/log*.txt || true)"
+if [[ -n "$QUIT_RESPONSE" ]]; then
 	QUIT_HANDSHAKE_READY=true
 else
 	QUIT_HANDSHAKE_READY=false
 fi
-QUIT_RESPONSE="$(sed -n 's/.*Mac profile IPC cleanup response: //p' "$QUIT_LOG" | head -n 1)"
 report_result second_instance_quit_handshake "$QUIT_HANDSHAKE_READY" \
 	"response=$QUIT_RESPONSE expected_pid=$FIRST_PID" || FAILURES=$((FAILURES + 1))
 if (( FAILURES > 0 )); then

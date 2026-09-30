@@ -658,21 +658,13 @@ void Sandbox::readClients() {
 					}
 				};
 				if (client->bytesToWrite()) {
-					connect(
-						client,
-						&QLocalSocket::bytesWritten,
-						this,
-						[=](qint64) { quitWhenFlushed(); });
-					connect(
-						client,
-						&QLocalSocket::disconnected,
-						this,
-						[=] { Quit(); });
+					connect(client, &QLocalSocket::bytesWritten, this,
+							[=](qint64) { quitWhenFlushed(); });
+					connect(client, &QLocalSocket::disconnected, this,
+							[=] { Quit(); });
 				} else {
-					QMetaObject::invokeMethod(
-						this,
-						quitWhenFlushed,
-						Qt::QueuedConnection);
+					QMetaObject::invokeMethod(this, quitWhenFlushed,
+											  Qt::QueuedConnection);
 				}
 			}
 		}
