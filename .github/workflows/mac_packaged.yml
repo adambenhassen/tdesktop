@@ -378,6 +378,29 @@ jobs:
             echo "- Launch smoke test: passed"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Full chat info session regression.
+        run: |
+          regression_root="$RUNNER_TEMP/tdesktop-chat-participants"
+          regression_home="$regression_root/home"
+          regression_work="$regression_root/work"
+          regression_logs="$regression_root/logs"
+          executable="$GITHUB_WORKSPACE/$REPO_NAME/build/Telegramd.app/Contents/MacOS/Telegramd"
+          mkdir -p "$regression_home" "$regression_work" "$regression_logs"
+          test -x "$executable"
+          if ! env \
+            HOME="$regression_home" \
+            TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
+            arch -arm64 "$executable" \
+              -noupdate -debug -workdir "$regression_work" \
+              > "$regression_logs/stdout.log" \
+              2> "$regression_logs/stderr.log"; then
+            cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
+            exit 1
+          fi
+          cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
+          echo "Full chat info session regression passed on $GITHUB_SHA."
+          echo "Full chat info session regression passed on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Telegramd manual QA artifact.
         if: success()
         uses: actions/upload-artifact@v7

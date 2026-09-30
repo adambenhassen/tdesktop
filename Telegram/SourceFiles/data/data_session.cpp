@@ -65,6 +65,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_poll.h"
 #include "data/data_replies_list.h"
 #include "data/data_chat_filters.h"
+#include "data/data_user_loading.h"
 #include "dialogs/dialogs_entry.h"
 #include "dialogs/dialogs_row.h"
 #include "base/options.h"
@@ -823,7 +824,10 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 			result->setLoadedStatus(PeerData::LoadedStatus::Minimal);
 		}
 	} else if (!result->isLoaded()
-		&& (!result->isSelf() || !result->phone().isEmpty())) {
+		&& Data::details::CanMarkUserLoadedNormally(
+			result->isSelf(),
+			!result->phone().isEmpty(),
+			session().mtp().dcOptions().hasCustomServer())) {
 		result->setLoadedStatus(PeerData::LoadedStatus::Normal);
 	}
 

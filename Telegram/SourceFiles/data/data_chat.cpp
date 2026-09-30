@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat.h"
 
 #include "core/application.h"
+#include "data/data_chat_participants.h"
 #include "data/data_user.h"
 #include "data/data_channel.h"
 #include "data/data_session.h"
@@ -565,50 +566,70 @@ void ApplyChatUpdate(
 		chat->memberRanks.clear();
 		chat->setAdminRights(ChatAdminRights());
 		const auto selfUserId = session->userId();
+		const auto toParticipant = [](
+				const auto &data,
+				UserId inviterId,
+				bool creator,
+				bool admin) {
+			return Data::details::ChatParticipantInfo{
+				.userId = UserId(data.vuser_id().v),
+				.inviterId = inviterId,
+				.creator = creator,
+				.admin = admin,
+				.rank = qs(data.vrank().value_or_empty()),
+			};
+		};
+		auto info = std::vector<Data::details::ChatParticipantInfo>();
+		info.reserve(list.size());
 		for (const auto &participant : list) {
-			const auto userId = participant.match([&](const auto &data) {
-				return data.vuser_id().v;
+			info.push_back(participant.match(
+				[&](const MTPDchatParticipantCreator &data) {
+					return toParticipant(data, UserId(0), true, false);
+				}, [&](const MTPDchatParticipantAdmin &data) {
+					return toParticipant(
+						data,
+						UserId(data.vinviter_id()),
+						false,
+						true);
+				}, [&](const MTPDchatParticipant &data) {
+					return toParticipant(
+						data,
+						UserId(data.vinviter_id()),
+						false,
+						false);
+				}));
+		}
+		const auto resolved = Data::details::ResolveChatParticipants(
+			info,
+			[&](UserId id) -> std::optional<not_null<UserData*>> {
+				if (const auto user = chat->owner().userLoaded(id)) {
+					return std::optional<not_null<UserData*>>(user);
+				}
+				return std::nullopt;
 			});
-			const auto user = chat->owner().userLoaded(userId);
-			if (!user) {
-				chat->invalidateParticipants();
-				break;
-			}
-
+		if (!resolved) {
+			chat->invalidateParticipants();
+			return;
+		}
+		for (const auto &entry : *resolved) {
+			const auto &participant = entry.participant;
+			const auto user = entry.user;
 			chat->participants.emplace(user);
-
-			const auto inviterId = participant.match([&](
-					const MTPDchatParticipantCreator &data) {
-				return UserId(0);
-			}, [&](const auto &data) {
-				return UserId(data.vinviter_id());
-			});
-			if (inviterId == selfUserId) {
+			if (participant.inviterId == selfUserId) {
 				chat->invitedByMe.insert(user);
 			}
-
-			participant.match([&](const MTPDchatParticipantCreator &data) {
-				chat->creator = userId;
-				const auto rank = qs(data.vrank().value_or_empty());
-				if (!rank.isEmpty()) {
-					chat->memberRanks[userId] = rank;
-				}
-			}, [&](const MTPDchatParticipantAdmin &data) {
+			if (participant.creator) {
+				chat->creator = participant.userId;
+			} else if (participant.admin) {
 				chat->admins.emplace(user);
 				if (user->isSelf()) {
 					chat->setAdminRights(
 						chat->defaultAdminRights(user).flags);
 				}
-				const auto rank = qs(data.vrank().value_or_empty());
-				if (!rank.isEmpty()) {
-					chat->memberRanks[userId] = rank;
-				}
-			}, [&](const MTPDchatParticipant &data) {
-				const auto rank = qs(data.vrank().value_or_empty());
-				if (!rank.isEmpty()) {
-					chat->memberRanks[userId] = rank;
-				}
-			});
+			}
+			if (!participant.rank.isEmpty()) {
+				chat->memberRanks[participant.userId] = participant.rank;
+			}
 		}
 		if (chat->participants.empty()) {
 			return;
