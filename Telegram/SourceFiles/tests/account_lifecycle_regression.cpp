@@ -7,9 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/account_lifecycle_regression.h"
 
+#include "apiwrap.h"
 #include "core/application.h"
+#include "data/data_chat.h"
+#include "data/data_peer_id.h"
+#include "data/data_session.h"
+#include "data/data_user.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
+#include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_config.h"
@@ -19,6 +25,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+
+#include <algorithm>
+#include <cstdio>
 
 namespace Tests {
 namespace {
@@ -58,6 +67,199 @@ RegressionServerKey() {
 		}
 	}
 	return nullptr;
+}
+
+[[nodiscard]] MTPUser RegressionUser(
+		UserId id,
+		bool self,
+		const QString &phone) {
+	const auto flags = (self
+		? MTPDuser::Flag::f_self
+		: MTPDuser::Flag())
+		| (phone.isEmpty()
+			? MTPDuser::Flag()
+			: MTPDuser::Flag::f_phone);
+	return MTP_user(
+		MTP_flags(flags),
+		MTP_long(id.bare),
+		MTPlong(),
+		MTP_string(u"Regression"_q),
+		MTPstring(),
+		MTPstring(),
+		MTP_string(phone),
+		MTPUserProfilePhoto(),
+		MTPUserStatus(),
+		MTPint(),
+		MTP_vector<MTPRestrictionReason>(0),
+		MTPstring(),
+		MTPstring(),
+		MTPEmojiStatus(),
+		MTP_vector<MTPUsername>(0),
+		MTPRecentStory(),
+		MTPPeerColor(),
+		MTPPeerColor(),
+		MTPint(),
+		MTPlong(),
+		MTPlong(),
+		MTPlong());
+}
+
+[[nodiscard]] MTPmessages_ChatFull RegressionChatFullReply(
+		ChatId chatId,
+		int version,
+		QString selfPhone) {
+	const auto participants = MTP_chatParticipants(
+		MTP_long(chatId.bare),
+		MTP_vector<MTPChatParticipant>({
+			MTP_chatParticipantCreator(
+				MTP_flags(MTPDchatParticipantCreator::Flags()),
+				MTP_long(UserId(2).bare),
+				MTP_string(QString())),
+			MTP_chatParticipant(
+				MTP_flags(MTPDchatParticipant::Flags()),
+				MTP_long(UserId(1).bare),
+				MTP_long(UserId(2).bare),
+				MTP_int(0),
+				MTP_string(QString())),
+			MTP_chatParticipant(
+				MTP_flags(MTPDchatParticipant::Flags()),
+				MTP_long(UserId(9).bare),
+				MTP_long(UserId(1).bare),
+				MTP_int(0),
+				MTP_string(QString())),
+		}),
+		MTP_int(version));
+	const auto notifySettings = MTP_peerNotifySettings(
+		MTP_flags(MTPDpeerNotifySettings::Flags()),
+		MTP_boolFalse(),
+		MTP_boolFalse(),
+		MTP_int(0),
+		MTP_notificationSoundDefault(),
+		MTP_notificationSoundDefault(),
+		MTP_notificationSoundDefault(),
+		MTP_boolFalse(),
+		MTP_boolFalse(),
+		MTP_notificationSoundDefault(),
+		MTP_notificationSoundDefault(),
+		MTP_notificationSoundDefault());
+	const auto fullChat = MTP_chatFull(
+		MTP_flags(MTPDchatFull::Flags()),
+		MTP_long(chatId.bare),
+		MTP_string(QString()),
+		participants,
+		MTP_photoEmpty(MTP_long(0)),
+		notifySettings,
+		MTPExportedChatInvite(),
+		MTP_vector<MTPBotInfo>(0),
+		MTPint(),
+		MTPint(),
+		MTPInputGroupCall(),
+		MTPint(),
+		MTPPeer(),
+		MTPstring(),
+		MTPint(),
+		MTP_vector<MTPlong>(0),
+		MTP_chatReactionsNone(),
+		MTPint());
+	return MTP_messages_chatFull(
+		fullChat,
+		MTP_vector<MTPChat>(0),
+		MTP_vector<MTPUser>({
+			RegressionUser(UserId(1), true, selfPhone),
+			RegressionUser(UserId(2), false, u"2"_q),
+			RegressionUser(UserId(9), false, u"9"_q),
+		}));
+}
+
+[[nodiscard]] bool HasParticipant(
+		not_null<ChatData*> chat,
+		UserId id) {
+	return std::any_of(
+		chat->participants.begin(),
+		chat->participants.end(),
+		[id](not_null<UserData*> user) {
+			return peerToUser(user->id) == id;
+		});
+}
+
+[[nodiscard]] bool HasExpectedParticipants(not_null<ChatData*> chat) {
+	return (chat->participants.size() == 3)
+		&& (chat->creator == UserId(2))
+		&& HasParticipant(chat, UserId(1))
+		&& HasParticipant(chat, UserId(2))
+		&& HasParticipant(chat, UserId(9));
+}
+
+[[nodiscard]] int FailChatParticipantsRegression(const char *reason) {
+	std::fprintf(
+		stderr,
+		"Chat participants regression failed: %s\n",
+		reason);
+	return 1;
+}
+
+[[nodiscard]] int RunChatParticipantsRegression(Main::Domain &domain) {
+	if (domain.accounts().size() > Main::Domain::kPremiumMaxAccounts - 2) {
+		return FailChatParticipantsRegression(
+			"not enough account slots for isolated stock and pinned sessions");
+	}
+	const auto selfId = UserId(1);
+	const auto chatId = ChatId(1051);
+	const auto stock = domain.add(MTP::Environment::Production);
+	stock->mtp().stopForServerEnrollment();
+	stock->setSessionUserId(selfId);
+	if (!stock->createSession(
+			RegressionUser(selfId, true, QString()),
+			std::make_unique<Main::SessionSettings>())) {
+		return FailChatParticipantsRegression(
+			"could not create the stock test session");
+	}
+	const auto stockChat = stock->session().data().chat(chatId);
+	const auto stockPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*stockChat));
+	stock->session().api().processFullPeer(
+		stockPeer,
+		RegressionChatFullReply(chatId, 1, QString()));
+	if (stock->session().user()->isLoaded()
+		|| !stockChat->participants.empty()) {
+		return FailChatParticipantsRegression(
+			"stock session accepted phone-free self in full chat info");
+	}
+	stock->session().api().processFullPeer(
+		stockPeer,
+		RegressionChatFullReply(chatId, 2, u"+10000000001"_q));
+	if (!stock->session().user()->isLoaded()
+		|| !HasExpectedParticipants(stockChat)) {
+		return FailChatParticipantsRegression(
+			"stock session with phone did not load creator and members");
+	}
+
+	const auto pinned = domain.add(MTP::Environment::Production);
+	pinned->mtp().stopForServerEnrollment();
+	if (!ConfigurePinnedServer(pinned)) {
+		return FailChatParticipantsRegression(
+			"could not pin the custom test server");
+	}
+	pinned->setSessionUserId(selfId);
+	if (!pinned->createSession(
+			RegressionUser(selfId, true, QString()),
+			std::make_unique<Main::SessionSettings>())) {
+		return FailChatParticipantsRegression(
+			"could not create the pinned test session");
+	}
+	const auto pinnedChat = pinned->session().data().chat(chatId);
+	const auto pinnedPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*pinnedChat));
+	pinned->session().api().processFullPeer(
+		pinnedPeer,
+		RegressionChatFullReply(chatId, 1, QString()));
+	if (!pinned->session().user()->isLoaded()
+		|| !HasExpectedParticipants(pinnedChat)) {
+		return FailChatParticipantsRegression(
+			"pinned phone-free self did not retain creator and members");
+	}
+	std::fprintf(stderr, "Chat participants regression passed.\n");
+	return 0;
 }
 
 } // namespace
@@ -150,7 +352,10 @@ int RunAccountLifecycleRegression() {
 	}
 
 	const auto blocked = FindAuthorizationBlockedAccount(domain);
-	return (blocked && blocked->mtp().config().blocked()) ? 0 : 1;
+	if (!blocked || !blocked->mtp().config().blocked()) {
+		return 1;
+	}
+	return RunChatParticipantsRegression(domain);
 }
 
 } // namespace Tests
