@@ -36,13 +36,9 @@ CachedUserpics::CachedUserpics()
 : _clearTimer([=] { clear(); }) {
 	const auto directory = cWorkingDir() + u"tdata/temp"_q;
 	if (Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			directory,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::OpenDir, directory, Q_FUNC_INFO)
 		&& Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			directory,
-			Q_FUNC_INFO)) {
+			Core::MacProtectedPath::Operation::Mkdir, directory, Q_FUNC_INFO)) {
 		QDir().mkpath(directory);
 	}
 }
@@ -51,8 +47,7 @@ CachedUserpics::~CachedUserpics() {
 	if (_someSavedFlag) {
 		for (const auto &item : std::as_const(_images)) {
 			if (Core::MacProtectedPath::CheckPath(
-					Core::MacProtectedPath::Operation::Unlink,
-					item.path,
+					Core::MacProtectedPath::Operation::Unlink, item.path,
 					Q_FUNC_INFO)) {
 				QFile(item.path).remove();
 			}
@@ -86,8 +81,7 @@ QString CachedUserpics::get(
 			cWorkingDir(),
 			QString::number(base::RandomValue<uint64>(), 16));
 		if (Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Write,
-				v.path,
+				Core::MacProtectedPath::Operation::Write, v.path,
 				Q_FUNC_INFO)) {
 			if (key.first || key.second) {
 				GenerateUserpic(peer, view).save(v.path, "PNG");
@@ -110,8 +104,7 @@ crl::time CachedUserpics::clear(crl::time ms) {
 		}
 		if (i->until <= ms) {
 			if (Core::MacProtectedPath::CheckPath(
-					Core::MacProtectedPath::Operation::Unlink,
-					i->path,
+					Core::MacProtectedPath::Operation::Unlink, i->path,
 					Q_FUNC_INFO)) {
 				QFile(i->path).remove();
 			}

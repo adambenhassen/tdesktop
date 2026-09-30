@@ -43,15 +43,13 @@ struct RuntimeState final {
 
 [[nodiscard]] QByteArray AccountDatabaseHome() {
 	const auto suggested = sysconf(_SC_GETPW_R_SIZE_MAX);
-	const auto size = size_t((suggested > 0 && suggested <= 1024 * 1024)
-		? suggested
-		: 16384);
+	const auto size = size_t(
+		(suggested > 0 && suggested <= 1024 * 1024) ? suggested : 16384);
 	auto buffer = std::vector<char>(size);
 	struct passwd entry = {};
-	auto result = static_cast<passwd*>(nullptr);
+	auto result = static_cast<passwd *>(nullptr);
 	if (getpwuid_r(getuid(), &entry, buffer.data(), buffer.size(), &result)
-		|| !result
-		|| !result->pw_dir) {
+		|| !result || !result->pw_dir) {
 		return {};
 	}
 	return QByteArray(result->pw_dir);
@@ -66,10 +64,9 @@ struct RuntimeState final {
 }
 
 [[nodiscard]] HomeRoots NativeHomeRoots() {
-	auto result = HomeRoots{
-		.accountDatabase = AccountDatabaseHome(),
-		.environment = qgetenv("HOME"),
-		.foundation = FoundationHome() };
+	auto result = HomeRoots{.accountDatabase = AccountDatabaseHome(),
+							.environment = qgetenv("HOME"),
+							.foundation = FoundationHome()};
 #if defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
 	const auto testHome = qgetenv("TDESKTOP_MAC_PROFILE_TEST_HOME");
 	if (!testHome.isEmpty()) {
@@ -82,83 +79,101 @@ struct RuntimeState final {
 
 [[nodiscard]] FileError FileErrorFromErrno(int value) {
 	switch (value) {
-	case ENOENT: return FileError::Missing;
-	case ENOTDIR: return FileError::NotDirectory;
-	case ELOOP: return FileError::Loop;
-	default: return FileError::Unexpected;
+	case ENOENT:
+		return FileError::Missing;
+	case ENOTDIR:
+		return FileError::NotDirectory;
+	case ELOOP:
+		return FileError::Loop;
+	default:
+		return FileError::Unexpected;
 	}
 }
 
 [[nodiscard]] LstatResult NativeLstat(const QByteArray &path) {
 	struct stat info = {};
 	if (::lstat(path.constData(), &info)) {
-		return { .error = FileErrorFromErrno(errno) };
+		return {.error = FileErrorFromErrno(errno)};
 	}
-	const auto type = S_ISDIR(info.st_mode)
-		? FileType::Directory
-		: S_ISREG(info.st_mode)
-		? FileType::Regular
-		: S_ISLNK(info.st_mode)
-		? FileType::Symlink
-		: FileType::Other;
-	return { .type = type, .error = FileError::None };
+	const auto type = S_ISDIR(info.st_mode)	  ? FileType::Directory
+					  : S_ISREG(info.st_mode) ? FileType::Regular
+					  : S_ISLNK(info.st_mode) ? FileType::Symlink
+											  : FileType::Other;
+	return {.type = type, .error = FileError::None};
 }
 
 [[nodiscard]] ReadlinkResult NativeReadlink(const QByteArray &path) {
 	auto size = size_t(1024);
 	while (size <= 65536) {
 		auto target = QByteArray(int(size), Qt::Uninitialized);
-		const auto count = ::readlink(
-			path.constData(),
-			target.data(),
-			size_t(target.size()));
+		const auto count = ::readlink(path.constData(), target.data(),
+									  size_t(target.size()));
 		if (count < 0) {
-			return { .error = FileErrorFromErrno(errno) };
+			return {.error = FileErrorFromErrno(errno)};
 		}
 		if (size_t(count) < size) {
 			target.resize(int(count));
-			return { .target = std::move(target), .error = FileError::None };
+			return {.target = std::move(target), .error = FileError::None};
 		}
 		size *= 2;
 	}
-	return { .error = FileError::Unexpected };
+	return {.error = FileError::Unexpected};
 }
 
 [[nodiscard]] FileSystem NativeFileSystem() {
-	return {
-		.lstat = NativeLstat,
-		.readlink = NativeReadlink };
+	return {.lstat = NativeLstat, .readlink = NativeReadlink};
 }
 
 [[nodiscard]] QString OperationName(Operation operation) {
 	switch (operation) {
-	case Operation::Open: return u"open"_q;
-	case Operation::Read: return u"read"_q;
-	case Operation::Write: return u"write"_q;
-	case Operation::Stat: return u"stat"_q;
-	case Operation::Lstat: return u"lstat"_q;
-	case Operation::OpenDir: return u"opendir"_q;
-	case Operation::GetAttrList: return u"getattrlist"_q;
-	case Operation::Mkdir: return u"mkdir"_q;
-	case Operation::Lock: return u"lock"_q;
-	case Operation::Rename: return u"rename"_q;
-	case Operation::Copy: return u"copy"_q;
-	case Operation::Link: return u"link"_q;
-	case Operation::Unlink: return u"unlink"_q;
-	case Operation::Rmdir: return u"rmdir"_q;
-	case Operation::RecursiveDelete: return u"recursive-delete"_q;
+	case Operation::Open:
+		return u"open"_q;
+	case Operation::Read:
+		return u"read"_q;
+	case Operation::Write:
+		return u"write"_q;
+	case Operation::Stat:
+		return u"stat"_q;
+	case Operation::Lstat:
+		return u"lstat"_q;
+	case Operation::OpenDir:
+		return u"opendir"_q;
+	case Operation::GetAttrList:
+		return u"getattrlist"_q;
+	case Operation::Mkdir:
+		return u"mkdir"_q;
+	case Operation::Lock:
+		return u"lock"_q;
+	case Operation::Rename:
+		return u"rename"_q;
+	case Operation::Copy:
+		return u"copy"_q;
+	case Operation::Link:
+		return u"link"_q;
+	case Operation::Unlink:
+		return u"unlink"_q;
+	case Operation::Rmdir:
+		return u"rmdir"_q;
+	case Operation::RecursiveDelete:
+		return u"recursive-delete"_q;
 	}
 	return u"unknown"_q;
 }
 
 [[nodiscard]] QString ProtectedClassName(ProtectedClass protectedClass) {
 	switch (protectedClass) {
-	case ProtectedClass::None: return u"none"_q;
-	case ProtectedClass::ApplicationSupport: return u"application-support"_q;
-	case ProtectedClass::Container: return u"container"_q;
-	case ProtectedClass::GroupContainer: return u"group-container"_q;
-	case ProtectedClass::BundleKeyed: return u"bundle-keyed"_q;
-	case ProtectedClass::Invalid: return u"invalid"_q;
+	case ProtectedClass::None:
+		return u"none"_q;
+	case ProtectedClass::ApplicationSupport:
+		return u"application-support"_q;
+	case ProtectedClass::Container:
+		return u"container"_q;
+	case ProtectedClass::GroupContainer:
+		return u"group-container"_q;
+	case ProtectedClass::BundleKeyed:
+		return u"bundle-keyed"_q;
+	case ProtectedClass::Invalid:
+		return u"invalid"_q;
 	}
 	return u"unknown"_q;
 }
@@ -167,24 +182,24 @@ void ReportRefusal(const RefusalRecord &refusal) {
 	if (!State().refusals.record(refusal)) {
 		return;
 	}
-	const auto message = u"Mac protected path refusal: operation=%1 class=%2 callsite=%3"_q.arg(
-		OperationName(refusal.operation),
-		ProtectedClassName(refusal.protectedClass),
-		refusal.callsite);
+	const auto message
+		= u"Mac protected path refusal: operation=%1 class=%2 callsite=%3"_q
+			  .arg(OperationName(refusal.operation),
+				   ProtectedClassName(refusal.protectedClass),
+				   refusal.callsite);
 	fprintf(stderr, "%s\n", message.toUtf8().constData());
 }
 
 void ReportInvalidInitialization(const QString &callsite) {
-	ReportRefusal({
-		.operation = Operation::Open,
-		.protectedClass = ProtectedClass::Invalid,
-		.callsite = callsite });
+	ReportRefusal({.operation = Operation::Open,
+				   .protectedClass = ProtectedClass::Invalid,
+				   .callsite = callsite});
 }
 
 [[nodiscard]] bool AppSandboxed() {
 #ifdef OS_MAC_STORE
 	return true;
-#else // OS_MAC_STORE
+#else  // OS_MAC_STORE
 	return false;
 #endif // !OS_MAC_STORE
 }
@@ -192,10 +207,10 @@ void ReportInvalidInitialization(const QString &callsite) {
 } // namespace
 
 bool IntegrationTestActive() {
-#if defined(TDESKTOP_TELEGRAMD) \
+#if defined(TDESKTOP_TELEGRAMD)                                                \
 	&& defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
-	return qEnvironmentVariable(
-		"TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST") == "1";
+	return qEnvironmentVariable("TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST")
+		   == "1";
 #else
 	return false;
 #endif
@@ -203,10 +218,9 @@ bool IntegrationTestActive() {
 
 bool InitializeProfile() {
 	if (!IntegrationTestActive()) {
-		if (qEnvironmentVariable(
-				"TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST") == "1") {
-			ReportInvalidInitialization(
-				u"profile.integration-test-build"_q);
+		if (qEnvironmentVariable("TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST")
+			== "1") {
+			ReportInvalidInitialization(u"profile.integration-test-build"_q);
 			return false;
 		}
 		return true;
@@ -223,10 +237,8 @@ bool InitializeProfile() {
 	const auto homes = NativeHomeRoots();
 	const auto filesystem = NativeFileSystem();
 	auto failure = RefusalRecord();
-	const auto policy = MacProtectedPathPolicy::Build(
-		homes,
-		filesystem,
-		&failure);
+	const auto policy
+		= MacProtectedPathPolicy::Build(homes, filesystem, &failure);
 	if (!policy.valid()) {
 		ReportRefusal(failure);
 		return false;
@@ -236,21 +248,17 @@ bool InitializeProfile() {
 		ReportInvalidInitialization(u"profile.home-source"_q);
 		return false;
 	}
-	const auto profile = policy.Resolve(
-		Operation::Open,
-		profileBytes,
-		homes.accountDatabase,
-		u"profile.root"_q);
+	const auto profile
+		= policy.Resolve(Operation::Open, profileBytes, homes.accountDatabase,
+						 u"profile.root"_q);
 	if (!profile.allowed()) {
 		ReportRefusal(profile.refusal);
 		return false;
 	}
 	const auto profilePath = QString::fromUtf8(profile.resolvedPath);
-	const auto create = policy.Resolve(
-		Operation::Mkdir,
-		profile.resolvedPath,
-		homes.accountDatabase,
-		u"profile.create"_q);
+	const auto create
+		= policy.Resolve(Operation::Mkdir, profile.resolvedPath,
+						 homes.accountDatabase, u"profile.create"_q);
 	if (!create.allowed()) {
 		ReportRefusal(create.refusal);
 		return false;
@@ -263,9 +271,9 @@ bool InitializeProfile() {
 	cForceWorkingDir(profilePath + '/');
 	{
 		QMutexLocker lock(&state.mutex);
-		state.ipcDirectory = AppSandboxed()
-			? QString::fromUtf8(homes.foundation) + u"/tmp"_q
-			: u"/tmp"_q;
+		state.ipcDirectory
+			= AppSandboxed() ? QString::fromUtf8(homes.foundation) + u"/tmp"_q
+							 : u"/tmp"_q;
 		state.profile = cWorkingDir();
 		state.policy = std::make_shared<MacProtectedPathPolicy>(policy);
 		state.ready = true;
@@ -284,9 +292,8 @@ QString ProfileRoot() {
 
 QString NotificationSoundsDirectory() {
 	const auto home = NativeHomeRoots().foundation;
-	return home.isEmpty()
-		? QString()
-		: QString::fromUtf8(home) + u"/Library/Sounds"_q;
+	return home.isEmpty() ? QString()
+						  : QString::fromUtf8(home) + u"/Library/Sounds"_q;
 }
 
 QString IpcDirectory() {
@@ -297,17 +304,12 @@ QString IpcDirectory() {
 	}
 	if (AppSandboxed()) {
 		const auto home = FoundationHome();
-		return home.isEmpty()
-			? QString()
-			: QString::fromUtf8(home) + u"/tmp"_q;
+		return home.isEmpty() ? QString() : QString::fromUtf8(home) + u"/tmp"_q;
 	}
 	return u"/tmp"_q;
 }
 
-bool CheckPath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+bool CheckPath(Operation operation, const QString &path, const char *callsite) {
 	if (!IntegrationTestActive()) {
 		return true;
 	}
@@ -323,11 +325,9 @@ bool CheckPath(
 		policy = state.policy;
 		anchor = state.profile;
 	}
-	const auto result = policy->Resolve(
-		operation,
-		QFile::encodeName(path),
-		QFile::encodeName(anchor),
-		QString::fromUtf8(callsite));
+	const auto result = policy->Resolve(operation, QFile::encodeName(path),
+										QFile::encodeName(anchor),
+										QString::fromUtf8(callsite));
 	if (!result.allowed()) {
 		ReportRefusal(result.refusal);
 		return false;
@@ -335,11 +335,8 @@ bool CheckPath(
 	return true;
 }
 
-bool CheckPair(
-		Operation operation,
-		const QString &first,
-		const QString &second,
-		const char *callsite) {
+bool CheckPair(Operation operation, const QString &first, const QString &second,
+			   const char *callsite) {
 	if (!IntegrationTestActive()) {
 		return true;
 	}
@@ -356,11 +353,8 @@ bool CheckPair(
 		anchor = state.profile;
 	}
 	const auto result = policy->ResolvePair(
-		operation,
-		QFile::encodeName(first),
-		QFile::encodeName(second),
-		QFile::encodeName(anchor),
-		QString::fromUtf8(callsite));
+		operation, QFile::encodeName(first), QFile::encodeName(second),
+		QFile::encodeName(anchor), QString::fromUtf8(callsite));
 	if (!result.first.allowed()) {
 		ReportRefusal(result.first.refusal);
 	}

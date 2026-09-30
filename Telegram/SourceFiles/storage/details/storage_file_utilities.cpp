@@ -25,21 +25,14 @@ namespace {
 using Core::MacProtectedPath::Operation;
 
 [[nodiscard]] bool CheckPath(Operation operation, const QString &path) {
-	return Core::MacProtectedPath::CheckPath(
-		operation,
-		path,
-		"Storage::details");
+	return Core::MacProtectedPath::CheckPath(operation, path,
+											 "Storage::details");
 }
 
-[[nodiscard]] bool CheckPair(
-		Operation operation,
-		const QString &first,
-		const QString &second) {
-	return Core::MacProtectedPath::CheckPair(
-		operation,
-		first,
-		second,
-		"Storage::details");
+[[nodiscard]] bool CheckPair(Operation operation, const QString &first,
+							 const QString &second) {
+	return Core::MacProtectedPath::CheckPair(operation, first, second,
+											 "Storage::details");
 }
 
 constexpr char TdfMagic[] = { 'T', 'D', 'F', '$' };
@@ -194,10 +187,10 @@ bool WriteManager::writeHeader(const QString &basePath, QFileDevice &file) {
 		if (dir.exists()) {
 			return false;
 		} else if (!CheckPath(Operation::Mkdir, dir.absolutePath())
-			|| !QDir().mkpath(dir.absolutePath())) {
+				   || !QDir().mkpath(dir.absolutePath())) {
 			return false;
 		} else if (!CheckPath(Operation::Write, file.fileName())
-			|| !file.open(QIODevice::WriteOnly)) {
+				   || !file.open(QIODevice::WriteOnly)) {
 			return false;
 		}
 	}

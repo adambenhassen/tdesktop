@@ -178,8 +178,7 @@ void Loader::unpack(const QString &path) {
 	crl::async([=] {
 		if (UnpackSet(path, folder)) {
 			if (Core::MacProtectedPath::CheckPath(
-					Core::MacProtectedPath::Operation::Unlink,
-					path,
+					Core::MacProtectedPath::Operation::Unlink, path,
 					Q_FUNC_INFO)) {
 				QFile(path).remove();
 			}

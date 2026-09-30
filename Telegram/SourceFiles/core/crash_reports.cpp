@@ -334,13 +334,9 @@ void StartCatching() {
 
 	QString dumpspath = cWorkingDir() + u"tdata/dumps"_q;
 	if (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			dumpspath,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::OpenDir, dumpspath, Q_FUNC_INFO)
 		|| !Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			dumpspath,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::Mkdir, dumpspath, Q_FUNC_INFO)
 		|| !QDir().mkpath(dumpspath)) {
 		return;
 	}
@@ -413,9 +409,7 @@ StartResult Start() {
 #ifndef TDESKTOP_DISABLE_CRASH_REPORTS
 	ReportPath = cWorkingDir() + u"tdata/working"_q;
 	if (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Read,
-			ReportPath,
-			Q_FUNC_INFO)) {
+			Core::MacProtectedPath::Operation::Read, ReportPath, Q_FUNC_INFO)) {
 		return CantOpen;
 	}
 
@@ -452,8 +446,7 @@ Status Restart() {
 		return Started;
 	}
 	if (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Write,
-			ReportPath,
+			Core::MacProtectedPath::Operation::Write, ReportPath,
 			Q_FUNC_INFO)) {
 		return CantOpen;
 	}
@@ -515,8 +508,7 @@ void Finish() {
 		_wunlink(ReportPath.toStdWString().c_str());
 #else // Q_OS_WIN
 		if (Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Unlink,
-				ReportPath,
+				Core::MacProtectedPath::Operation::Unlink, ReportPath,
 				Q_FUNC_INFO)) {
 			unlink(ReportPath.toUtf8().constData());
 		}

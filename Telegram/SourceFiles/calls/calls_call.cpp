@@ -1147,20 +1147,16 @@ void Call::createAndStartController(const MTPDphoneCall &call) {
 		const auto callLogFolder = cWorkingDir() + u"DebugLogs"_q;
 		const auto callLogPath = callLogFolder + u"/last_call_log.txt"_q;
 		if (Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::OpenDir,
-				callLogFolder,
+				Core::MacProtectedPath::Operation::OpenDir, callLogFolder,
 				Q_FUNC_INFO)
 			&& Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Mkdir,
-				callLogFolder,
+				Core::MacProtectedPath::Operation::Mkdir, callLogFolder,
 				Q_FUNC_INFO)
 			&& Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Unlink,
-				callLogPath,
+				Core::MacProtectedPath::Operation::Unlink, callLogPath,
 				Q_FUNC_INFO)
 			&& Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Write,
-				callLogPath,
+				Core::MacProtectedPath::Operation::Write, callLogPath,
 				Q_FUNC_INFO)
 			&& QDir().mkpath(callLogFolder)) {
 			QFile(callLogPath).remove();

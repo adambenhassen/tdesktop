@@ -57,13 +57,11 @@ constexpr auto kWallPaperSidesLimit = 10'000;
 const auto kThemeNewPathRelativeTag = u"special://new_tag"_q;
 
 using namespace Storage::details;
-using Storage::FileKey;
 using Core::MacProtectedPath::Operation;
+using Storage::FileKey;
 
-[[nodiscard]] bool CheckProfilePath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckProfilePath(Operation operation, const QString &path,
+									const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -185,10 +183,7 @@ bool _readOldSettings(bool remove, ReadSettingsContext &context) {
 		result = true;
 	}
 	if (remove
-		&& CheckProfilePath(
-			Operation::Unlink,
-			file.fileName(),
-			Q_FUNC_INFO)) {
+		&& CheckProfilePath(Operation::Unlink, file.fileName(), Q_FUNC_INFO)) {
 		file.remove();
 	}
 	return result;
@@ -275,10 +270,7 @@ bool _readOldUserSettings(bool remove, ReadSettingsContext &context) {
 		result = true;
 	}
 	if (remove
-		&& CheckProfilePath(
-			Operation::Unlink,
-			file.fileName(),
-			Q_FUNC_INFO)) {
+		&& CheckProfilePath(Operation::Unlink, file.fileName(), Q_FUNC_INFO)) {
 		file.remove();
 	}
 	return result;
@@ -363,10 +355,7 @@ bool _readOldMtpData(bool remove, ReadSettingsContext &context) {
 		result = true;
 	}
 	if (remove
-		&& CheckProfilePath(
-			Operation::Unlink,
-			file.fileName(),
-			Q_FUNC_INFO)) {
+		&& CheckProfilePath(Operation::Unlink, file.fileName(), Q_FUNC_INFO)) {
 		file.remove();
 	}
 	return result;
@@ -968,25 +957,17 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 	if (!object.cloud.id) {
 		auto file = QFile(object.pathRelative);
 		if (!object.pathRelative.isEmpty()
-			&& !CheckProfilePath(
-				Operation::Stat,
-				file.fileName(),
-				Q_FUNC_INFO)) {
+			&& !CheckProfilePath(Operation::Stat, file.fileName(),
+								 Q_FUNC_INFO)) {
 			return {};
 		}
 		if (object.pathRelative.isEmpty() || !file.exists()) {
 			file.setFileName(object.pathAbsolute);
 		}
 		if (!file.fileName().isEmpty()
-			&& CheckProfilePath(
-				Operation::Stat,
-				file.fileName(),
-				Q_FUNC_INFO)
+			&& CheckProfilePath(Operation::Stat, file.fileName(), Q_FUNC_INFO)
 			&& file.exists()
-			&& CheckProfilePath(
-				Operation::Read,
-				file.fileName(),
-				Q_FUNC_INFO)
+			&& CheckProfilePath(Operation::Read, file.fileName(), Q_FUNC_INFO)
 			&& file.open(QIODevice::ReadOnly)) {
 			if (file.size() > kThemeFileSizeLimit) {
 				LOG(("Error: theme file too large: %1 "

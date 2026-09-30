@@ -85,10 +85,8 @@ std::weak_ptr<Updater> UpdaterInstance;
 using Progress = UpdateChecker::Progress;
 using State = UpdateChecker::State;
 
-[[nodiscard]] bool CheckUpdatePath(
-		MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckUpdatePath(MacProtectedPath::Operation operation,
+								   const QString &path, const char *callsite) {
 	return MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -295,24 +293,18 @@ QString UpdatesFolder() {
 
 void ClearAll() {
 	const auto folder = UpdatesFolder();
-	if (CheckUpdatePath(
-			MacProtectedPath::Operation::RecursiveDelete,
-			folder,
-			Q_FUNC_INFO)) {
+	if (CheckUpdatePath(MacProtectedPath::Operation::RecursiveDelete, folder,
+						Q_FUNC_INFO)) {
 		base::Platform::DeleteDirectory(folder);
 	}
 }
 
 QString FindUpdateFile() {
 	const auto folder = UpdatesFolder();
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::OpenDir,
-			folder,
-			Q_FUNC_INFO)
-		|| !CheckUpdatePath(
-			MacProtectedPath::Operation::Stat,
-			folder,
-			Q_FUNC_INFO)) {
+	if (!CheckUpdatePath(MacProtectedPath::Operation::OpenDir, folder,
+						 Q_FUNC_INFO)
+		|| !CheckUpdatePath(MacProtectedPath::Operation::Stat, folder,
+							Q_FUNC_INFO)) {
 		return QString();
 	}
 	QDir updates(folder);
@@ -356,10 +348,8 @@ bool UnpackUpdate(const QString &filepath) {
 	}
 
 	QFile input(filepath);
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::Read,
-			filepath,
-			Q_FUNC_INFO)
+	if (!CheckUpdatePath(MacProtectedPath::Operation::Read, filepath,
+						 Q_FUNC_INFO)
 		|| !input.open(QIODevice::ReadOnly)) {
 		LOG(("Update Error: cant read updates file!"));
 		return false;
@@ -380,23 +370,17 @@ bool UnpackUpdate(const QString &filepath) {
 	input.close();
 
 	QString tempDirPath = cWorkingDir() + u"tupdates/temp"_q, readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q;
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::RecursiveDelete,
-			tempDirPath,
-			Q_FUNC_INFO)) {
+	if (!CheckUpdatePath(MacProtectedPath::Operation::RecursiveDelete,
+						 tempDirPath, Q_FUNC_INFO)) {
 		return false;
 	}
 	base::Platform::DeleteDirectory(tempDirPath);
 
 	QDir tempDir(tempDirPath);
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::Stat,
-			tempDirPath,
-			Q_FUNC_INFO)
-		|| !CheckUpdatePath(
-			MacProtectedPath::Operation::Stat,
-			readyFilePath,
-			Q_FUNC_INFO)) {
+	if (!CheckUpdatePath(MacProtectedPath::Operation::Stat, tempDirPath,
+						 Q_FUNC_INFO)
+		|| !CheckUpdatePath(MacProtectedPath::Operation::Stat, readyFilePath,
+							Q_FUNC_INFO)) {
 		return false;
 	}
 	if (tempDir.exists() || QFile(readyFilePath).exists()) {
@@ -508,14 +492,10 @@ bool UnpackUpdate(const QString &filepath) {
 	}
 #endif // Q_OS_WIN && !TDESKTOP_USE_PACKAGED
 
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::OpenDir,
-			tempDir.absolutePath(),
-			Q_FUNC_INFO)
-		|| !CheckUpdatePath(
-			MacProtectedPath::Operation::Mkdir,
-			tempDir.absolutePath(),
-			Q_FUNC_INFO)
+	if (!CheckUpdatePath(MacProtectedPath::Operation::OpenDir,
+						 tempDir.absolutePath(), Q_FUNC_INFO)
+		|| !CheckUpdatePath(MacProtectedPath::Operation::Mkdir,
+							tempDir.absolutePath(), Q_FUNC_INFO)
 		|| !tempDir.mkdir(tempDir.absolutePath())) {
 		return false;
 	}
@@ -578,22 +558,16 @@ bool UnpackUpdate(const QString &filepath) {
 
 			QFile f(tempDirPath + '/' + relativeName);
 			const auto parent = QFileInfo(f).absolutePath();
-			if (!CheckUpdatePath(
-						MacProtectedPath::Operation::OpenDir,
-						parent,
-						Q_FUNC_INFO)
-				|| !CheckUpdatePath(
-						MacProtectedPath::Operation::Mkdir,
-						parent,
-						Q_FUNC_INFO)
+			if (!CheckUpdatePath(MacProtectedPath::Operation::OpenDir, parent,
+								 Q_FUNC_INFO)
+				|| !CheckUpdatePath(MacProtectedPath::Operation::Mkdir, parent,
+									Q_FUNC_INFO)
 				|| !QDir().mkpath(parent)) {
 				LOG(("Update Error: cant mkpath for file '%1'").arg(tempDirPath + '/' + relativeName));
 				return false;
 			}
-			if (!CheckUpdatePath(
-						MacProtectedPath::Operation::Write,
-						f.fileName(),
-						Q_FUNC_INFO)
+			if (!CheckUpdatePath(MacProtectedPath::Operation::Write,
+								 f.fileName(), Q_FUNC_INFO)
 				|| !f.open(QIODevice::WriteOnly)) {
 				LOG(("Update Error: cant open file '%1' for writing").arg(tempDirPath + '/' + relativeName));
 				return false;
@@ -606,10 +580,8 @@ bool UnpackUpdate(const QString &filepath) {
 			}
 			f.close();
 			if (executable) {
-				if (!CheckUpdatePath(
-						MacProtectedPath::Operation::Write,
-						f.fileName(),
-						Q_FUNC_INFO)) {
+				if (!CheckUpdatePath(MacProtectedPath::Operation::Write,
+									 f.fileName(), Q_FUNC_INFO)) {
 					return false;
 				}
 				QFileDevice::Permissions p = f.permissions();
@@ -620,14 +592,10 @@ bool UnpackUpdate(const QString &filepath) {
 
 		// create tdata/version file
 		const auto tdata = QDir(tempDirPath + u"/tdata"_q).absolutePath();
-		if (!CheckUpdatePath(
-				MacProtectedPath::Operation::OpenDir,
-				tdata,
-				Q_FUNC_INFO)
-			|| !CheckUpdatePath(
-				MacProtectedPath::Operation::Mkdir,
-				tdata,
-				Q_FUNC_INFO)
+		if (!CheckUpdatePath(MacProtectedPath::Operation::OpenDir, tdata,
+							 Q_FUNC_INFO)
+			|| !CheckUpdatePath(MacProtectedPath::Operation::Mkdir, tdata,
+								Q_FUNC_INFO)
 			|| !tempDir.mkdir(tdata)) {
 			return false;
 		}
@@ -639,10 +607,8 @@ bool UnpackUpdate(const QString &filepath) {
 		memcpy(versionStr, versionString.c_str(), versionLen);
 
 		QFile fVersion(tempDirPath + u"/tdata/version"_q);
-		if (!CheckUpdatePath(
-					MacProtectedPath::Operation::Write,
-					fVersion.fileName(),
-					Q_FUNC_INFO)
+		if (!CheckUpdatePath(MacProtectedPath::Operation::Write,
+							 fVersion.fileName(), Q_FUNC_INFO)
 			|| !fVersion.open(QIODevice::WriteOnly)) {
 			LOG(("Update Error: cant write version file '%1'").arg(tempDirPath + u"/version"_q));
 			return false;
@@ -658,10 +624,8 @@ bool UnpackUpdate(const QString &filepath) {
 	}
 
 	QFile readyFile(readyFilePath);
-	if (CheckUpdatePath(
-			MacProtectedPath::Operation::Write,
-			readyFilePath,
-			Q_FUNC_INFO)
+	if (CheckUpdatePath(MacProtectedPath::Operation::Write, readyFilePath,
+						Q_FUNC_INFO)
 		&& readyFile.open(QIODevice::WriteOnly)) {
 		if (readyFile.write("1", 1)) {
 			readyFile.close();
@@ -673,10 +637,8 @@ bool UnpackUpdate(const QString &filepath) {
 		LOG(("Update Error: cant create ready file '%1'").arg(readyFilePath));
 		return false;
 	}
-	if (CheckUpdatePath(
-			MacProtectedPath::Operation::Unlink,
-			input.fileName(),
-			Q_FUNC_INFO)) {
+	if (CheckUpdatePath(MacProtectedPath::Operation::Unlink, input.fileName(),
+						Q_FUNC_INFO)) {
 		input.remove();
 	}
 
@@ -1863,23 +1825,17 @@ bool checkReadyUpdate() {
 		return false;
 	}
 	QString readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q, readyPath = cWorkingDir() + u"tupdates/temp"_q;
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::Stat,
-			readyFilePath,
-			Q_FUNC_INFO)) {
+	if (!CheckUpdatePath(MacProtectedPath::Operation::Stat, readyFilePath,
+						 Q_FUNC_INFO)) {
 		return false;
 	}
 	if (!QFile(readyFilePath).exists() || cExeName().isEmpty()) {
 		const auto ready = cWorkingDir() + u"tupdates/ready"_q;
 		const auto temporary = cWorkingDir() + u"tupdates/temp"_q;
-		if (!CheckUpdatePath(
-					MacProtectedPath::Operation::Stat,
-					ready,
-					Q_FUNC_INFO)
-			|| !CheckUpdatePath(
-					MacProtectedPath::Operation::Stat,
-					temporary,
-					Q_FUNC_INFO)) {
+		if (!CheckUpdatePath(MacProtectedPath::Operation::Stat, ready,
+							 Q_FUNC_INFO)
+			|| !CheckUpdatePath(MacProtectedPath::Operation::Stat, temporary,
+								Q_FUNC_INFO)) {
 			return false;
 		}
 		if (QDir(ready).exists() || QDir(temporary).exists()) {
@@ -1892,10 +1848,8 @@ bool checkReadyUpdate() {
 	QString versionPath = readyPath + u"/tdata/version"_q;
 	{
 		QFile fVersion(versionPath);
-		if (!CheckUpdatePath(
-					MacProtectedPath::Operation::Read,
-					versionPath,
-					Q_FUNC_INFO)
+		if (!CheckUpdatePath(MacProtectedPath::Operation::Read, versionPath,
+							 Q_FUNC_INFO)
 			|| !fVersion.open(QIODevice::ReadOnly)) {
 			LOG(("Update Error: cant read version file '%1'").arg(versionPath));
 			ClearAll();
@@ -1937,18 +1891,14 @@ bool checkReadyUpdate() {
 	QString curUpdater = (cExeDir() + u"Updater"_q);
 	QFileInfo updater(cWorkingDir() + u"tupdates/temp/Updater"_q);
 #endif // else for Q_OS_WIN || Q_OS_MAC
-	if (!CheckUpdatePath(
-			MacProtectedPath::Operation::Stat,
-			updater.absoluteFilePath(),
-			Q_FUNC_INFO)) {
+	if (!CheckUpdatePath(MacProtectedPath::Operation::Stat,
+						 updater.absoluteFilePath(), Q_FUNC_INFO)) {
 		return false;
 	}
 	if (!updater.exists()) {
 		QFileInfo current(curUpdater);
-		if (!CheckUpdatePath(
-				MacProtectedPath::Operation::Stat,
-				current.absoluteFilePath(),
-				Q_FUNC_INFO)) {
+		if (!CheckUpdatePath(MacProtectedPath::Operation::Stat,
+							 current.absoluteFilePath(), Q_FUNC_INFO)) {
 			return false;
 		}
 		if (!current.exists()) {
@@ -1956,11 +1906,10 @@ bool checkReadyUpdate() {
 			return false;
 		}
 		if (!MacProtectedPath::CheckPair(
-				MacProtectedPath::Operation::Copy,
-				current.absoluteFilePath(),
-				updater.absoluteFilePath(),
-				Q_FUNC_INFO)
-			|| !QFile(current.absoluteFilePath()).copy(updater.absoluteFilePath())) {
+				MacProtectedPath::Operation::Copy, current.absoluteFilePath(),
+				updater.absoluteFilePath(), Q_FUNC_INFO)
+			|| !QFile(current.absoluteFilePath())
+					.copy(updater.absoluteFilePath())) {
 			ClearAll();
 			return false;
 		}

@@ -2300,6 +2300,7 @@ if (build_macstore)
     set(bundle_identifier "com.adambenhassen.telegramd")
     set(bundle_entitlements "Telegram Lite.entitlements")
     set(output_name "Telegramd")
+    target_compile_definitions(Telegram PRIVATE OS_MAC_STORE)
     target_link_options(Telegram
     PRIVATE
         -F${libs_loc}/breakpad/src/client/mac/build/Release

@@ -49,10 +49,8 @@ namespace {
 using namespace details;
 using Core::MacProtectedPath::Operation;
 
-[[nodiscard]] bool CheckAccountPath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckAccountPath(Operation operation, const QString &path,
+									const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 using Database = Cache::Database;
@@ -670,32 +668,27 @@ void Account::reset() {
 	_cacheBigFileTotalTimeLimit = Database::Settings().totalTimeLimit;
 	_mediaLastPlaybackPosition.clear();
 
-	const auto wvbots = _webviewStorageIdBots.token.isEmpty()
-		? QString()
-		: !_webviewStorageIdBots.path.isEmpty()
-		? _webviewStorageIdBots.path
-		: (_webviewStorageIdBots.token == Webview::LegacyStorageIdToken())
-		? BaseGlobalPath() + u"webview"_q
-		: _databasePath + u"wvbots"_q;
-	const auto wvother = _webviewStorageIdOther.token.isEmpty()
-		? QString()
-		: !_webviewStorageIdOther.path.isEmpty()
-		? _webviewStorageIdOther.path
-		: _databasePath + u"wvother"_q;
-	const auto wvclear = [](Webview::StorageId &storageId, const QString &path) {
-		const auto token = base::take(storageId).token.toStdString();
-		if (!token.empty()
-			&& CheckAccountPath(
-				Operation::OpenDir,
-				path,
-				"Storage::Account::clearWebview")
-			&& CheckAccountPath(
-				Operation::RecursiveDelete,
-				path,
-				"Storage::Account::clearWebview")) {
-			Webview::ClearStorageDataByToken(token);
-		}
-	};
+	const auto wvbots
+		= _webviewStorageIdBots.token.isEmpty()	  ? QString()
+		  : !_webviewStorageIdBots.path.isEmpty() ? _webviewStorageIdBots.path
+		  : (_webviewStorageIdBots.token == Webview::LegacyStorageIdToken())
+			  ? BaseGlobalPath() + u"webview"_q
+			  : _databasePath + u"wvbots"_q;
+	const auto wvother = _webviewStorageIdOther.token.isEmpty() ? QString()
+						 : !_webviewStorageIdOther.path.isEmpty()
+							 ? _webviewStorageIdOther.path
+							 : _databasePath + u"wvother"_q;
+	const auto wvclear
+		= [](Webview::StorageId &storageId, const QString &path) {
+			  const auto token = base::take(storageId).token.toStdString();
+			  if (!token.empty()
+				  && CheckAccountPath(Operation::OpenDir, path,
+									  "Storage::Account::clearWebview")
+				  && CheckAccountPath(Operation::RecursiveDelete, path,
+									  "Storage::Account::clearWebview")) {
+				  Webview::ClearStorageDataByToken(token);
+			  }
+		  };
 	wvclear(_webviewStorageIdBots, wvbots);
 	wvclear(_webviewStorageIdOther, wvother);
 
@@ -716,41 +709,31 @@ void Account::reset() {
 				&& !name.endsWith(u"maps"_q)
 				&& !name.endsWith(u"configs"_q)) {
 				const auto path = base + name;
-				if (CheckAccountPath(
-						Operation::Unlink,
-						path,
-						"Storage::Account::remove")) {
+				if (CheckAccountPath(Operation::Unlink, path,
+									 "Storage::Account::remove")) {
 					QFile::remove(path);
 				}
 			}
 		}
 		const auto legacyTemp = LegacyTempDirectory();
-		if (CheckAccountPath(
-				Operation::RecursiveDelete,
-				legacyTemp,
-				"Storage::Account::remove")) {
+		if (CheckAccountPath(Operation::RecursiveDelete, legacyTemp,
+							 "Storage::Account::remove")) {
 			QDir(legacyTemp).removeRecursively();
 		}
 		if (!wvbots.isEmpty()) {
-			if (CheckAccountPath(
-					Operation::RecursiveDelete,
-					wvbots,
-					"Storage::Account::remove")) {
+			if (CheckAccountPath(Operation::RecursiveDelete, wvbots,
+								 "Storage::Account::remove")) {
 				QDir(wvbots).removeRecursively();
 			}
 		}
 		if (!wvother.isEmpty()) {
-			if (CheckAccountPath(
-					Operation::RecursiveDelete,
-					wvother,
-					"Storage::Account::remove")) {
+			if (CheckAccountPath(Operation::RecursiveDelete, wvother,
+								 "Storage::Account::remove")) {
 				QDir(wvother).removeRecursively();
 			}
 		}
-		if (CheckAccountPath(
-				Operation::RecursiveDelete,
-				temp,
-				"Storage::Account::remove")) {
+		if (CheckAccountPath(Operation::RecursiveDelete, temp,
+							 "Storage::Account::remove")) {
 			QDir(temp).removeRecursively();
 		}
 	});

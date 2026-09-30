@@ -25,10 +25,8 @@ namespace {
 using namespace details;
 using Core::MacProtectedPath::Operation;
 
-[[nodiscard]] bool CheckDomainPath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckDomainPath(Operation operation, const QString &path,
+								   const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 

@@ -20,10 +20,8 @@ namespace {
 
 using Core::MacProtectedPath::Operation;
 
-[[nodiscard]] bool CheckBlobPath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckBlobPath(Operation operation, const QString &path,
+								 const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -47,8 +45,8 @@ bool ExtractZipFile(zlib::FileToRead &zip, const QString path) {
 	}
 	auto file = QFile(path);
 	return CheckBlobPath(Operation::Write, path, Q_FUNC_INFO)
-		&& file.open(QIODevice::WriteOnly)
-		&& (file.write(content) == content.size());
+		   && file.open(QIODevice::WriteOnly)
+		   && (file.write(content) == content.size());
 }
 
 } // namespace
@@ -164,10 +162,7 @@ void BlobLoader::setImplementation(
 		unpack(filepath);
 	}, _implementation->lifetime());
 
-	if (!CheckBlobPath(
-			Operation::RecursiveDelete,
-			_folder,
-			Q_FUNC_INFO)) {
+	if (!CheckBlobPath(Operation::RecursiveDelete, _folder, Q_FUNC_INFO)) {
 		fail();
 		return;
 	}

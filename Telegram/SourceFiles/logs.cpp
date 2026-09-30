@@ -60,10 +60,8 @@ QString _logsFilePath(LogDataType type, const QString &postfix = QString()) {
 	return path;
 }
 
-[[nodiscard]] bool CheckLogPath(
-		Core::MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckLogPath(Core::MacProtectedPath::Operation operation,
+								const QString &path, const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -111,10 +109,8 @@ public:
 		}
 
 		QFile out(file->fileName());
-		if (CheckLogPath(
-				Core::MacProtectedPath::Operation::Read,
-				out.fileName(),
-				Q_FUNC_INFO)
+		if (CheckLogPath(Core::MacProtectedPath::Operation::Read,
+						 out.fileName(), Q_FUNC_INFO)
 			&& out.open(QIODevice::ReadOnly)) {
 			return QString::fromUtf8(out.readAll());
 		}
@@ -132,10 +128,8 @@ public:
 		if (!file || !file->isOpen()) {
 			return;
 		}
-		if (!CheckLogPath(
-				Core::MacProtectedPath::Operation::Write,
-				file->fileName(),
-				Q_FUNC_INFO)) {
+		if (!CheckLogPath(Core::MacProtectedPath::Operation::Write,
+						  file->fileName(), Q_FUNC_INFO)) {
 			return;
 		}
 		file->write(msg.toUtf8());
@@ -167,17 +161,13 @@ private:
 				const auto targetName = _logsFilePath(type, postfix);
 
 				auto target = QFile(targetName);
-				if (!CheckLogPath(
-						Core::MacProtectedPath::Operation::Stat,
-						targetName,
-						Q_FUNC_INFO)) {
+				if (!CheckLogPath(Core::MacProtectedPath::Operation::Stat,
+								  targetName, Q_FUNC_INFO)) {
 					return false;
 				}
 				if (target.exists()
-					&& (!CheckLogPath(
-							Core::MacProtectedPath::Operation::Unlink,
-							targetName,
-							Q_FUNC_INFO)
+					&& (!CheckLogPath(Core::MacProtectedPath::Operation::Unlink,
+									  targetName, Q_FUNC_INFO)
 						|| !target.remove())) {
 					LOG(("Could not delete '%1' file to start new logging: %2").arg(targetName, target.errorString()));
 					return false;
@@ -188,18 +178,15 @@ private:
 				const auto reopenStart = [&](const QString &name) {
 					files[type]->setFileName(name);
 					return CheckLogPath(
-							Core::MacProtectedPath::Operation::Write,
-							name,
-							Q_FUNC_INFO)
-						&& files[type]->open(mode | QIODevice::Append);
+							   Core::MacProtectedPath::Operation::Write, name,
+							   Q_FUNC_INFO)
+						   && files[type]->open(mode | QIODevice::Append);
 				};
 
 				auto source = QFile(startName);
 				if (!Core::MacProtectedPath::CheckPair(
-						Core::MacProtectedPath::Operation::Rename,
-						startName,
-						targetName,
-						Q_FUNC_INFO)
+						Core::MacProtectedPath::Operation::Rename, startName,
+						targetName, Q_FUNC_INFO)
 					|| !source.rename(targetName)) {
 					if (reopenStart(startName)) {
 						LOG(("Could not rename '%1' to '%2' to start new logging: %3").arg(startName, targetName, source.errorString()));
@@ -215,21 +202,19 @@ private:
 				LogsStartIndexChosen = -1;
 
 				QDir working(cWorkingDir()); // delete all other log_startXX.txt that we can
-				if (!CheckLogPath(
-						Core::MacProtectedPath::Operation::OpenDir,
-						working.absolutePath(),
-						Q_FUNC_INFO)) {
+				if (!CheckLogPath(Core::MacProtectedPath::Operation::OpenDir,
+								  working.absolutePath(), Q_FUNC_INFO)) {
 					return false;
 				}
 				QStringList oldlogs = working.entryList(QStringList("log_start*.txt"), QDir::Files);
 				for (QStringList::const_iterator i = oldlogs.cbegin(), e = oldlogs.cend(); i != e; ++i) {
 					QString oldlog = cWorkingDir() + *i, oldlogend = i->mid(u"log_start"_q.size());
 					if (oldlogend.size() == 1 + u".txt"_q.size() && oldlogend.at(0).isDigit() && base::StringViewMid(oldlogend, 1) == u".txt"_q) {
-						const auto removed = CheckLogPath(
-								Core::MacProtectedPath::Operation::Unlink,
-								oldlog,
-								Q_FUNC_INFO)
-							&& QFile(oldlog).remove();
+						const auto removed
+							= CheckLogPath(
+								  Core::MacProtectedPath::Operation::Unlink,
+								  oldlog, Q_FUNC_INFO)
+							  && QFile(oldlog).remove();
 						LOG(("Old start log '%1' found, deleted: %2").arg(*i, Logs::b(removed)));
 					}
 				}
@@ -242,10 +227,8 @@ private:
 				for (int32 i = 0; i < 10; ++i) {
 					QString trying = _logsFilePath(type, u"_start%1"_q.arg(i));
 					files[type]->setFileName(trying);
-					if (!CheckLogPath(
-							Core::MacProtectedPath::Operation::Stat,
-							trying,
-							Q_FUNC_INFO)) {
+					if (!CheckLogPath(Core::MacProtectedPath::Operation::Stat,
+									  trying, Q_FUNC_INFO)) {
 						return false;
 					}
 					if (!files[type]->exists()) {
@@ -253,10 +236,8 @@ private:
 						found = true;
 						break;
 					}
-					if (!CheckLogPath(
-							Core::MacProtectedPath::Operation::Stat,
-							trying,
-							Q_FUNC_INFO)) {
+					if (!CheckLogPath(Core::MacProtectedPath::Operation::Stat,
+									  trying, Q_FUNC_INFO)) {
 						return false;
 					}
 					QDateTime lastModified = QFileInfo(trying).lastModified();
@@ -272,18 +253,15 @@ private:
 			}
 		} else {
 			files[type]->setFileName(_logsFilePath(type, postfix));
-			if (!CheckLogPath(
-					Core::MacProtectedPath::Operation::Stat,
-					files[type]->fileName(),
-					Q_FUNC_INFO)) {
+			if (!CheckLogPath(Core::MacProtectedPath::Operation::Stat,
+							  files[type]->fileName(), Q_FUNC_INFO)) {
 				return false;
 			}
 			if (files[type]->exists()) {
-				if (CheckLogPath(
-							Core::MacProtectedPath::Operation::Read,
-							files[type]->fileName(),
-							Q_FUNC_INFO)
-					&& files[type]->open(QIODevice::ReadOnly | QIODevice::Text)) {
+				if (CheckLogPath(Core::MacProtectedPath::Operation::Read,
+								 files[type]->fileName(), Q_FUNC_INFO)
+					&& files[type]->open(QIODevice::ReadOnly
+										 | QIODevice::Text)) {
 					if (QString::fromUtf8(files[type]->readLine()).toInt() == dayIndex) {
 						mode |= QIODevice::Append;
 					}
@@ -291,19 +269,15 @@ private:
 				}
 			} else {
 				const auto directory = cWorkingDir() + u"DebugLogs"_q;
-				if (!CheckLogPath(
-						Core::MacProtectedPath::Operation::Mkdir,
-						directory,
-						Q_FUNC_INFO)) {
+				if (!CheckLogPath(Core::MacProtectedPath::Operation::Mkdir,
+								  directory, Q_FUNC_INFO)) {
 					return false;
 				}
 				QDir().mkdir(directory);
 			}
 		}
-		if (CheckLogPath(
-				Core::MacProtectedPath::Operation::Write,
-				files[type]->fileName(),
-				Q_FUNC_INFO)
+		if (CheckLogPath(Core::MacProtectedPath::Operation::Write,
+						 files[type]->fileName(), Q_FUNC_INFO)
 			&& files[type]->open(mode)) {
 			if (type != LogDataMain) {
 				files[type]->write(((mode & QIODevice::Append)
@@ -462,20 +436,16 @@ void start() {
 
 // WinRT build requires the working dir to stay the same for plugin loading.
 #ifndef Q_OS_WINRT
-	if (!CheckLogPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			cWorkingDir(),
-			Q_FUNC_INFO)) {
+	if (!CheckLogPath(Core::MacProtectedPath::Operation::OpenDir, cWorkingDir(),
+					  Q_FUNC_INFO)) {
 		return;
 	}
 	QDir::setCurrent(cWorkingDir());
 #endif // !Q_OS_WINRT
 
 	const auto tdata = cWorkingDir() + u"tdata"_q;
-	if (!CheckLogPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			tdata,
-			Q_FUNC_INFO)) {
+	if (!CheckLogPath(Core::MacProtectedPath::Operation::Mkdir, tdata,
+					  Q_FUNC_INFO)) {
 		return;
 	}
 	QDir().mkpath(tdata);

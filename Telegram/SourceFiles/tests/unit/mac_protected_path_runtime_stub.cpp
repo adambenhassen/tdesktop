@@ -9,9 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Core::MacProtectedPath {
 
-bool CheckPath(Operation, const QString &, const char *) {
-	return true;
-}
+bool CheckPath(Operation, const QString &, const char *) { return true; }
 
 bool CheckPair(Operation, const QString &, const QString &, const char *) {
 	return true;

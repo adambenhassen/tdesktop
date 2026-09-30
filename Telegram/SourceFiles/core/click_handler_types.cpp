@@ -152,33 +152,28 @@ void ExportToCalendar(TimeId date, const QString &messageText) {
 	description.replace('\n', u"\\n"_q);
 	const auto uid = base::RandomValue<uint64>();
 	const auto content = u"BEGIN:VCALENDAR\r\n"
-		"VERSION:2.0\r\n"
-		"PRODID:-//Telegram Desktop//EN\r\n"
-		"BEGIN:VEVENT\r\n"
-		"DTSTART:%1\r\n"
-		"DTEND:%2\r\n"
-		"DTSTAMP:%3\r\n"
-		"UID:telegram-%4-%7@telegram.org\r\n"
-		"SUMMARY:%5\r\n"
-		"DESCRIPTION:%6\r\n"
-		"END:VEVENT\r\n"
-		"END:VCALENDAR\r\n"_q
-			.arg(start.toString(format))
-			.arg(end.toString(format))
-			.arg(now.toString(format))
-			.arg(date)
-			.arg(summary)
-			.arg(description)
-		.arg(uid, 0, 16);
+						 "VERSION:2.0\r\n"
+						 "PRODID:-//Telegram Desktop//EN\r\n"
+						 "BEGIN:VEVENT\r\n"
+						 "DTSTART:%1\r\n"
+						 "DTEND:%2\r\n"
+						 "DTSTAMP:%3\r\n"
+						 "UID:telegram-%4-%7@telegram.org\r\n"
+						 "SUMMARY:%5\r\n"
+						 "DESCRIPTION:%6\r\n"
+						 "END:VEVENT\r\n"
+						 "END:VCALENDAR\r\n"_q.arg(start.toString(format))
+							 .arg(end.toString(format))
+							 .arg(now.toString(format))
+							 .arg(date)
+							 .arg(summary)
+							 .arg(description)
+							 .arg(uid, 0, 16);
 	const auto dir = cWorkingDir() + u"tdata/temp"_q;
 	if (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			dir,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::OpenDir, dir, Q_FUNC_INFO)
 		|| !Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			dir,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::Mkdir, dir, Q_FUNC_INFO)
 		|| !QDir().mkpath(dir)) {
 		return;
 	}
@@ -187,9 +182,7 @@ void ExportToCalendar(TimeId date, const QString &messageText) {
 		.arg(date);
 	auto file = QFile(path);
 	if (Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Write,
-			path,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::Write, path, Q_FUNC_INFO)
 		&& file.open(QIODevice::WriteOnly)) {
 		file.write(content.toUtf8());
 		file.close();

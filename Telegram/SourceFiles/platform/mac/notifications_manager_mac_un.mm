@@ -267,13 +267,9 @@ UNManager::Private::Private(UNManager *manager)
 , _sounds(ResolveSoundsFolder()) {
 	const auto directory = cWorkingDir() + u"tdata/temp"_q;
 	if (Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			directory,
-			Q_FUNC_INFO)
+			Core::MacProtectedPath::Operation::OpenDir, directory, Q_FUNC_INFO)
 		&& Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			directory,
-			Q_FUNC_INFO)) {
+			Core::MacProtectedPath::Operation::Mkdir, directory, Q_FUNC_INFO)) {
 		QDir().mkpath(directory);
 	}
 	if (@available(macOS 10.14, *)) {
@@ -424,39 +420,37 @@ void UNManager::Private::showNotification(
 				cWorkingDir(),
 				QString::number(base::RandomValue<uint64>(), 16));
 			if (Core::MacProtectedPath::CheckPath(
-					Core::MacProtectedPath::Operation::Write,
-					path,
-					Q_FUNC_INFO)
+					Core::MacProtectedPath::Operation::Write, path, Q_FUNC_INFO)
 				&& Window::Notifications::GenerateUserpic(peer, userpicView)
-					.save(path, "PNG")) {
+					   .save(path, "PNG")) {
 				if (!Core::MacProtectedPath::CheckPath(
-						Core::MacProtectedPath::Operation::Read,
-						path,
+						Core::MacProtectedPath::Operation::Read, path,
 						Q_FUNC_INFO)) {
 					if (Core::MacProtectedPath::CheckPath(
-							Core::MacProtectedPath::Operation::Unlink,
-							path,
+							Core::MacProtectedPath::Operation::Unlink, path,
 							Q_FUNC_INFO)) {
 						QFile(path).remove();
 					}
 				} else {
 					NSError *error = nil;
-					UNNotificationAttachment *attachment
-						= [UNNotificationAttachment
+					UNNotificationAttachment *attachment =
+						[UNNotificationAttachment
 							attachmentWithIdentifier:@"userpic"
-							URL:[NSURL fileURLWithPath:Q2NSString(path)]
-							options:nil
-							error:&error];
+												 URL:[NSURL
+														 fileURLWithPath:
+															 Q2NSString(path)]
+											 options:nil
+											   error:&error];
 					if (attachment) {
-						[content setAttachments:@[attachment]];
+						[content setAttachments:@[ attachment ]];
 					} else {
 						if (error) {
-							LOG(("App Error: Notification attachment error: %1"
-								).arg(NS2QString(error.localizedDescription)));
+							LOG(("App Error: Notification attachment error: %1")
+									.arg(NS2QString(
+										error.localizedDescription)));
 						}
 						if (Core::MacProtectedPath::CheckPath(
-								Core::MacProtectedPath::Operation::Unlink,
-								path,
+								Core::MacProtectedPath::Operation::Unlink, path,
 								Q_FUNC_INFO)) {
 							QFile(path).remove();
 						}

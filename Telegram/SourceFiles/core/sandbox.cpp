@@ -82,18 +82,13 @@ int Sandbox::start() {
 #ifdef Q_OS_MAC
 	if (MacProtectedPath::IntegrationTestActive()) {
 		const auto socketDirectory = QFileInfo(_localServerName).absolutePath();
-		if (!MacProtectedPath::CheckPath(
-				MacProtectedPath::Operation::Open,
-				_localServerName,
-				Q_FUNC_INFO)
+		if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+										 _localServerName, Q_FUNC_INFO)
 			|| !MacProtectedPath::CheckPath(
-				MacProtectedPath::Operation::OpenDir,
-				socketDirectory,
+				MacProtectedPath::Operation::OpenDir, socketDirectory,
 				Q_FUNC_INFO)
-			|| !MacProtectedPath::CheckPath(
-				MacProtectedPath::Operation::Mkdir,
-				socketDirectory,
-				Q_FUNC_INFO)
+			|| !MacProtectedPath::CheckPath(MacProtectedPath::Operation::Mkdir,
+											socketDirectory, Q_FUNC_INFO)
 			|| !QDir().mkpath(socketDirectory)) {
 			LOG(("Could not prepare single-instance IPC path."));
 			return 1;
@@ -120,27 +115,22 @@ int Sandbox::start() {
 #ifdef Q_OS_MAC
 		if (MacProtectedPath::IntegrationTestActive()) {
 			const auto lockPath = MacProtectedPath::IpcDirectory()
-				+ u"/Telegramd-lock-"_q
-				+ QString::fromLatin1(h.left(16));
-			if (!MacProtectedPath::CheckPath(
-					MacProtectedPath::Operation::Stat,
-					lockPath,
-					Q_FUNC_INFO)
+								  + u"/Telegramd-lock-"_q
+								  + QString::fromLatin1(h.left(16));
+			if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Stat,
+											 lockPath, Q_FUNC_INFO)
 				|| !MacProtectedPath::CheckPath(
-					MacProtectedPath::Operation::Unlink,
-					lockPath,
-					Q_FUNC_INFO)
+					MacProtectedPath::Operation::Unlink, lockPath, Q_FUNC_INFO)
 				|| !MacProtectedPath::CheckPath(
-					MacProtectedPath::Operation::Lock,
-					lockPath,
-					Q_FUNC_INFO)) {
+					MacProtectedPath::Operation::Lock, lockPath, Q_FUNC_INFO)) {
 				return 1;
 			}
 			_lockFile = std::make_unique<QLockFile>(lockPath);
 		} else {
-			_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h + '-' + cGUIDStr());
+			_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h
+													+ '-' + cGUIDStr());
 		}
-#else // Q_OS_MAC
+#else  // Q_OS_MAC
 		_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h + '-' + cGUIDStr());
 #endif // !Q_OS_MAC
 		_lockFile->setStaleLockTime(0);
@@ -223,10 +213,8 @@ int Sandbox::start() {
 
 	LOG(("Connecting local socket to %1...").arg(_localServerName));
 #ifdef Q_OS_MAC
-	if (!MacProtectedPath::CheckPath(
-			MacProtectedPath::Operation::Open,
-			_localServerName,
-			Q_FUNC_INFO)) {
+	if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+									 _localServerName, Q_FUNC_INFO)) {
 		return 1;
 	}
 #endif // Q_OS_MAC
@@ -243,10 +231,8 @@ int Sandbox::start() {
 int Sandbox::stopRunningInstance() {
 	LOG(("Cleanup: connecting to %1...").arg(_localServerName));
 #ifdef Q_OS_MAC
-	if (!MacProtectedPath::CheckPath(
-			MacProtectedPath::Operation::Open,
-			_localServerName,
-			Q_FUNC_INFO)) {
+	if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+									 _localServerName, Q_FUNC_INFO)) {
 		return 1;
 	}
 #endif // Q_OS_MAC
@@ -482,22 +468,16 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 
 	// Local server does not work in WinRT build.
 #ifndef Q_OS_WINRT
-	#ifdef Q_OS_MAC
-	if (!MacProtectedPath::CheckPath(
-				MacProtectedPath::Operation::Stat,
-				_localServerName,
-				Q_FUNC_INFO)
-		|| !MacProtectedPath::CheckPath(
-				MacProtectedPath::Operation::Unlink,
-				_localServerName,
-				Q_FUNC_INFO)
-		|| !MacProtectedPath::CheckPath(
-				MacProtectedPath::Operation::Open,
-				_localServerName,
-				Q_FUNC_INFO)) {
+#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Stat,
+									 _localServerName, Q_FUNC_INFO)
+		|| !MacProtectedPath::CheckPath(MacProtectedPath::Operation::Unlink,
+										_localServerName, Q_FUNC_INFO)
+		|| !MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+										_localServerName, Q_FUNC_INFO)) {
 		return Quit();
 	}
-	#endif // Q_OS_MAC
+#endif // Q_OS_MAC
 	psCheckLocalSocket(_localServerName);
 
 	if (!_localServer.listen(_localServerName)) {

@@ -13,6 +13,7 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 
 APP="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
+APP_BUNDLE="$(cd "$(dirname "$APP")/../.." && pwd -P)"
 MODE=non-store
 TEST_TMP_BASE="${TDESKTOP_MAC_PROFILE_TEST_TMP_BASE:-/tmp}"
 if [[ $# -eq 2 ]]; then
@@ -45,7 +46,7 @@ PROFILE="$TEST_HOME/Library/Application Support/Telegramd"
 HOSTILE_HOME="$TEST_HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram"
 REFUSAL_LOG="$TEST_HOME/refusal.log"
 START_LOG="$TEST_HOME/start.log"
-LOCK_SUFFIX="$(printf '%s' "$APP" | md5 -q | cut -c1-16)"
+LOCK_SUFFIX="$(printf '%s' "$APP_BUNDLE" | md5 -q | cut -c1-16)"
 SOCKET_SUFFIX="$(printf '%s' "$PROFILE" | md5 -q | cut -c1-16)"
 SOCKET_PATH="$IPC_DIRECTORY/Telegramd-$SOCKET_SUFFIX"
 FIRST_PID=""

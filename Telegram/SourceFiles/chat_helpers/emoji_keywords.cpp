@@ -33,10 +33,9 @@ constexpr auto kKeepNotUsedInputLanguagesCount = 4;
 using namespace Ui::Emoji;
 using Core::MacProtectedPath::Operation;
 
-[[nodiscard]] bool CheckEmojiKeywordPath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckEmojiKeywordPath(Operation operation,
+										 const QString &path,
+										 const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -109,10 +108,7 @@ void CreateCacheFilePath() {
 
 [[nodiscard]] LangPackData ReadLocalCache(const QString &id) {
 	auto file = QFile(CacheFilePath(id));
-	if (!CheckEmojiKeywordPath(
-			Operation::Read,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (!CheckEmojiKeywordPath(Operation::Read, file.fileName(), Q_FUNC_INFO)
 		|| !file.open(QIODevice::ReadOnly)) {
 		return {};
 	}
@@ -164,10 +160,7 @@ void WriteLocalCache(const QString &id, const LangPackData &data) {
 	}
 	CreateCacheFilePath();
 	auto file = QFile(CacheFilePath(id));
-	if (!CheckEmojiKeywordPath(
-			Operation::Write,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (!CheckEmojiKeywordPath(Operation::Write, file.fileName(), Q_FUNC_INFO)
 		|| !file.open(QIODevice::WriteOnly)) {
 		return;
 	}

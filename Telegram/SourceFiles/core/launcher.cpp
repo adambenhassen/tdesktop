@@ -28,10 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Core {
 namespace {
 
-[[nodiscard]] bool CheckProfilePath(
-		MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckProfilePath(MacProtectedPath::Operation operation,
+									const QString &path, const char *callsite) {
 	return MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -117,10 +115,8 @@ QString DebugModeSettingPath() {
 
 void WriteDebugModeSetting() {
 	auto file = QFile(DebugModeSettingPath());
-	if (CheckProfilePath(
-			MacProtectedPath::Operation::Write,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (CheckProfilePath(MacProtectedPath::Operation::Write, file.fileName(),
+						 Q_FUNC_INFO)
 		&& file.open(QIODevice::WriteOnly)) {
 		file.write(Logs::DebugEnabled() ? "1" : "0");
 	}
@@ -130,15 +126,11 @@ void ComputeDebugMode() {
 	Logs::SetDebugEnabled(cAlphaVersion() != 0);
 	const auto debugModeSettingPath = DebugModeSettingPath();
 	auto file = QFile(debugModeSettingPath);
-	if (CheckProfilePath(
-			MacProtectedPath::Operation::Stat,
-			debugModeSettingPath,
-			Q_FUNC_INFO)
+	if (CheckProfilePath(MacProtectedPath::Operation::Stat,
+						 debugModeSettingPath, Q_FUNC_INFO)
 		&& file.exists()
-		&& CheckProfilePath(
-			MacProtectedPath::Operation::Read,
-			debugModeSettingPath,
-			Q_FUNC_INFO)
+		&& CheckProfilePath(MacProtectedPath::Operation::Read,
+							debugModeSettingPath, Q_FUNC_INFO)
 		&& file.open(QIODevice::ReadOnly)) {
 		Logs::SetDebugEnabled(file.read(1) != "0");
 #if defined _DEBUG && !defined Q_OS_MAC
@@ -164,18 +156,14 @@ void ComputeExternalUpdater() {
 	locations << QDir::cleanPath(cExeDir());
 	for (const auto &location : locations) {
 		const auto dir = location + u"/externalupdater.d"_q;
-		if (!CheckProfilePath(
-				MacProtectedPath::Operation::OpenDir,
-				dir,
-				Q_FUNC_INFO)) {
+		if (!CheckProfilePath(MacProtectedPath::Operation::OpenDir, dir,
+							  Q_FUNC_INFO)) {
 			continue;
 		}
 		for (const auto &info : QDir(dir).entryInfoList(QDir::Files)) {
 			QFile file(info.absoluteFilePath());
-			if (CheckProfilePath(
-						MacProtectedPath::Operation::Read,
-						file.fileName(),
-						Q_FUNC_INFO)
+			if (CheckProfilePath(MacProtectedPath::Operation::Read,
+								 file.fileName(), Q_FUNC_INFO)
 				&& file.open(QIODevice::ReadOnly)) {
 				QTextStream fileStream(&file);
 				while (!fileStream.atEnd()) {
@@ -196,10 +184,8 @@ QString InstallBetaVersionsSettingPath() {
 
 void WriteInstallBetaVersionsSetting() {
 	QFile f(InstallBetaVersionsSettingPath());
-	if (CheckProfilePath(
-			MacProtectedPath::Operation::Write,
-			f.fileName(),
-			Q_FUNC_INFO)
+	if (CheckProfilePath(MacProtectedPath::Operation::Write, f.fileName(),
+						 Q_FUNC_INFO)
 		&& f.open(QIODevice::WriteOnly)) {
 		f.write(cInstallBetaVersion() ? "1" : "0");
 	}
@@ -209,16 +195,12 @@ void ComputeInstallBetaVersions() {
 	const auto installBetaSettingPath = InstallBetaVersionsSettingPath();
 	if (cAlphaVersion()) {
 		cSetInstallBetaVersion(false);
-	} else if (CheckProfilePath(
-			MacProtectedPath::Operation::Stat,
-			installBetaSettingPath,
-			Q_FUNC_INFO)
-		&& QFile::exists(installBetaSettingPath)) {
+	} else if (CheckProfilePath(MacProtectedPath::Operation::Stat,
+								installBetaSettingPath, Q_FUNC_INFO)
+			   && QFile::exists(installBetaSettingPath)) {
 		QFile f(installBetaSettingPath);
-		if (CheckProfilePath(
-					MacProtectedPath::Operation::Read,
-					installBetaSettingPath,
-					Q_FUNC_INFO)
+		if (CheckProfilePath(MacProtectedPath::Operation::Read,
+							 installBetaSettingPath, Q_FUNC_INFO)
 			&& f.open(QIODevice::ReadOnly)) {
 			cSetInstallBetaVersion(f.read(1) != "0");
 		}
@@ -230,10 +212,8 @@ void ComputeInstallBetaVersions() {
 void ComputeInstallationTag() {
 	InstallationTag = 0;
 	auto file = QFile(cWorkingDir() + u"tdata/usertag"_q);
-	if (CheckProfilePath(
-			MacProtectedPath::Operation::Read,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (CheckProfilePath(MacProtectedPath::Operation::Read, file.fileName(),
+						 Q_FUNC_INFO)
 		&& file.open(QIODevice::ReadOnly)) {
 		const auto result = file.read(
 			reinterpret_cast<char*>(&InstallationTag),
@@ -250,10 +230,8 @@ void ComputeInstallationTag() {
 			InstallationTag = distribution(generator);
 		} while (!InstallationTag);
 
-		if (CheckProfilePath(
-				MacProtectedPath::Operation::Write,
-				file.fileName(),
-				Q_FUNC_INFO)
+		if (CheckProfilePath(MacProtectedPath::Operation::Write,
+							 file.fileName(), Q_FUNC_INFO)
 			&& file.open(QIODevice::WriteOnly)) {
 			file.write(
 				reinterpret_cast<char*>(&InstallationTag),
@@ -445,12 +423,10 @@ int Launcher::exec() {
 #endif // Q_OS_MAC
 
 	// Must be started before Platform is started.
-	const auto optionsPath = cWorkingDir()
-		+ u"tdata/experimental_options.json"_q;
-	if (!CheckProfilePath(
-			MacProtectedPath::Operation::Open,
-			optionsPath,
-			Q_FUNC_INFO)) {
+	const auto optionsPath
+		= cWorkingDir() + u"tdata/experimental_options.json"_q;
+	if (!CheckProfilePath(MacProtectedPath::Operation::Open, optionsPath,
+						  Q_FUNC_INFO)) {
 		return 1;
 	}
 	Logs::start();
@@ -487,10 +463,8 @@ int Launcher::exec() {
 		DEBUG_LOG(("Sandbox Info: executing updater to install update."));
 		if (!launchUpdater(UpdaterLaunch::PerformUpdate)) {
 			const auto temporary = cWorkingDir() + u"tupdates/temp"_q;
-			if (CheckProfilePath(
-					MacProtectedPath::Operation::RecursiveDelete,
-					temporary,
-					Q_FUNC_INFO)) {
+			if (CheckProfilePath(MacProtectedPath::Operation::RecursiveDelete,
+								 temporary, Q_FUNC_INFO)) {
 				base::Platform::DeleteDirectory(temporary);
 			}
 		}

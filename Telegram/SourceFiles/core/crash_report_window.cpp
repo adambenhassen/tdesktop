@@ -33,10 +33,8 @@ namespace {
 
 constexpr auto kDefaultProxyPort = 80;
 
-[[nodiscard]] bool CheckCrashPath(
-		Core::MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckCrashPath(Core::MacProtectedPath::Operation operation,
+								  const QString &path, const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -347,10 +345,8 @@ LastCrashedWindow::LastCrashedWindow(
 				possibleDump += u".dmp"_q;
 			}
 			QFileInfo possibleInfo(possibleDump);
-			if (CheckCrashPath(
-					Core::MacProtectedPath::Operation::Stat,
-					possibleDump,
-					Q_FUNC_INFO)
+			if (CheckCrashPath(Core::MacProtectedPath::Operation::Stat,
+							   possibleDump, Q_FUNC_INFO)
 				&& possibleInfo.exists()) {
 				_minidumpName = possibleInfo.fileName();
 				_minidumpFull = possibleInfo.absoluteFilePath();
@@ -360,31 +356,27 @@ LastCrashedWindow::LastCrashedWindow(
 		if (_minidumpFull.isEmpty()) {
 			QString maxDump, maxDumpFull;
 			const auto workingPath = cWorkingDir() + u"tdata/working"_q;
-			const auto workingAllowed = CheckCrashPath(
-					Core::MacProtectedPath::Operation::Stat,
-					workingPath,
-					Q_FUNC_INFO);
+			const auto workingAllowed
+				= CheckCrashPath(Core::MacProtectedPath::Operation::Stat,
+								 workingPath, Q_FUNC_INFO);
 			if (!workingAllowed) {
 				_sendingState = SendingNoReport;
 			}
 			QDateTime maxDumpModified;
-			const auto workingModified = workingAllowed
-				? QFileInfo(workingPath).lastModified()
-				: QDateTime();
-			const auto list = CheckCrashPath(
-				Core::MacProtectedPath::Operation::OpenDir,
-				dumpspath,
-				Q_FUNC_INFO)
-				? QDir(dumpspath).entryInfoList()
-				: QFileInfoList();
+			const auto workingModified
+				= workingAllowed ? QFileInfo(workingPath).lastModified()
+								 : QDateTime();
+			const auto list
+				= CheckCrashPath(Core::MacProtectedPath::Operation::OpenDir,
+								 dumpspath, Q_FUNC_INFO)
+					  ? QDir(dumpspath).entryInfoList()
+					  : QFileInfoList();
 			for (int32 i = 0, l = list.size(); i < l; ++i) {
 				QString name = list.at(i).fileName();
 				const auto path = list.at(i).absoluteFilePath();
 				if (name.endsWith(qstr(".dmp"))
-					&& CheckCrashPath(
-						Core::MacProtectedPath::Operation::Stat,
-						path,
-						Q_FUNC_INFO)) {
+					&& CheckCrashPath(Core::MacProtectedPath::Operation::Stat,
+									  path, Q_FUNC_INFO)) {
 					QDateTime modified = list.at(i).lastModified();
 					if (maxDump.isEmpty() || qAbs(workingModified.secsTo(modified)) < qAbs(workingModified.secsTo(maxDumpModified))) {
 						maxDump = name;
@@ -631,14 +623,13 @@ void LastCrashedWindow::sendReport() {
 
 QString LastCrashedWindow::minidumpFileName() {
 	QFileInfo dmpFile(_minidumpFull);
-	if (CheckCrashPath(
-			Core::MacProtectedPath::Operation::Stat,
-			dmpFile.filePath(),
-			Q_FUNC_INFO)
-		&& dmpFile.exists()
-		&& dmpFile.size() > 0
-		&& dmpFile.size() < 20 * 1024 * 1024 &&
-		QRegularExpression(u"^[a-zA-Z0-9\\-]{1,64}\\.dmp$"_q).match(dmpFile.fileName()).hasMatch()) {
+	if (CheckCrashPath(Core::MacProtectedPath::Operation::Stat,
+					   dmpFile.filePath(), Q_FUNC_INFO)
+		&& dmpFile.exists() && dmpFile.size() > 0
+		&& dmpFile.size() < 20 * 1024 * 1024
+		&& QRegularExpression(u"^[a-zA-Z0-9\\-]{1,64}\\.dmp$"_q)
+			   .match(dmpFile.fileName())
+			   .hasMatch()) {
 		return dmpFile.fileName();
 	}
 	return QString();
@@ -686,10 +677,8 @@ void LastCrashedWindow::checkingFinished() {
 	QString dmpName = minidumpFileName();
 	if (!dmpName.isEmpty()) {
 		QFile file(_minidumpFull);
-		if (CheckCrashPath(
-				Core::MacProtectedPath::Operation::Read,
-				file.fileName(),
-				Q_FUNC_INFO)
+		if (CheckCrashPath(Core::MacProtectedPath::Operation::Read,
+						   file.fileName(), Q_FUNC_INFO)
 			&& file.open(QIODevice::ReadOnly)) {
 			QByteArray minidump = file.readAll();
 			file.close();

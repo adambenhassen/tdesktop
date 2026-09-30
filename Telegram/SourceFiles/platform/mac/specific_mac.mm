@@ -126,9 +126,8 @@ QString SingleInstanceLocalServerName(const QString &hash) {
 		return objc_documentsPath() + hash.left(4);
 #endif // OS_MAC_STORE
 	}
-	return Core::MacProtectedPath::IpcDirectory()
-		+ u"/Telegramd-"_q
-		+ hash.left(16);
+	return Core::MacProtectedPath::IpcDirectory() + u"/Telegramd-"_q
+		   + hash.left(16);
 }
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)

@@ -79,9 +79,8 @@ void AddDirectoryHierarchy(FakeFileSystem &fs, const QByteArray &path) {
 		}
 		current.append('/');
 		current.append(part);
-		fs.entries.emplace(
-			current,
-			LstatResult{ .type = FileType::Directory, .error = FileError::None });
+		fs.entries.emplace(current, LstatResult{.type = FileType::Directory,
+												.error = FileError::None});
 	}
 }
 
@@ -89,10 +88,10 @@ TEST_CASE(TelegramdProfileRootUsesTrustedHomeSource) {
 	const auto homes = HomeRoots{
 		.accountDatabase = "/Users/alice",
 		.environment = "/Users/alice/Library/Group Containers/group.telegramd",
-		.foundation = "/Users/alice/Library/Containers/com.adambenhassen.telegramd/Data" };
-	CHECK_EQ(
-		TelegramdProfileRoot(homes, false),
-		QByteArray("/Users/alice/Library/Application Support/Telegramd"));
+		.foundation
+		= "/Users/alice/Library/Containers/com.adambenhassen.telegramd/Data"};
+	CHECK_EQ(TelegramdProfileRoot(homes, false),
+			 QByteArray("/Users/alice/Library/Application Support/Telegramd"));
 	CHECK_EQ(
 		TelegramdProfileRoot(homes, true),
 		QByteArray(
@@ -326,12 +325,10 @@ TEST_CASE(BuildRejectsProtectedHomeCandidateWithoutProbing) {
 	const auto protectedPrefix = protectedRoot + QByteArray("/");
 	auto refusal = RefusalRecord();
 	const auto policy = MacProtectedPathPolicy::Build(
-		HomeRoots{
-			.accountDatabase = "/Users/alice",
-			.environment = protectedRoot + QByteArray("/tdata"),
-			.foundation = "/Users/alice" },
-		fs.operations(),
-		&refusal);
+		HomeRoots{.accountDatabase = "/Users/alice",
+				  .environment = protectedRoot + QByteArray("/tdata"),
+				  .foundation = "/Users/alice"},
+		fs.operations(), &refusal);
 	CHECK(!policy.valid());
 	CHECK(refusal.protectedClass == ProtectedClass::GroupContainer);
 	for (const auto &call : fs.lstatCalls) {
@@ -529,51 +526,40 @@ TEST_CASE(SymlinkTargetsAreSplicedPhysically) {
 TEST_CASE(FinalSymlinkOperationsKeepNoFollowSemantics) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);
-	fs.entries.emplace(
-		"/safe",
-		LstatResult{ .type = FileType::Directory, .error = FileError::None });
-	fs.entries.emplace(
-		"/safe/link",
-		LstatResult{ .type = FileType::Symlink, .error = FileError::None });
+	fs.entries.emplace("/safe", LstatResult{.type = FileType::Directory,
+											.error = FileError::None});
+	fs.entries.emplace("/safe/link", LstatResult{.type = FileType::Symlink,
+												 .error = FileError::None});
 	fs.links.emplace(
 		"/safe/link",
 		ReadlinkResult{
-			.target = "/Users/alice/Library/Application Support/Telegram Desktop",
-			.error = FileError::None });
+			.target
+			= "/Users/alice/Library/Application Support/Telegram Desktop",
+			.error = FileError::None});
 
-	for (const auto operation : {
-			Operation::Lstat,
-			Operation::Unlink,
-			Operation::Rename }) {
+	for (const auto operation :
+		 {Operation::Lstat, Operation::Unlink, Operation::Rename}) {
 		ClearCalls(fs);
-		const auto result = policy.Resolve(
-			operation,
-			"/safe/link",
-			{},
-			u"unit.final-symlink"_q);
+		const auto result = policy.Resolve(operation, "/safe/link", {},
+										   u"unit.final-symlink"_q);
 		CHECK(result.allowed());
 		CHECK_EQ(result.resolvedPath, QByteArray("/safe/link"));
 		CHECK(fs.readlinkCalls.empty());
 	}
 	ClearCalls(fs);
-	const auto recursiveDelete = policy.Resolve(
-		Operation::RecursiveDelete,
-		"/safe/link",
-		{},
-		u"unit.recursive-delete-root-symlink"_q);
+	const auto recursiveDelete
+		= policy.Resolve(Operation::RecursiveDelete, "/safe/link", {},
+						 u"unit.recursive-delete-root-symlink"_q);
 	CHECK(!recursiveDelete.allowed());
 	CHECK(recursiveDelete.refusal.protectedClass
-		== ProtectedClass::ApplicationSupport);
-	CHECK(fs.readlinkCalls == std::vector<QByteArray>{ "/safe/link" });
+		  == ProtectedClass::ApplicationSupport);
+	CHECK(fs.readlinkCalls == std::vector<QByteArray>{"/safe/link"});
 
 	ClearCalls(fs);
-	const auto followed = policy.Resolve(
-		Operation::Open,
-		"/safe/link",
-		{},
-		u"unit.followed-symlink"_q);
+	const auto followed = policy.Resolve(Operation::Open, "/safe/link", {},
+										 u"unit.followed-symlink"_q);
 	CHECK(!followed.allowed());
-	CHECK(fs.readlinkCalls == std::vector<QByteArray>{ "/safe/link" });
+	CHECK(fs.readlinkCalls == std::vector<QByteArray>{"/safe/link"});
 }
 
 TEST_CASE(RecursiveDeleteLeavesProtectedChildSymlinkTarget) {
@@ -584,8 +570,8 @@ TEST_CASE(RecursiveDeleteLeavesProtectedChildSymlinkTarget) {
 	}
 	const auto homePath = home.path();
 	const auto profilePath = homePath + u"/profile"_q;
-	const auto protectedPath = homePath
-		+ u"/Library/Application Support/Telegram Desktop"_q;
+	const auto protectedPath
+		= homePath + u"/Library/Application Support/Telegram Desktop"_q;
 	const auto markerPath = protectedPath + u"/keep.txt"_q;
 	CHECK(QDir().mkpath(profilePath));
 	CHECK(QDir().mkpath(protectedPath));
@@ -601,16 +587,16 @@ TEST_CASE(RecursiveDeleteLeavesProtectedChildSymlinkTarget) {
 	AddDirectoryHierarchy(fs, QFile::encodeName(homePath));
 	AddDirectoryHierarchy(fs, QFile::encodeName(profilePath));
 	const auto policy = MacProtectedPathPolicy::Build(
-		HomeRoots{
-			.accountDatabase = QFile::encodeName(homePath),
-			.foundation = QFile::encodeName(homePath) },
+		HomeRoots{.accountDatabase = QFile::encodeName(homePath),
+				  .foundation = QFile::encodeName(homePath)},
 		fs.operations());
 	CHECK(policy.valid());
-	CHECK(policy.Resolve(
-		Operation::RecursiveDelete,
-		QFile::encodeName(profilePath),
-		QFile::encodeName(homePath),
-		u"unit.recursive-delete-child-symlink"_q).allowed());
+	CHECK(policy
+			  .Resolve(Operation::RecursiveDelete,
+					   QFile::encodeName(profilePath),
+					   QFile::encodeName(homePath),
+					   u"unit.recursive-delete-child-symlink"_q)
+			  .allowed());
 	CHECK(QDir(profilePath).removeRecursively());
 	CHECK(QFileInfo::exists(markerPath));
 }
@@ -936,17 +922,14 @@ TEST_CASE(DestructiveOperationsRefuseProtectedAncestors) {
 			.target = "/Users/alice/Library/Group Containers",
 			.error = FileError::None });
 	ClearCalls(fs);
-	CHECK(policy.Resolve(
-		Operation::Rename,
-		"/safe/link",
-		{},
-		u"unit.ancestor.alias"_q).allowed());
+	CHECK(policy
+			  .Resolve(Operation::Rename, "/safe/link", {},
+					   u"unit.ancestor.alias"_q)
+			  .allowed());
 	CHECK(fs.readlinkCalls.empty());
-	const auto aliasChild = policy.Resolve(
-		Operation::Rename,
-		"/safe/link/entry",
-		{},
-		u"unit.ancestor.alias-parent"_q);
+	const auto aliasChild
+		= policy.Resolve(Operation::Rename, "/safe/link/entry", {},
+						 u"unit.ancestor.alias-parent"_q);
 	CHECK(!aliasChild.allowed());
 	CHECK(aliasChild.refusal.protectedClass == ProtectedClass::GroupContainer);
 	for (const auto &call : fs.lstatCalls) {

@@ -223,12 +223,9 @@ struct WalkResult {
 }
 
 [[nodiscard]] bool FollowsFinalComponent(Operation operation) {
-	return operation != Operation::Lstat
-		&& operation != Operation::Mkdir
-		&& operation != Operation::Link
-		&& operation != Operation::Rename
-		&& operation != Operation::Unlink
-		&& operation != Operation::Rmdir;
+	return operation != Operation::Lstat && operation != Operation::Mkdir
+		   && operation != Operation::Link && operation != Operation::Rename
+		   && operation != Operation::Unlink && operation != Operation::Rmdir;
 }
 
 [[nodiscard]] MacProtectedPathPolicy::Components ComponentsFromAscii(
@@ -274,14 +271,10 @@ struct WalkResult {
 }
 
 template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
-[[nodiscard]] WalkResult Walk(
-		const ParsedPath &path,
-		const FileSystem &filesystem,
-		Classify &&classify,
-		ClassifySymlinkTarget &&classifySymlinkTarget,
-		IsHome &&isHome,
-		bool allowMissingSuffix,
-		bool followFinalComponent) {
+[[nodiscard]] WalkResult
+Walk(const ParsedPath &path, const FileSystem &filesystem, Classify &&classify,
+	 ClassifySymlinkTarget &&classifySymlinkTarget, IsHome &&isHome,
+	 bool allowMissingSuffix, bool followFinalComponent) {
 	if (!path.absolute || !filesystem.lstat || !filesystem.readlink) {
 		return {};
 	}
@@ -362,20 +355,19 @@ template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
 			if (!ParsePath(readlink.target, &target)) {
 				return {};
 			}
-			auto targetComponents = target.absolute
-				? std::vector<QByteArray>()
-				: std::vector<QByteArray>(resolved.begin(), resolved.end() - 1);
-			targetComponents.insert(
-				targetComponents.end(),
-				target.components.begin(),
-				target.components.end());
+			auto targetComponents
+				= target.absolute ? std::vector<QByteArray>()
+								  : std::vector<QByteArray>(resolved.begin(),
+															resolved.end() - 1);
+			targetComponents.insert(targetComponents.end(),
+									target.components.begin(),
+									target.components.end());
 			const auto targetClass = classifySymlinkTarget(
 				FoldedComponents(CanonicalRawComponents(targetComponents)));
 			if (targetClass != ProtectedClass::None) {
-				return {
-					.status = WalkResult::Status::Refused,
-					.components = std::move(resolved),
-					.protectedClass = targetClass };
+				return {.status = WalkResult::Status::Refused,
+						.components = std::move(resolved),
+						.protectedClass = targetClass};
 			}
 			resolved.pop_back();
 			if (target.absolute) {
@@ -472,12 +464,8 @@ bool PairResolution::allowed() const {
 	return first.allowed() && second.allowed();
 }
 
-QByteArray TelegramdProfileRoot(
-		const HomeRoots &homes,
-		bool appSandboxed) {
-	auto result = appSandboxed
-		? homes.foundation
-		: homes.accountDatabase;
+QByteArray TelegramdProfileRoot(const HomeRoots &homes, bool appSandboxed) {
+	auto result = appSandboxed ? homes.foundation : homes.accountDatabase;
 	if (result.isEmpty()) {
 		return {};
 	}
@@ -491,16 +479,15 @@ QByteArray TelegramdProfileRoot(
 	return result;
 }
 
-MacProtectedPathPolicy MacProtectedPathPolicy::Build(
-		const HomeRoots &homes,
-		const FileSystem &filesystem,
-		RefusalRecord *failure) {
+MacProtectedPathPolicy
+MacProtectedPathPolicy::Build(const HomeRoots &homes,
+							  const FileSystem &filesystem,
+							  RefusalRecord *failure) {
 	auto result = MacProtectedPathPolicy();
 	if (failure) {
-		*failure = {
-			.operation = Operation::Open,
-			.protectedClass = ProtectedClass::Invalid,
-			.callsite = u"profile.home"_q };
+		*failure = {.operation = Operation::Open,
+					.protectedClass = ProtectedClass::Invalid,
+					.callsite = u"profile.home"_q};
 	}
 	if (homes.accountDatabase.isEmpty()
 		|| homes.foundation.isEmpty()) {
@@ -599,13 +586,10 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 			return result;
 		}
 		const auto resolved = Walk(
-			ParsedPath{ .absolute = true, .components = candidate.traversal },
-			filesystem,
-			classify,
+			ParsedPath{.absolute = true, .components = candidate.traversal},
+			filesystem, classify,
 			[](const Components &) { return ProtectedClass::None; },
-			[](const Components &) { return false; },
-			false,
-			true);
+			[](const Components &) { return false; }, false, true);
 		if (resolved.status != WalkResult::Status::Allowed
 			|| resolved.components.empty()
 			|| resolved.finalType != FileType::Directory) {
@@ -833,9 +817,7 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 	}
 
 	const auto walked = Walk(
-		parsed,
-		_filesystem,
-		classify,
+		parsed, _filesystem, classify,
 		[&](const Components &components) {
 			if (!IsDestructive(operation)) {
 				return ProtectedClass::None;
@@ -848,11 +830,8 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 			}
 			return ProtectedClass::None;
 		},
-		[&](const Components &components) {
-			return IsHomeRoot(components);
-		},
-		true,
-		FollowsFinalComponent(operation));
+		[&](const Components &components) { return IsHomeRoot(components); },
+		true, FollowsFinalComponent(operation));
 	if (walked.status == WalkResult::Status::Refused) {
 		return Refused(
 			operation,

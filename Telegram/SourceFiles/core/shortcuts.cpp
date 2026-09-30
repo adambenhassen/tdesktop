@@ -28,10 +28,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Shortcuts {
 namespace {
 
-[[nodiscard]] bool CheckShortcutPath(
-		Core::MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool
+CheckShortcutPath(Core::MacProtectedPath::Operation operation,
+				  const QString &path, const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -238,10 +237,8 @@ QString CustomFilePath() {
 
 bool DefaultFileIsValid() {
 	QFile file(DefaultFilePath());
-	if (!CheckShortcutPath(
-			Core::MacProtectedPath::Operation::Read,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (!CheckShortcutPath(Core::MacProtectedPath::Operation::Read,
+						   file.fileName(), Q_FUNC_INFO)
 		|| !file.open(QIODevice::ReadOnly)) {
 		return false;
 	}
@@ -273,10 +270,8 @@ void WriteDefaultCustomFile() {
 	auto input = QFile(":/misc/default_shortcuts-custom.json");
 	auto output = QFile(path);
 	if (input.open(QIODevice::ReadOnly)
-		&& CheckShortcutPath(
-			Core::MacProtectedPath::Operation::Write,
-			path,
-			Q_FUNC_INFO)
+		&& CheckShortcutPath(Core::MacProtectedPath::Operation::Write, path,
+							 Q_FUNC_INFO)
 		&& output.open(QIODevice::WriteOnly)) {
 #ifdef Q_OS_MAC
 		auto text = qs(input.readAll());
@@ -415,10 +410,8 @@ void Manager::pruneListened() {
 bool Manager::readCustomFile() {
 	// read custom shortcuts from file if it exists or write an empty custom shortcuts file
 	QFile file(CustomFilePath());
-	if (!CheckShortcutPath(
-			Core::MacProtectedPath::Operation::Stat,
-			file.fileName(),
-			Q_FUNC_INFO)) {
+	if (!CheckShortcutPath(Core::MacProtectedPath::Operation::Stat,
+						   file.fileName(), Q_FUNC_INFO)) {
 		return true;
 	}
 	if (!file.exists()) {
@@ -430,10 +423,8 @@ bool Manager::readCustomFile() {
 			).arg(file.fileName()));
 		}
 	});
-	if (!CheckShortcutPath(
-			Core::MacProtectedPath::Operation::Read,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (!CheckShortcutPath(Core::MacProtectedPath::Operation::Read,
+						   file.fileName(), Q_FUNC_INFO)
 		|| !file.open(QIODevice::ReadOnly)) {
 		_errors.push_back(u"Could not read the file!"_q);
 		return true;
@@ -567,10 +558,8 @@ void Manager::fillDefaults() {
 
 void Manager::writeDefaultFile() {
 	auto file = QFile(DefaultFilePath());
-	if (!CheckShortcutPath(
-			Core::MacProtectedPath::Operation::Write,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (!CheckShortcutPath(Core::MacProtectedPath::Operation::Write,
+						   file.fileName(), Q_FUNC_INFO)
 		|| !file.open(QIODevice::WriteOnly)) {
 		return;
 	}
@@ -677,10 +666,8 @@ void Manager::writeCustomFile() {
 	}
 
 	auto file = QFile(CustomFilePath());
-	if (!CheckShortcutPath(
-			Core::MacProtectedPath::Operation::Write,
-			file.fileName(),
-			Q_FUNC_INFO)
+	if (!CheckShortcutPath(Core::MacProtectedPath::Operation::Write,
+						   file.fileName(), Q_FUNC_INFO)
 		|| !file.open(QIODevice::WriteOnly)) {
 		LOG(("Shortcut Warning: could not write custom shortcuts file."));
 		return;

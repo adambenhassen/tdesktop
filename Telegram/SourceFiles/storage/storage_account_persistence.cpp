@@ -27,10 +27,9 @@ namespace {
 using namespace details;
 using Core::MacProtectedPath::Operation;
 
-[[nodiscard]] bool CheckPersistencePath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckPersistencePath(Operation operation,
+										const QString &path,
+										const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
@@ -101,11 +100,9 @@ const auto kServerReenrollmentTombstonePrefix
 		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
 			result = false;
 		} else if (QFileInfo::exists(path)
-			&& (!CheckPersistencePath(
-				Operation::Unlink,
-				path,
-				Q_FUNC_INFO)
-				|| !QFile::remove(path))) {
+				   && (!CheckPersistencePath(Operation::Unlink, path,
+											 Q_FUNC_INFO)
+					   || !QFile::remove(path))) {
 			result = false;
 		}
 	}
@@ -124,14 +121,12 @@ const auto kServerReenrollmentTombstonePrefix
 		return true;
 	}
 	if (info.isDir()) {
-		return CheckPersistencePath(
-				Operation::RecursiveDelete,
-				path,
-				Q_FUNC_INFO)
-			&& QDir(path).removeRecursively();
+		return CheckPersistencePath(Operation::RecursiveDelete, path,
+									Q_FUNC_INFO)
+			   && QDir(path).removeRecursively();
 	}
 	return CheckPersistencePath(Operation::Unlink, path, Q_FUNC_INFO)
-		&& QFile::remove(path);
+		   && QFile::remove(path);
 }
 
 [[nodiscard]] bool IsKnownWebviewPath(
@@ -341,7 +336,7 @@ bool Account::writeServerReenrollmentTombstone() {
 bool Account::serverReenrollmentPending() const {
 	const auto name = ServerReenrollmentTombstoneName(_dataNameKey);
 	const auto base = BaseGlobalPath() + name;
-	for (const auto suffix : { 's', '0', '1' }) {
+	for (const auto suffix : {'s', '0', '1'}) {
 		const auto path = base + suffix;
 		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)
 			|| QFileInfo::exists(path)) {
@@ -570,7 +565,7 @@ void Account::readMtpAuthorizationFailureMarkerForTest() {
 void Account::readMtpAuthorizationFailureMarker() {
 	const auto base = _basePath + kMtpAuthorizationWriteFailedFile;
 	auto exists = false;
-	for (const auto suffix : { 's', '0', '1' }) {
+	for (const auto suffix : {'s', '0', '1'}) {
 		const auto path = base + suffix;
 		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
 			_mtpAuthorizationWriteFailed = true;
@@ -610,11 +605,9 @@ bool Account::clearMtpAuthorizationFailureMarker() {
 		if (!CheckPersistencePath(Operation::Stat, path, Q_FUNC_INFO)) {
 			result = false;
 		} else if (QFileInfo::exists(path)
-			&& (!CheckPersistencePath(
-				Operation::Unlink,
-				path,
-				Q_FUNC_INFO)
-				|| !QFile::remove(path))) {
+				   && (!CheckPersistencePath(Operation::Unlink, path,
+											 Q_FUNC_INFO)
+					   || !QFile::remove(path))) {
 			result = false;
 		}
 	}

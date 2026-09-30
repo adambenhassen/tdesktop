@@ -41,23 +41,18 @@ namespace {
 using namespace Storage::CloudBlob;
 using Core::MacProtectedPath::Operation;
 
-[[nodiscard]] bool CheckSpellcheckerPath(
-		Operation operation,
-		const QString &path,
-		const char *callsite) {
+[[nodiscard]] bool CheckSpellcheckerPath(Operation operation,
+										 const QString &path,
+										 const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
-[[nodiscard]] bool CheckSpellcheckerPair(
-		Operation operation,
-		const QString &first,
-		const QString &second,
-		const char *callsite) {
-	return Core::MacProtectedPath::CheckPair(
-		operation,
-		first,
-		second,
-		callsite);
+[[nodiscard]] bool CheckSpellcheckerPair(Operation operation,
+										 const QString &first,
+										 const QString &second,
+										 const char *callsite) {
+	return Core::MacProtectedPath::CheckPair(operation, first, second,
+											 callsite);
 }
 
 constexpr auto kDictExtensions = { "dic", "aff" };
@@ -377,10 +372,7 @@ void DictLoader::unpack(const QString &path) {
 	crl::async([=] {
 		const auto success = Spellchecker::UnpackDictionary(path, id());
 		if (success) {
-			if (CheckSpellcheckerPath(
-					Operation::Unlink,
-					path,
-					Q_FUNC_INFO)) {
+			if (CheckSpellcheckerPath(Operation::Unlink, path, Q_FUNC_INFO)) {
 				QFile(path).remove();
 			}
 			destroy();
@@ -453,21 +445,12 @@ bool UnpackDictionary(const QString &path, int langId) {
 			const auto to = u"sr_RS.%1"_q.arg(ext);
 			const auto fromPath = dir.filePath(from);
 			const auto toPath = dir.filePath(to);
-			if (CheckSpellcheckerPath(
-					Operation::Stat,
-					fromPath,
-					Q_FUNC_INFO)
+			if (CheckSpellcheckerPath(Operation::Stat, fromPath, Q_FUNC_INFO)
 				&& dir.exists(from)
-				&& CheckSpellcheckerPath(
-					Operation::Stat,
-					toPath,
-					Q_FUNC_INFO)
+				&& CheckSpellcheckerPath(Operation::Stat, toPath, Q_FUNC_INFO)
 				&& !dir.exists(to)
-				&& CheckSpellcheckerPair(
-					Operation::Rename,
-					fromPath,
-					toPath,
-					Q_FUNC_INFO)) {
+				&& CheckSpellcheckerPair(Operation::Rename, fromPath, toPath,
+										 Q_FUNC_INFO)) {
 				QFile::rename(fromPath, toPath);
 			}
 		}
@@ -483,11 +466,8 @@ bool DictionaryExists(int langId) {
 	return ranges::none_of(kDictExtensions, [&](const auto &ext) {
 		const auto name = Spellchecker::LocaleFromLangId(langId).name();
 		const auto path = folder + name + '.' + ext;
-		return !CheckSpellcheckerPath(
-				Operation::Stat,
-				path,
-				Q_FUNC_INFO)
-			|| !QFile(path).exists();
+		return !CheckSpellcheckerPath(Operation::Stat, path, Q_FUNC_INFO)
+			   || !QFile(path).exists();
 	});
 }
 
@@ -499,11 +479,9 @@ bool RemoveDictionary(int langId) {
 	const auto folder = u"%1/%2/"_q.arg(
 		DictionariesPath(),
 		fileName);
-	return CheckSpellcheckerPath(
-			Operation::RecursiveDelete,
-			folder,
-			Q_FUNC_INFO)
-		&& QDir(folder).removeRecursively();
+	return CheckSpellcheckerPath(Operation::RecursiveDelete, folder,
+								 Q_FUNC_INFO)
+		   && QDir(folder).removeRecursively();
 }
 
 bool WriteDefaultDictionary() {
@@ -516,10 +494,8 @@ bool WriteDefaultDictionary() {
 	const auto folder = u"%1/%2/"_q.arg(
 		DictionariesPath(),
 		fileName);
-	if (!CheckSpellcheckerPath(
-			Operation::RecursiveDelete,
-			folder,
-			Q_FUNC_INFO)) {
+	if (!CheckSpellcheckerPath(Operation::RecursiveDelete, folder,
+							   Q_FUNC_INFO)) {
 		return false;
 	}
 	QDir(folder).removeRecursively();

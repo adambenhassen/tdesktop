@@ -83,9 +83,8 @@ struct HomeRoots {
 	QByteArray foundation;
 };
 
-[[nodiscard]] QByteArray TelegramdProfileRoot(
-	const HomeRoots &homes,
-	bool appSandboxed);
+[[nodiscard]] QByteArray TelegramdProfileRoot(const HomeRoots &homes,
+											  bool appSandboxed);
 
 struct RefusalRecord {
 	Operation operation = Operation::Open;
@@ -102,11 +101,10 @@ public:
 	[[nodiscard]] const std::vector<RefusalRecord> &records() const;
 
 private:
-	QMutex _mutex;
-	std::function<qint64()> _clock;
-	std::map<std::pair<int, int>, qint64> _last;
-	std::vector<RefusalRecord> _records;
-
+  QMutex _mutex;
+  std::function<qint64()> _clock;
+  std::map<std::pair<int, int>, qint64> _last;
+  std::vector<RefusalRecord> _records;
 };
 
 enum class ResolutionStatus {
@@ -133,10 +131,9 @@ class MacProtectedPathPolicy final {
 public:
 	using Components = std::vector<QString>;
 
-	[[nodiscard]] static MacProtectedPathPolicy Build(
-		const HomeRoots &homes,
-		const FileSystem &filesystem,
-		RefusalRecord *failure = nullptr);
+	[[nodiscard]] static MacProtectedPathPolicy
+	Build(const HomeRoots &homes, const FileSystem &filesystem,
+		  RefusalRecord *failure = nullptr);
 
 	[[nodiscard]] bool valid() const;
 
