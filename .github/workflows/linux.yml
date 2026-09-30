@@ -15,6 +15,8 @@ on:
       - 'LICENSE'
       - '.github/**'
       - '!.github/workflows/linux.yml'
+      - '!.github/scripts/detect_linux_changes.sh'
+      - '!.github/scripts/test_detect_linux_changes.sh'
       - 'snap/**'
       - 'Telegram/build/**'
       - '!Telegram/build/docker/centos_env/**'
@@ -50,11 +52,13 @@ jobs:
       required: ${{ steps.filter.outputs.required }}
 
     steps:
-      - name: Clone pull request merge commit.
-        if: github.event_name == 'pull_request'
+      - name: Clone.
         uses: actions/checkout@v7
         with:
           fetch-depth: 2
+
+      - name: Test Linux change detection.
+        run: bash .github/scripts/test_detect_linux_changes.sh
 
       - name: Detect Linux-relevant changes.
         id: filter
@@ -62,39 +66,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-
-          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
-            echo "required=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          if [[ "$(git rev-parse HEAD^1)" != "${BASE_SHA}" ]]; then
-            echo "::error::The checked-out pull request merge commit does not have the expected base as its first parent."
-            exit 1
-          fi
-
-          required=false
-          while IFS= read -r path; do
-            case "${path}" in
-              .github/workflows/linux.yml|Telegram/build/docker/centos_env/*)
-                required=true
-                break
-                ;;
-              docs/*|*.md|changelog.txt|LEGAL|LICENSE|.github/*|snap/*|Telegram/build/*|Telegram/Resources/uwp/*|Telegram/Resources/winrc/*|Telegram/SourceFiles/platform/win/*|Telegram/SourceFiles/platform/mac/*|Telegram/Telegram/*|Telegram/configure.bat|Telegram/Telegram.plist)
-                ;;
-              *)
-                required=true
-                break
-                ;;
-            esac
-          done < <(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")
-
-          echo "required=${required}" >> "${GITHUB_OUTPUT}"
-          if [[ "${required}" == "false" ]]; then
-            echo "No Linux-relevant files changed; the Rocky Linux 8 build will be skipped."
-          fi
+        run: bash .github/scripts/detect_linux_changes.sh
 
   linux-build:
     name: Linux build and unit tests
