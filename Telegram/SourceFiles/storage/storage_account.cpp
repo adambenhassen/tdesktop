@@ -42,6 +42,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "webview/webview_interface.h"
 #include "window/themes/window_theme.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QMetaObject>
+
 namespace Storage {
 namespace {
 
@@ -279,6 +282,23 @@ void Account::startAdded(MTP::AuthKeyPtr localKey) {
 }
 
 void Account::clearLegacyFiles() {
+#ifdef TDESKTOP_UNIT_TESTS
+	if (!_owner) {
+		// The storage-only unit fixture has no account lifetime to marshal
+		// through, so capture its stable allowlist and dispatch it directly.
+		const auto names = collectGoodNames();
+		ClearLegacyFiles(_basePath, [names](
+				FnMut<void(base::flat_set<QString>&&)> then) {
+			QMetaObject::invokeMethod(
+				QCoreApplication::instance(),
+				[names, then = std::move(then)]() mutable {
+					then(std::move(names));
+				},
+				Qt::QueuedConnection);
+		});
+		return;
+	}
+#endif
 	const auto weak = base::make_weak(_owner);
 	ClearLegacyFiles(_basePath, [weak, this](
 			FnMut<void(base::flat_set<QString>&&)> then) {
@@ -324,6 +344,9 @@ base::flat_set<QString> Account::collectGoodNames() const {
 		"mtp_authorization_write_faileds",
 		"mtp_authorization_write_failed0",
 		"mtp_authorization_write_failed1",
+		"server_cache_bindings",
+		"server_cache_binding0",
+		"server_cache_binding1",
 	};
 	const auto push = [&](FileKey key) {
 		if (!key) {

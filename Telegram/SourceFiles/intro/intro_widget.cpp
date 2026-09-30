@@ -733,13 +733,12 @@ void ShowServerReenrollmentPrompt(
 	}));
 }
 
-void Widget::showServerIdentityChange(
-		const MTP::PinnedServerFailureReport &report) {
-	if (_serverReenrollmentDialogShown) {
-		return;
-	}
-	_serverReenrollmentDialogShown = true;
-
+void ShowServerIdentityChange(
+		not_null<Main::Account*> account,
+		const MTP::PinnedServerFailureReport &report,
+		std::shared_ptr<Ui::Show> show,
+		Fn<void()> resetDialog,
+		Fn<void()> failed) {
 	const auto pinned = QString::number(
 		qint64(report.pinnedFingerprint));
 	const auto presented = QString::number(
@@ -761,12 +760,26 @@ void Widget::showServerIdentityChange(
 				? u"unknown"_q
 				: report.dialledAddress);
 	}
+	ShowServerReenrollmentPrompt(
+		account,
+		tr::lng_intro_server_identity_title(tr::now),
+		std::move(text),
+		std::move(show),
+		std::move(resetDialog),
+		std::move(failed));
+}
+
+void Widget::showServerIdentityChange(
+		const MTP::PinnedServerFailureReport &report) {
+	if (_serverReenrollmentDialogShown) {
+		return;
+	}
+	_serverReenrollmentDialogShown = true;
 
 	const auto weak = base::make_weak(this);
-	ShowServerReenrollmentPrompt(
+	ShowServerIdentityChange(
 		_account,
-		tr::lng_intro_server_identity_title(tr::now),
-		text,
+		report,
 		_data.controller->uiShow(),
 		[weak] {
 			if (weak) {

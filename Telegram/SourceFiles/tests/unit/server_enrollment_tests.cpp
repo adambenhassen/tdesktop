@@ -23,11 +23,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
+#include <QtCore/QEventLoop>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
 #include <QtCore/QSemaphore>
 #include <QtCore/QTemporaryDir>
+#include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <QtCore/Qt>
 #include <QtGui/QKeyEvent>
@@ -115,17 +117,44 @@ MakeEnrollmentServerKey() {
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
 		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
 		const QString &tempPath = {},
-		const QString &databasePath = {}) {
+		const QString &databasePath = {},
+		bool hasStoredCustomServer = false,
+		bool mtpAuthorizationWriteFailed = false) {
 	return std::make_unique<Storage::Account>(
 		basePath,
 		key,
 		MakeEnrollmentConfig(),
-		false,
+		hasStoredCustomServer,
 		std::move(serializeMtpAuthorization),
 		std::move(restoreMtpAuthorization),
 		std::move(writeMtpAuthorizationOverride),
 		tempPath,
-		databasePath);
+		databasePath,
+		0,
+		mtpAuthorizationWriteFailed);
+}
+
+[[nodiscard]] bool WaitForStartupCleanup(const QString &canaryPath) {
+	if (!QFileInfo::exists(canaryPath)) {
+		return true;
+	}
+	auto result = false;
+	QEventLoop loop;
+	QTimer polling;
+	QTimer timeout;
+	polling.setInterval(10);
+	timeout.setSingleShot(true);
+	QObject::connect(&polling, &QTimer::timeout, &loop, [&] {
+		if (!QFileInfo::exists(canaryPath)) {
+			result = true;
+			loop.quit();
+		}
+	});
+	QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+	polling.start();
+	timeout.start(5000);
+	loop.exec();
+	return result;
 }
 
 [[nodiscard]] bool HasReadableEnrollmentMap(
@@ -901,11 +930,17 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 	const auto basePath = directory.path() + u"account/"_q;
 	const auto databasePath = directory.path() + u"database/"_q;
 	const auto cachePath = databasePath + u"cache"_q;
+	const auto cleanupCanaryPath = basePath + u"startup-cleanup-canary"_q;
+	CHECK(QDir().mkpath(basePath));
 	CHECK(QDir().mkpath(databasePath));
 	QFile cache(cachePath);
 	CHECK(cache.open(QIODevice::WriteOnly));
 	cache.write("cached-messages");
 	cache.close();
+	QFile cleanupCanary(cleanupCanaryPath);
+	CHECK(cleanupCanary.open(QIODevice::WriteOnly));
+	cleanupCanary.write("wait-for-startup-cleanup");
+	cleanupCanary.close();
 
 	const auto key = MakeEnrollmentStorageKey();
 	const auto serialized = QByteArray("old-server-auth-key");
@@ -927,13 +962,12 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		CHECK(account->writeMtpConfig(true));
 		CHECK(account->writeMtpData(true));
 		CHECK(account->writeMtpAuthorizationFailure());
-		CHECK(account->beginServerForget(Storage::ServerCacheBinding{
+		CHECK(account->ensureServerCacheBinding(Storage::ServerCacheBinding{
 			.fingerprintKnown = true,
 			.fingerprint = fingerprint,
 			.userIdKnown = true,
 			.userId = 4242,
 		}));
-		CHECK(!account->serverForgetPending());
 	}
 
 	auto restored = QByteArray();
@@ -945,13 +979,46 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		nullptr,
 		QString(),
 		databasePath);
-	CHECK(restarted->completeServerForgetForTest(key));
-	restarted->readMtpAuthorizationFailureMarkerForTest();
-	restarted->readMtpDataForTest();
+	const auto config = restarted->start(key);
+	CHECK(config != nullptr);
+	CHECK(config && config->hasCustomServer());
+	CHECK(restarted->hasStoredCustomServer());
+	CHECK(restarted->mtpAuthorizationWriteFailed());
+	CHECK(WaitForStartupCleanup(cleanupCanaryPath));
+	CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
+		== Storage::ServerCacheBindingStatus::Match);
+	CHECK_EQ(restored, serialized);
+	CHECK(restarted->beginServerForget(Storage::ServerCacheBinding{
+		.fingerprintKnown = true,
+		.fingerprint = fingerprint,
+		.userIdKnown = true,
+		.userId = 4242,
+	}));
+	CHECK(!restarted->serverForgetPending());
+	restarted.reset();
+
+	QFile nextCleanupCanary(cleanupCanaryPath);
+	CHECK(nextCleanupCanary.open(QIODevice::WriteOnly));
+	nextCleanupCanary.write("wait-for-post-forget-cleanup");
+	nextCleanupCanary.close();
+	restored.clear();
+	auto afterForget = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath,
+		true,
+		true);
+	const auto afterForgetConfig = afterForget->start(key);
+	CHECK(afterForgetConfig == nullptr);
+	CHECK(WaitForStartupCleanup(cleanupCanaryPath));
 
 	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
-	CHECK(!restarted->hasStoredCustomServer());
-	CHECK(!restarted->mtpAuthorizationWriteFailed());
+	CHECK(!afterForget->hasStoredCustomServer());
+	CHECK(!afterForget->mtpAuthorizationWriteFailed());
 	CHECK(restored.isEmpty());
 	CHECK(QFile::exists(cachePath));
 	const auto authorization = directory.path()
@@ -960,11 +1027,11 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 	CHECK(!QFileInfo::exists(authorization + 's'));
 	CHECK(!QFileInfo::exists(authorization + '0'));
 	CHECK(!QFileInfo::exists(authorization + '1'));
-	CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
+	CHECK(afterForget->checkServerCacheBinding(fingerprint, 4242)
 		== Storage::ServerCacheBindingStatus::Match);
-	CHECK(restarted->checkServerCacheBinding(fingerprint, 5252)
+	CHECK(afterForget->checkServerCacheBinding(fingerprint, 5252)
 		== Storage::ServerCacheBindingStatus::Mismatch);
-	CHECK(restarted->checkServerCacheBinding(fingerprint ^ 1, 4242)
+	CHECK(afterForget->checkServerCacheBinding(fingerprint ^ 1, 4242)
 		== Storage::ServerCacheBindingStatus::Mismatch);
 }
 

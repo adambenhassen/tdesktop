@@ -87,7 +87,8 @@ public:
 		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
 		QString tempPath = {},
 		QString databasePath = {},
-		FileKey dataNameKey = 0);
+		FileKey dataNameKey = 0,
+		bool mtpAuthorizationWriteFailed = false);
 #endif
 	~Account();
 

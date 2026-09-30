@@ -74,6 +74,7 @@ PRIVATE
     intro/intro_username_validation.cpp
     main/main_account_persistence.cpp
     storage/details/storage_file_utilities.cpp
+    storage/storage_account.cpp
     storage/storage_account_persistence.cpp
     storage/storage_domain.cpp
     tests/unit/data_chat_participants_tests.cpp

@@ -218,7 +218,8 @@ Account::Account(
 		Fn<bool()> writeMtpAuthorizationOverride,
 		QString tempPath,
 		QString databasePath,
-		FileKey dataNameKey)
+		FileKey dataNameKey,
+		bool mtpAuthorizationWriteFailed)
 : _owner(nullptr)
 , _dataNameKey(dataNameKey)
 , _basePath(basePath.endsWith(QDir::separator())
@@ -232,6 +233,7 @@ Account::Account(
 	: std::move(databasePath))
 , _localKey(std::move(localKey))
 , _hasStoredCustomServer(hasStoredCustomServer)
+, _mtpAuthorizationWriteFailed(mtpAuthorizationWriteFailed)
 , _mtpConfig([config = std::move(config)]() -> const MTP::Config & {
 	return *config;
 })
