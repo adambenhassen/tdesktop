@@ -286,7 +286,7 @@ void Account::clearLegacyFiles() {
 	if (!_owner) {
 		// The storage-only unit fixture has no account lifetime to marshal
 		// through, so capture its stable allowlist and dispatch it directly.
-		const auto names = collectGoodNames();
+		auto names = collectGoodNames();
 		ClearLegacyFiles(_basePath, [names](
 				FnMut<void(base::flat_set<QString>&&)> then) {
 			QMetaObject::invokeMethod(
