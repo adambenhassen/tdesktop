@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["non-store", "build_macstore"]') || fromJSON('["non-store"]') }}
+        variant: ["non-store"]
     env:
       BUILD_VARIANT: ${{ matrix.variant }}
       UPLOAD_ARTIFACT: ${{ matrix.variant == 'non-store' && 'true' || 'false' }}
@@ -80,6 +80,32 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
           sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
+
+      - name: Verify Mac App Store variant is unsupported.
+        id: store_variant_rejection
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          mkdir -p "$evidence"
+          rejection_build="$RUNNER_TEMP/telegramd-macstore-rejection"
+          rejection_log="$evidence/macstore-rejection.log"
+          set +e
+          cmake -S "$REPO_NAME" -B "$rejection_build" \
+            -D DESKTOP_APP_SPECIAL_TARGET:STRING=macstore \
+            -D CMAKE_OSX_ARCHITECTURES=arm64 \
+            > "$rejection_log" 2>&1
+          rejection_status=$?
+          set -e
+          cat "$rejection_log"
+          if [ "$rejection_status" -eq 0 ] \
+            || ! grep -Fq 'Mac App Store builds are unsupported by Telegramd.' "$rejection_log"; then
+            echo "::error::Mac App Store configuration was not rejected by Telegramd's build guard."
+            exit 1
+          fi
+          printf 'tested_sha=%s\nvariant=build_macstore\nresult=unsupported\nconfigure_exit_status=%s\n' \
+            "$GITHUB_SHA" "$rejection_status" \
+            > "$evidence/macstore-rejection-status.txt"
 
       - name: Check changed C++ formatting.
         id: source-format
@@ -197,9 +223,6 @@ jobs:
           cd "$REPO_NAME/Telegram"
 
           BUILD_ARGS=()
-          if [ "$BUILD_VARIANT" = "build_macstore" ]; then
-            BUILD_ARGS+=(-D DESKTOP_APP_SPECIAL_TARGET:STRING=macstore)
-          fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             BUILD_ARGS+=(-D TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=ON)
           fi
@@ -223,9 +246,6 @@ jobs:
             exit "$configure_status"
           fi
 
-          if [ "$BUILD_VARIANT" = "build_macstore" ]; then
-            grep -F 'DESKTOP_APP_SPECIAL_TARGET:STRING=macstore' ../out/CMakeCache.txt
-          fi
           grep -F 'DESKTOP_APP_DISABLE_AUTOUPDATE:BOOL=ON' ../out/CMakeCache.txt
           build_status=0
           cmake --build ../out --config Debug --parallel 2>&1 | tee -a "$BUILD_LOG" || build_status=$?
@@ -305,7 +325,7 @@ jobs:
           env HOME="$state/home" TMPDIR="$state/tmp" \
             TDESKTOP_MAC_PROFILE_TEST_TMP_BASE="$state/tmp" \
             bash "$REPO_NAME/Telegram/build/test_mac_profile_guard.sh" \
-              "$executable" "$BUILD_VARIANT" \
+              "$executable" \
             2>&1 | tee "$evidence/profile-ipc-${BUILD_VARIANT}.log"
           statuses=("${PIPESTATUS[@]}")
           set -e
@@ -331,6 +351,7 @@ jobs:
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         env:
           FORMAT_OUTCOME: ${{ steps.source-format.outcome }}
+          STORE_REJECTION_OUTCOME: ${{ steps.store_variant_rejection.outcome }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           ARTIFACT_OUTCOME: ${{ steps.artifact-verification.outcome }}
           PROFILE_IPC_OUTCOME: ${{ steps.profile-ipc.outcome }}
@@ -340,8 +361,8 @@ jobs:
             printf '### macOS Telegramd validation: %s\n\n' "$BUILD_VARIANT"
             printf -- '- Tested SHA: `%s`\n- C++ format check: `%s`\n' \
               "$GITHUB_SHA" "$FORMAT_OUTCOME"
-            printf -- '- Build: `%s`\n- Artifact verification: `%s`\n- Profile/IPC harness: `%s`\n' \
-              "$BUILD_OUTCOME" "$ARTIFACT_OUTCOME" "$PROFILE_IPC_OUTCOME"
+            printf -- '- Mac App Store rejection check: `%s`\n- Build: `%s`\n- Artifact verification: `%s`\n- Profile/IPC harness: `%s`\n' \
+              "$STORE_REJECTION_OUTCOME" "$BUILD_OUTCOME" "$ARTIFACT_OUTCOME" "$PROFILE_IPC_OUTCOME"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve on-demand failure logs.
@@ -410,7 +431,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.variant == 'non-store' && 'Telegramd-macOS-arm64-evidence' || 'Telegramd-macOS-arm64-build_macstore-evidence' }}
+          name: Telegramd-macOS-arm64-evidence
           path: ${{ env.REPO_NAME }}/out/Debug/evidence/
           if-no-files-found: warn
 
@@ -458,6 +479,7 @@ jobs:
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         env:
           FORMAT_OUTCOME: ${{ steps.source-format.outcome }}
+          STORE_REJECTION_OUTCOME: ${{ steps.store_variant_rejection.outcome }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           ARTIFACT_OUTCOME: ${{ steps.artifact-verification.outcome }}
           PROFILE_IPC_OUTCOME: ${{ steps.profile-ipc.outcome }}
@@ -466,6 +488,7 @@ jobs:
           failed=false
           for check in \
             "C++ format=$FORMAT_OUTCOME" \
+            "Mac App Store rejection=$STORE_REJECTION_OUTCOME" \
             "build=$BUILD_OUTCOME" \
             "artifact verification=$ARTIFACT_OUTCOME" \
             "profile/IPC harness=$PROFILE_IPC_OUTCOME"; do

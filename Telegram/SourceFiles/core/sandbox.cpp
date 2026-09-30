@@ -606,13 +606,20 @@ void Sandbox::readClients() {
 		i->second.append(i->first->readAll());
 		if (i->second.size()) {
 			bool activationRequired = false;
+			bool quitAfterResponse = false;
 			QString cmds(QString::fromLatin1(i->second));
 			int32 from = 0, l = cmds.length();
 			for (int32 to = cmds.indexOf(QChar(';'), from); to >= from; to = (from < l) ? cmds.indexOf(QChar(';'), from) : -1) {
 				auto cmd = base::StringViewMid(cmds, from, to - from);
 				if (cmd.startsWith(u"CMD:"_q)) {
 					const auto processId = QApplication::applicationPid();
-					const auto windowId = execExternal(cmds.mid(from + 4, to - from - 4));
+					const auto command = cmds.mid(from + 4, to - from - 4);
+					auto windowId = uint64(0);
+					if (command == u"quit"_q) {
+						quitAfterResponse = true;
+					} else {
+						windowId = execExternal(command);
+					}
 					const auto response = u"RES:%1_%2;"_q.arg(processId).arg(windowId).toLatin1();
 					i->first->write(response.data(), response.size());
 				} else if (cmd.startsWith(u"XDG_ACTIVATION_TOKEN:"_q)) {
@@ -643,6 +650,31 @@ void Sandbox::readClients() {
 				: 0;
 			const auto response = u"RES:%1_%2;"_q.arg(processId).arg(windowId).toLatin1();
 			i->first->write(response.data(), response.size());
+			if (quitAfterResponse) {
+				const auto client = i->first;
+				const auto quitWhenFlushed = [=] {
+					if (!client->bytesToWrite()) {
+						Quit();
+					}
+				};
+				if (client->bytesToWrite()) {
+					connect(
+						client,
+						&QLocalSocket::bytesWritten,
+						this,
+						[=](qint64) { quitWhenFlushed(); });
+					connect(
+						client,
+						&QLocalSocket::disconnected,
+						this,
+						[=] { Quit(); });
+				} else {
+					QMetaObject::invokeMethod(
+						this,
+						quitWhenFlushed,
+						Qt::QueuedConnection);
+				}
+			}
 		}
 	}
 	cRefStartUrls() << base::take(startUrls);

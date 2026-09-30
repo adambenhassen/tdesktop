@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-	echo "usage: $0 <Telegramd executable> [non-store|build_macstore]" >&2
+if [[ $# -ne 1 ]]; then
+	echo "usage: $0 <Telegramd executable>" >&2
 	exit 2
 fi
 
@@ -14,30 +14,13 @@ fi
 
 APP="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
 APP_BUNDLE="$(cd "$(dirname "$APP")/../.." && pwd -P)"
-MODE=non-store
 TEST_TMP_BASE="${TDESKTOP_MAC_PROFILE_TEST_TMP_BASE:-/tmp}"
-if [[ $# -eq 2 ]]; then
-	MODE="$2"
-fi
 if [[ ! -x "$APP" ]]; then
 	echo "Telegramd executable is not executable: $APP" >&2
 	exit 2
 fi
-case "$MODE" in
-non-store)
-	IPC_DIRECTORY="/tmp"
-	TEST_HOME="$(mktemp -d "$TEST_TMP_BASE/telegramd-profile-test.XXXXXX")"
-	;;
-build_macstore)
-	TEST_HOME="$(mktemp -d "/tmp/telegramd-store-profile.XXXXXX")"
-	TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
-	IPC_DIRECTORY="$TEST_HOME/tmp"
-	;;
-*)
-	echo "unsupported artifact variant: $MODE" >&2
-	exit 2
-	;;
-esac
+IPC_DIRECTORY="/tmp"
+TEST_HOME="$(mktemp -d "$TEST_TMP_BASE/telegramd-profile-test.XXXXXX")"
 TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
 IPC_SEARCH_DIRECTORY="$(cd "$IPC_DIRECTORY" 2>/dev/null && pwd -P || printf '%s' "$IPC_DIRECTORY")"
 
@@ -47,10 +30,6 @@ REFUSAL_LOG="$TEST_HOME/refusal.log"
 START_LOG="$TEST_HOME/start.log"
 LOCK_SUFFIX="$(printf '%s' "$APP_BUNDLE" | md5 -q | cut -c1-16)"
 SOCKET_SUFFIX="$(printf '%s' "$PROFILE" | md5 -q | cut -c1-16)"
-EXPECTED_VARIANT=non-store
-if [[ "$MODE" == build_macstore ]]; then
-	EXPECTED_VARIANT=build_macstore
-fi
 LOCK_NAME="Telegramd-lock-$LOCK_SUFFIX"
 LOCK_PATH="$IPC_DIRECTORY/$LOCK_NAME"
 SOCKET_PATH="$IPC_DIRECTORY/Telegramd-$SOCKET_SUFFIX"
@@ -149,50 +128,11 @@ if [[ -S "$SOCKET_PATH" ]]; then
 	echo "profile refusal created an IPC socket." >&2
 	exit 1
 fi
-if [[ "$MODE" == build_macstore && -e "$IPC_DIRECTORY" ]]; then
-	echo "profile refusal created the store IPC directory before profile validation." >&2
-	exit 1
-fi
 if [[ -e "$PROFILE" || -e "$HOSTILE_HOME" ]]; then
 	echo "hostile profile initialization created a profile or protected path." >&2
 	exit 1
 fi
 printf 'protected_home_refusal=PASS status=%s class=group-container before_profile_and_ipc=1\n' "$REFUSAL_STATUS"
-
-if [[ "$MODE" == build_macstore ]]; then
-	LONG_HOME_COMPONENT="$(printf '%110s' '' | tr ' ' x)"
-	LONG_TEST_HOME="$TEST_HOME/$LONG_HOME_COMPONENT"
-	mkdir -p "$LONG_TEST_HOME"
-	LONG_PROFILE="$LONG_TEST_HOME/Library/Application Support/Telegramd"
-	LONG_IPC_DIRECTORY="$LONG_TEST_HOME/tmp"
-	LONG_SOCKET_SUFFIX="$(printf '%s' "$LONG_PROFILE" | md5 -q | cut -c1-16)"
-	LONG_SOCKET_PATH="$LONG_IPC_DIRECTORY/Telegramd-$LONG_SOCKET_SUFFIX"
-	LONG_SOCKET_PATH_BYTES="$(LC_ALL=C printf '%s' "$LONG_SOCKET_PATH" | wc -c | tr -d '[:space:]')"
-	LONG_LOG="$LONG_TEST_HOME/socket-path-too-long.log"
-	if (( LONG_SOCKET_PATH_BYTES <= MAC_SOCKET_PATH_LIMIT )); then
-		echo "overlong store socket test path is only $LONG_SOCKET_PATH_BYTES bytes." >&2
-		exit 1
-	fi
-	set +e
-	env HOME="$LONG_TEST_HOME" TMPDIR="$TEST_TMP_BASE" TDESKTOP_MAC_PROFILE_TEST_HOME="$LONG_TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" -quit >"$LONG_LOG" 2>&1
-	LONG_STATUS=$?
-	set -e
-	if [[ "$LONG_STATUS" -eq 0 ]] \
-		|| ! grep -F -q "Mac local socket path too long:" "$LONG_LOG" "$LONG_PROFILE/log.txt" 2>/dev/null \
-		|| [[ -e "$LONG_IPC_DIRECTORY" || -S "$LONG_SOCKET_PATH" ]]; then
-		echo "overlong store socket path was not refused before IPC access." >&2
-		cat "$LONG_LOG" >&2
-		if [[ -f "$LONG_PROFILE/log.txt" ]]; then
-			cat "$LONG_PROFILE/log.txt" >&2
-		fi
-		exit 1
-	fi
-	printf 'socket_path_overflow=PASS status=%s bytes=%s limit=%s refused_before_ipc=1\n' \
-		"$LONG_STATUS" "$LONG_SOCKET_PATH_BYTES" "$MAC_SOCKET_PATH_LIMIT"
-else
-	printf 'socket_path_overflow=N/A variant=%s path=%s bytes=%s limit=%s\n' \
-		"$MODE" "$SOCKET_PATH" "$SOCKET_PATH_BYTES" "$MAC_SOCKET_PATH_LIMIT"
-fi
 
 mkdir -p "$IPC_DIRECTORY"
 
@@ -210,7 +150,7 @@ for ((attempt = 0; attempt < 150; ++attempt)); do
 	if grep -F -q "Working dir: $PROFILE/" "$PROFILE/log.txt" 2>/dev/null; then
 		PROFILE_READY=true
 	fi
-	if has_start_record "Mac profile IPC selected: variant=$EXPECTED_VARIANT directory=$IPC_DIRECTORY"; then
+	if has_start_record "Mac profile IPC selected: variant=non-store directory=$IPC_DIRECTORY"; then
 		IPC_SELECTION_READY=true
 	fi
 	if grep -F -q "Connecting local socket to $SOCKET_PATH" "$PROFILE/log.txt" 2>/dev/null; then
@@ -246,7 +186,7 @@ done
 FAILURES=0
 report_result profile "$PROFILE_READY" "path=$PROFILE" || FAILURES=$((FAILURES + 1))
 report_result ipc_variant_and_directory "$IPC_SELECTION_READY" \
-	"variant=$EXPECTED_VARIANT directory=$IPC_DIRECTORY" || FAILURES=$((FAILURES + 1))
+	"variant=non-store directory=$IPC_DIRECTORY" || FAILURES=$((FAILURES + 1))
 report_result socket_path "$SOCKET_PATH_READY" \
 	"path=$SOCKET_PATH bytes=$SOCKET_PATH_BYTES/$MAC_SOCKET_PATH_LIMIT" || FAILURES=$((FAILURES + 1))
 LOCK_FOUND="$(find_lock_path)"
@@ -310,4 +250,4 @@ if (( FAILURES > 0 )); then
 	exit 1
 fi
 
-echo "profile refusal and ordinary $MODE single-instance startup passed."
+echo "profile refusal and ordinary non-store single-instance startup passed."
