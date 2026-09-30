@@ -66,6 +66,151 @@ report_result() {
 	fi
 }
 
+run_spoiler_cache_symlink_case() {
+	local case_name="$1"
+	local link_name="$2"
+	local case_home="$TEST_HOME/$case_name"
+	local PROFILE="$case_home/Library/Application Support/Telegramd"
+	local fixture="$case_home/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/SyntheticSpoilerCache"
+	local START_LOG="$case_home/start.log"
+	local quit_log="$case_home/quit.log"
+	local LOCK_NAME="$LOCK_NAME"
+	local IPC_SEARCH_DIRECTORY="$IPC_SEARCH_DIRECTORY"
+	local SOCKET_PATH="/tmp/Telegramd-$(printf '%s' "$PROFILE" | md5 -q | cut -c1-16)"
+	local socket_bytes
+	local PROFILE_READY=false
+	local IPC_SELECTION_READY=false
+	local LOCK_READY=false
+	local SOCKET_PATH_READY=false
+	local SOCKET_LISTENER_READY=false
+	local SOCKET_FILE_READY=false
+	local FIRST_PROCESS_ALIVE=false
+	local FAILURES=0
+	local quit_status
+	local first_status
+	local response
+	local refusal
+
+	mkdir -p "$PROFILE/tdata" "$fixture"
+	if [[ "$link_name" == emoji ]]; then
+		ln -s "$fixture" "$PROFILE/tdata/emoji"
+	else
+		mkdir -p "$PROFILE/tdata/emoji"
+		ln -s "$fixture" "$PROFILE/tdata/emoji/spoiler"
+	fi
+	socket_bytes="$(LC_ALL=C printf '%s' "$SOCKET_PATH" | wc -c | tr -d '[:space:]')"
+	if (( socket_bytes > MAC_SOCKET_PATH_LIMIT )); then
+		echo "socket path is $socket_bytes bytes; macOS sun_path limit is $MAC_SOCKET_PATH_LIMIT: $SOCKET_PATH" >&2
+		return 1
+	fi
+
+	env HOME="$case_home" TMPDIR="$TEST_TMP_BASE" \
+		TDESKTOP_MAC_PROFILE_TEST_HOME="$case_home" \
+		TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+		"$APP" >"$START_LOG" 2>&1 &
+	FIRST_PID=$!
+	for ((attempt = 0; attempt < 150; ++attempt)); do
+		if grep -F -q "Working dir: $PROFILE/" "$PROFILE/log.txt" 2>/dev/null; then
+			PROFILE_READY=true
+		fi
+		if has_start_record "Mac profile IPC selected: variant=non-store directory=$IPC_DIRECTORY"; then
+			IPC_SELECTION_READY=true
+		fi
+		if grep -F -q "Connecting local socket to $SOCKET_PATH" "$PROFILE/log.txt" 2>/dev/null; then
+			SOCKET_PATH_READY=true
+		fi
+		if [[ -n "$(find_lock_path)" ]]; then
+			LOCK_READY=true
+		fi
+		if has_start_record "Mac profile IPC ready: listening=1 full_server_name=$SOCKET_PATH"; then
+			SOCKET_LISTENER_READY=true
+		fi
+		if [[ -S "$SOCKET_PATH" ]]; then
+			SOCKET_FILE_READY=true
+		fi
+		if kill -0 "$FIRST_PID" 2>/dev/null; then
+			FIRST_PROCESS_ALIVE=true
+		fi
+		if [[ "$PROFILE_READY" == true \
+			&& "$IPC_SELECTION_READY" == true \
+			&& "$LOCK_READY" == true \
+			&& "$SOCKET_PATH_READY" == true \
+			&& "$SOCKET_LISTENER_READY" == true \
+			&& "$SOCKET_FILE_READY" == true \
+			&& "$FIRST_PROCESS_ALIVE" == true ]]; then
+			break
+		fi
+		if ! kill -0 "$FIRST_PID" 2>/dev/null; then
+			break
+		fi
+		sleep 0.2
+	done
+
+	report_result "${case_name}_profile" "$PROFILE_READY" "path=$PROFILE" || FAILURES=$((FAILURES + 1))
+	report_result "${case_name}_ipc_directory" "$IPC_SELECTION_READY" \
+		"variant=non-store directory=$IPC_DIRECTORY" || FAILURES=$((FAILURES + 1))
+	report_result "${case_name}_lock" "$LOCK_READY" \
+		"expected=$LOCK_PATH found=$(find_lock_path)" || FAILURES=$((FAILURES + 1))
+	report_result "${case_name}_bound_socket" "$SOCKET_LISTENER_READY" \
+		"path=$SOCKET_PATH filesystem_socket=$SOCKET_FILE_READY" || FAILURES=$((FAILURES + 1))
+	refusal="$(grep -F 'class=group-container callsite=emojiCacheFolder' \
+		"$START_LOG" "$PROFILE/log.txt" 2>/dev/null || true)"
+	if [[ -n "$refusal" ]]; then
+		report_result "${case_name}_cache_refusal" true "$refusal"
+	else
+		report_result "${case_name}_cache_refusal" false "missing protected-path refusal from emojiCacheFolder" || FAILURES=$((FAILURES + 1))
+	fi
+	if [[ -n "$(find "$fixture" -mindepth 1 -print -quit)" ]]; then
+		report_result "${case_name}_fixture_untouched" false "fixture=$fixture" || FAILURES=$((FAILURES + 1))
+	else
+		report_result "${case_name}_fixture_untouched" true "fixture=$fixture"
+	fi
+	if (( FAILURES > 0 )); then
+		cat "$START_LOG" >&2
+		[[ -f "$PROFILE/log.txt" ]] && cat "$PROFILE/log.txt" >&2
+		return 1
+	fi
+
+	set +e
+	env HOME="$case_home" TMPDIR="$TEST_TMP_BASE" \
+		TDESKTOP_MAC_PROFILE_TEST_HOME="$case_home" \
+		TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+		"$APP" -quit >"$quit_log" 2>&1
+	quit_status=$?
+	set -e
+	report_result "${case_name}_second_instance_exit" "$([[ "$quit_status" -eq 0 ]] && printf true || printf false)" \
+		"status=$quit_status" || FAILURES=$((FAILURES + 1))
+	response="$(grep -hF "Show command response received, processId = $FIRST_PID, windowId = 0" "$PROFILE"/log*.txt || true)"
+	report_result "${case_name}_first_pid_handshake" "$([[ -n "$response" ]] && printf true || printf false)" \
+		"response=$response expected_pid=$FIRST_PID" || FAILURES=$((FAILURES + 1))
+	for ((attempt = 0; attempt < 150; ++attempt)); do
+		if ! kill -0 "$FIRST_PID" 2>/dev/null; then
+			break
+		fi
+		sleep 0.2
+	done
+	if kill -0 "$FIRST_PID" 2>/dev/null; then
+		report_result "${case_name}_first_instance_exit" false "pid=$FIRST_PID still_alive=1" || true
+		return 1
+	fi
+	set +e
+	wait "$FIRST_PID"
+	first_status=$?
+	set -e
+	FIRST_PID=""
+	report_result "${case_name}_first_instance_exit" "$([[ "$first_status" -eq 0 ]] && printf true || printf false)" \
+		"status=$first_status" || FAILURES=$((FAILURES + 1))
+	if [[ -n "$(find "$fixture" -mindepth 1 -print -quit)" ]]; then
+		report_result "${case_name}_fixture_untouched_after_exit" false "fixture=$fixture" || FAILURES=$((FAILURES + 1))
+	else
+		report_result "${case_name}_fixture_untouched_after_exit" true "fixture=$fixture"
+	fi
+	if (( FAILURES > 0 )); then
+		cat "$quit_log" "$START_LOG" >&2
+		return 1
+	fi
+}
+
 cleanup() {
 	local status=$?
 	if [[ -n "$FIRST_PID" ]] && kill -0 "$FIRST_PID" 2>/dev/null; then
@@ -252,4 +397,15 @@ if (( FAILURES > 0 )); then
 	exit 1
 fi
 
-echo "profile refusal and ordinary non-store single-instance startup passed."
+CACHE_TEXT="$PROFILE/tdata/emoji/spoiler/text"
+CACHE_TEXT_FILES="$(find "$TEST_HOME" -type f -path '*/tdata/emoji/spoiler/text' -print)"
+report_result spoiler_cache_location "$([[ -f "$CACHE_TEXT" && "$CACHE_TEXT_FILES" == "$CACHE_TEXT" ]] && printf true || printf false)" \
+	"expected=$CACHE_TEXT found=${CACHE_TEXT_FILES:-missing}" || FAILURES=$((FAILURES + 1))
+if (( FAILURES > 0 )); then
+	exit 1
+fi
+
+run_spoiler_cache_symlink_case emoji-cache-symlink emoji
+run_spoiler_cache_symlink_case spoiler-cache-symlink spoiler
+
+echo "profile, spoiler-cache, and non-store single-instance checks passed."
