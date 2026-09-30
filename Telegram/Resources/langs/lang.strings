@@ -432,7 +432,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_identity_continue"  = "Continue to confirmation";
 "lng_intro_server_identity_confirm_title" = "Confirm account deletion";
 "lng_intro_server_identity_confirm"   = "This is the final confirmation. Accepting permanently deletes this account's server-scoped keys, sessions, cached messages and peers, endpoint, and server identity before returning to enrollment. This cannot be undone.";
-"lng_intro_server_identity_confirm_forget" = "Delete account data and trust a new server identity";
+"lng_intro_server_identity_confirm_forget" = "Delete account data and continue";
+"lng_intro_server_cache_binding_title" = "Cached account data does not match";
+"lng_intro_server_cache_binding_changed" = "Cached messages can only be opened for the same server RSA fingerprint and logged-in user. This login does not match the saved binding. Cancel keeps the cached data untouched. Continue opens a final confirmation; nothing is deleted until it is explicitly accepted.";
 "lng_intro_server_reenrollment_failed" = "The account could not be prepared for re-enrollment. It remains blocked.";
 
 "lng_intro_username_title"        = "Your username";

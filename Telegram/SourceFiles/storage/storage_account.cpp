@@ -253,8 +253,20 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	if (serverReenrollmentPending()) {
 		return startServerReenrollment();
 	}
-	readMapWith(_localKey);
+	_serverForgetBlocked = false;
+	const auto forgettingServer = serverForgetPending();
+	readMapWith(_localKey, QByteArray(), forgettingServer);
 	clearLegacyFiles();
+	if (forgettingServer) {
+		if (!completeServerForget()) {
+			_serverForgetBlocked = true;
+			auto blocked = std::make_unique<MTP::Config>(
+				MTP::Environment::Production);
+			blocked->dcOptions().constructBlocked();
+			return blocked;
+		}
+		return nullptr;
+	}
 	readStoredCustomServerPin();
 	return readMtpConfig();
 }
@@ -341,7 +353,8 @@ base::flat_set<QString> Account::collectGoodNames() const {
 
 Account::ReadMapResult Account::readMapWith(
 		MTP::AuthKeyPtr localKey,
-		const QByteArray &legacyPasscode) {
+		const QByteArray &legacyPasscode,
+		bool skipMtpData) {
 	auto ms = crl::now();
 
 	FileReadDescriptor mapData;
@@ -605,7 +618,9 @@ Account::ReadMapResult Account::readMapWith(
 	}
 
 	auto stored = readSessionSettings();
-	readMtpData();
+	if (!skipMtpData) {
+		readMtpData();
+	}
 
 	DEBUG_LOG(("selfSerialized set: %1").arg(selfSerialized.size()));
 	if (_owner) {
@@ -1071,24 +1086,6 @@ void Account::writeCustomServerBlocked(bool pinUnknown) {
 		writePref<bool>(kCustomServerPinnedPref, true);
 	}
 	writePrefs();
-}
-
-void Account::clearCustomServerBlocked() {
-	Expects(_localKey != nullptr);
-
-	// The user chose to forget which server this account uses. Only the
-	// the markers go: the account, its keys and its local history stay
-	// exactly as they are, because what failed here is a settings read,
-	// not anything the data itself did wrong.
-	_hasStoredCustomServer = false;
-	_customServerPinUnknown = false;
-	clearPref(kCustomServerPinnedPref);
-	clearPref(kCustomServerPinUnknownPref);
-	clearPref(kMtpAuthorizationWriteFailedPref);
-	_mtpAuthorizationWriteFailed = false;
-	if (!writePrefs(true) || !clearMtpAuthorizationFailureMarker()) {
-		LOG(("MTP Error: could not clear the authorization failure marker."));
-	}
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {

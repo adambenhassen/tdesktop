@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
 #include <QtCore/QSemaphore>
 #include <QtCore/QTemporaryDir>
@@ -877,7 +878,10 @@ TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
 		basePath,
 		key,
 		[] { return QByteArray(); },
-		[&](const QByteArray &value) { restored = value; });
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath);
 	restarted->readMtpAuthorizationFailureMarkerForTest();
 	CHECK(restarted->mtpAuthorizationWriteFailed());
 	restarted->readMtpDataForTest();
@@ -885,6 +889,152 @@ TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
 	CHECK(config != nullptr);
 	CHECK(config && config->hasCustomServer());
 	CHECK_EQ(restored, serialized);
+}
+
+TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto databasePath = directory.path() + u"database/"_q;
+	const auto cachePath = databasePath + u"cache"_q;
+	CHECK(QDir().mkpath(databasePath));
+	QFile cache(cachePath);
+	CHECK(cache.open(QIODevice::WriteOnly));
+	cache.write("cached-messages");
+	cache.close();
+
+	const auto key = MakeEnrollmentStorageKey();
+	const auto serialized = QByteArray("old-server-auth-key");
+	auto fingerprint = uint64(0);
+	{
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		fingerprint = config->dcOptions().customServer().key->fingerprint();
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[serialized] { return serialized; },
+			nullptr,
+			nullptr,
+			QString(),
+			databasePath);
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(account->writeMtpAuthorizationFailure());
+		CHECK(account->beginServerForget(Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = fingerprint,
+			.userIdKnown = true,
+			.userId = 4242,
+		}));
+		CHECK(!account->serverForgetPending());
+	}
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; });
+	const auto config = restarted->startServerForgetForTest(key);
+
+	CHECK(config == nullptr || !config->hasCustomServer());
+	CHECK(!restarted->hasStoredCustomServer());
+	CHECK(!restarted->mtpAuthorizationWriteFailed());
+	CHECK(restored.isEmpty());
+	CHECK(QFile::exists(cachePath));
+	const auto authorization = directory.path()
+		+ u"/tdata/"_q
+		+ Storage::details::ToFilePart(Storage::FileKey(0));
+	CHECK(!QFileInfo::exists(authorization + 's'));
+	CHECK(!QFileInfo::exists(authorization + '0'));
+	CHECK(!QFileInfo::exists(authorization + '1'));
+	CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
+		== Storage::ServerCacheBindingStatus::Match);
+	CHECK(restarted->checkServerCacheBinding(fingerprint, 5252)
+		== Storage::ServerCacheBindingStatus::Mismatch);
+	CHECK(restarted->checkServerCacheBinding(fingerprint ^ 1, 4242)
+		== Storage::ServerCacheBindingStatus::Mismatch);
+}
+
+TEST_CASE(ForgetServerTransitionReplaysAfterInterruption) {
+	for (const auto interruption : { 1, 2, 3, 4, 5, 6 }) {
+		QTemporaryDir directory;
+		CHECK(directory.isValid());
+
+		const auto previousWorkingDir = QDir::currentPath();
+		QDir::setCurrent(directory.path());
+		const auto restoreWorkingDir = gsl::finally([&] {
+			QDir::setCurrent(previousWorkingDir);
+		});
+
+		const auto basePath = directory.path() + u"account/"_q;
+		const auto databasePath = directory.path() + u"database/"_q;
+		const auto cachePath = databasePath + u"cache"_q;
+		CHECK(QDir().mkpath(databasePath));
+		QFile cache(cachePath);
+		CHECK(cache.open(QIODevice::WriteOnly));
+		cache.write("cached-messages");
+		cache.close();
+
+		const auto key = MakeEnrollmentStorageKey();
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		const auto fingerprint
+			= config->dcOptions().customServer().key->fingerprint();
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[] { return QByteArray("old-server-auth-key"); },
+			nullptr,
+			nullptr,
+			QString(),
+			databasePath);
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(account->writeMtpAuthorizationFailure());
+		account->setServerForgetInterruptionForTest(interruption);
+		CHECK(!account->beginServerForget(Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = fingerprint,
+			.userIdKnown = true,
+			.userId = 4242,
+		}));
+		CHECK(account->serverForgetPending());
+		account.reset();
+
+		auto restored = QByteArray();
+		auto restarted = MakeEnrollmentStorageAccount(
+			basePath,
+			key,
+			[] { return QByteArray(); },
+			[&](const QByteArray &value) { restored = value; },
+			nullptr,
+			QString(),
+			databasePath);
+		const auto blocked = restarted->startServerForgetForTest(key);
+
+		CHECK(blocked == nullptr);
+		CHECK(!restarted->serverForgetBlocked());
+		CHECK(!restarted->serverForgetPending());
+		CHECK(!restarted->hasStoredCustomServer());
+		CHECK(!restarted->mtpAuthorizationWriteFailed());
+		CHECK(restored.isEmpty());
+		CHECK(QFile::exists(cachePath));
+		CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
+			== Storage::ServerCacheBindingStatus::Match);
+	}
 }
 
 TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {
@@ -990,6 +1140,78 @@ TEST_CASE(EnrollmentStepConsumesSpaceOutsideConfirm) {
 	tab.ignore();
 	CHECK(!ConsumeServerEnrollmentActivationKey(tab));
 	CHECK(!tab.isAccepted());
+}
+
+TEST_CASE(RestoredSessionWithoutReadablePinMustBeBlocked) {
+	CHECK(Main::details::ShouldBlockRestoredSessionWithoutServerPin(
+		true,
+		false));
+	CHECK(!Main::details::ShouldBlockRestoredSessionWithoutServerPin(
+		true,
+		true));
+	CHECK(!Main::details::ShouldBlockRestoredSessionWithoutServerPin(
+		false,
+		false));
+}
+
+TEST_CASE(ForgetServerStorageFailureDoesNotRestartAndStaysBlocked) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto account = std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		config,
+		false,
+		[] { return QByteArray("old-server-auth-key"); });
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+	CHECK(account->writeMtpAuthorizationFailure());
+	config->dcOptions().constructBlocked();
+
+	const auto tombstone = directory.path()
+		+ u"/tdata/server_forget_"_q
+		+ Storage::details::ToFilePart(Storage::FileKey(0));
+	CHECK(QDir().mkpath(tombstone + u"s"_q));
+	CHECK(QDir().mkpath(tombstone + u"0"_q));
+
+	auto restarts = 0;
+	CHECK(!Main::details::CommitServerForget(
+		account.get(),
+		Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = MakeEnrollmentServerKey()->fingerprint(),
+			.userIdKnown = true,
+			.userId = 4242,
+		},
+		[&] { ++restarts; }));
+	CHECK_EQ(restarts, 0);
+	CHECK(config->dcOptions().blocked());
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; });
+	const auto blocked = restarted->startServerForgetForTest(key);
+	CHECK(blocked != nullptr);
+	CHECK(blocked && blocked->dcOptions().blocked());
+	CHECK(blocked && blocked->dcOptions().refusesProductionFallback());
+	CHECK(blocked && blocked->dcOptions().configEnumDcIds().empty());
+	CHECK(restarted->serverForgetBlocked());
+	CHECK(restarted->serverForgetPending());
+	CHECK(restored.isEmpty());
 }
 
 TEST_CASE(QueuedStopRunsOnlyForTheCurrentEnrollment) {

@@ -71,7 +71,8 @@ using namespace ::Intro::details;
 	const auto customServer = account->mtp().dcOptions().customServer();
 	return account->sessionExists()
 		|| (customServer.key
-			&& account->mtp().dcOptions().isAuthorized(customServer.dcId));
+			&& account->mtp().dcOptions().isAuthorized(customServer.dcId)
+			&& account->mtp().isServerEnrollmentNetworkAllowed());
 }
 
 } // namespace
@@ -129,6 +130,11 @@ Widget::Widget(
 
 	setupStep();
 	fixOrder();
+
+	_account->serverCacheBindingMismatch(
+	) | rpl::on_next([=] {
+		showServerCacheBindingMismatch();
+	}, lifetime());
 
 	if (_account->mtp().isTestMode()) {
 		_testModeLabel.create(
@@ -194,6 +200,9 @@ Widget::Widget(
 	showControls();
 	getStep()->showFast();
 	setInnerFocus();
+	if (_account->serverCacheBindingMismatchPending()) {
+		showServerCacheBindingMismatch();
+	}
 
 	// Do not let the update checker become an unrelated first network
 	// operation while this account is waiting for enrollment confirmation.
@@ -630,37 +639,16 @@ void Widget::showTerms(Fn<void()> callback) {
 	}, box->lifetime());
 }
 
-void ShowServerIdentityChange(
+void ShowServerReenrollmentPrompt(
 		not_null<Main::Account*> account,
-		const MTP::PinnedServerFailureReport &report,
+		QString warningTitle,
+		QString warningText,
 		std::shared_ptr<Ui::Show> show,
 		Fn<void()> resetDialog,
 		Fn<void()> failed) {
 	if (!show) {
 		resetDialog();
 		return;
-	}
-
-	const auto pinned = QString::number(
-		qint64(report.pinnedFingerprint));
-	const auto presented = QString::number(
-		qint64(report.presentedFingerprint));
-	auto text = tr::lng_intro_server_identity_changed(
-		tr::now,
-		lt_pinned_fingerprint,
-		pinned,
-		lt_presented_fingerprint,
-		presented);
-	if (!report.pinnedHostname.isEmpty()
-		|| !report.dialledAddress.isEmpty()) {
-		text.append(u"\n\nPinned hostname: "_q)
-			.append(report.pinnedHostname.isEmpty()
-				? u"unknown"_q
-				: report.pinnedHostname)
-			.append(u"\nDialled address: "_q)
-			.append(report.dialledAddress.isEmpty()
-				? u"unknown"_q
-				: report.dialledAddress);
 	}
 
 	const auto weakAccount = base::make_weak(account);
@@ -711,7 +699,7 @@ void ShowServerIdentityChange(
 	// Use hand-built boxes so Enter and Return cannot accept the destructive
 	// account wipe that appeared without the user aiming at its button.
 	show->show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(tr::lng_intro_server_identity_title(tr::now));
+		box->setTitle(warningTitle);
 		box->setCloseByEscape(false);
 		box->setCloseByOutsideClick(false);
 		box->boxClosing() | rpl::on_next([=] {
@@ -722,7 +710,7 @@ void ShowServerIdentityChange(
 		box->addRow(
 			object_ptr<Ui::FlatLabel>(
 				box.get(),
-				text,
+				warningText,
 				st::boxLabel),
 			st::boxPadding);
 		box->addButton(
@@ -747,19 +735,67 @@ void ShowServerIdentityChange(
 
 void Widget::showServerIdentityChange(
 		const MTP::PinnedServerFailureReport &report) {
-	if (_serverIdentityDialogShown) {
+	if (_serverReenrollmentDialogShown) {
 		return;
 	}
-	_serverIdentityDialogShown = true;
+	_serverReenrollmentDialogShown = true;
+
+	const auto pinned = QString::number(
+		qint64(report.pinnedFingerprint));
+	const auto presented = QString::number(
+		qint64(report.presentedFingerprint));
+	auto text = tr::lng_intro_server_identity_changed(
+		tr::now,
+		lt_pinned_fingerprint,
+		pinned,
+		lt_presented_fingerprint,
+		presented);
+	if (!report.pinnedHostname.isEmpty()
+		|| !report.dialledAddress.isEmpty()) {
+		text.append(u"\n\nPinned hostname: "_q)
+			.append(report.pinnedHostname.isEmpty()
+				? u"unknown"_q
+				: report.pinnedHostname)
+			.append(u"\nDialled address: "_q)
+			.append(report.dialledAddress.isEmpty()
+				? u"unknown"_q
+				: report.dialledAddress);
+	}
 
 	const auto weak = base::make_weak(this);
-	ShowServerIdentityChange(
+	ShowServerReenrollmentPrompt(
 		_account,
-		report,
+		tr::lng_intro_server_identity_title(tr::now),
+		text,
 		_data.controller->uiShow(),
 		[weak] {
 			if (weak) {
-				weak->_serverIdentityDialogShown = false;
+				weak->_serverReenrollmentDialogShown = false;
+			}
+		},
+		[weak] {
+			if (weak) {
+				weak->getStep()->showError(
+					tr::lng_intro_server_reenrollment_failed());
+			}
+		});
+}
+
+void Widget::showServerCacheBindingMismatch() {
+	if (_serverReenrollmentDialogShown) {
+		return;
+	}
+	_serverReenrollmentDialogShown = true;
+
+	const auto weak = base::make_weak(this);
+	ShowServerReenrollmentPrompt(
+		_account,
+		tr::lng_intro_server_cache_binding_title(tr::now),
+		tr::lng_intro_server_cache_binding_changed(tr::now),
+		_data.controller->uiShow(),
+		[weak] {
+			if (weak) {
+				weak->_serverReenrollmentDialogShown = false;
 			}
 		},
 		[weak] {

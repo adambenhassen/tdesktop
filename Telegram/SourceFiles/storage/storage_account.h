@@ -48,6 +48,19 @@ using FileKey = quint64;
 
 enum class StartResult : uchar;
 
+struct ServerCacheBinding {
+	bool fingerprintKnown = false;
+	uint64 fingerprint = 0;
+	bool userIdKnown = false;
+	uint64 userId = 0;
+};
+
+enum class ServerCacheBindingStatus {
+	None,
+	Match,
+	Mismatch,
+};
+
 struct MessageDraft {
 	FullReplyTo reply;
 	SuggestOptions suggest;
@@ -108,15 +121,21 @@ public:
 	[[nodiscard]] bool mtpAuthorizationWriteFailed() const {
 		return _mtpAuthorizationWriteFailed;
 	}
+	[[nodiscard]] bool serverForgetBlocked() const {
+		return _serverForgetBlocked;
+	}
 	// Persist the reason an account had to be blocked, so the block
 	// survives a restart on its own: the blocked config is never
 	// written back, and the prefs that failed to read are deleted.
 	void writeCustomServerBlocked(bool pinUnknown);
-	// Forget which server this account uses, on the user's explicit
-	// choice. Clears the markers and nothing else — the block is
-	// otherwise terminal, since only a config write clears them and a
-	// blocked account never performs one.
-	void clearCustomServerBlocked();
+	// Forget which server this account uses, on the user's explicit choice,
+	// while leaving its cached messages in place.
+	[[nodiscard]] bool beginServerForget(ServerCacheBinding binding);
+	[[nodiscard]] bool serverForgetPending() const;
+	[[nodiscard]] bool ensureServerCacheBinding(ServerCacheBinding binding);
+	[[nodiscard]] ServerCacheBindingStatus checkServerCacheBinding(
+		uint64 fingerprint,
+		uint64 userId) const;
 
 	void writeSessionSettings();
 	// The durable authorization boundary used by post-auth and clean teardown.
@@ -140,7 +159,10 @@ public:
 	void readMtpAuthorizationFailureMarkerForTest();
 	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollmentForTest(
 		MTP::AuthKeyPtr localKey);
+	[[nodiscard]] std::unique_ptr<MTP::Config> startServerForgetForTest(
+		MTP::AuthKeyPtr localKey);
 	void setServerReenrollmentInterruptionForTest(int point);
+	void setServerForgetInterruptionForTest(int point);
 #endif
 
 	void registerDraftSource(
@@ -296,7 +318,8 @@ private:
 
 	ReadMapResult readMapWith(
 		MTP::AuthKeyPtr localKey,
-		const QByteArray &legacyPasscode = QByteArray());
+		const QByteArray &legacyPasscode = QByteArray(),
+		bool skipMtpData = false);
 	void clearLegacyFiles();
 	void writeMapDelayed();
 	void writeMapQueued();
@@ -318,6 +341,8 @@ private:
 	void readMtpData();
 	void readMtpAuthorizationFailureMarker();
 	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollment();
+	[[nodiscard]] bool completeServerForget();
+	[[nodiscard]] std::optional<ServerCacheBinding> readServerCacheBinding() const;
 	bool clearMtpAuthorizationFailureMarker();
 	// Read the persisted pin marker before readMtpConfig(), so that a
 	// corrupted or truncated config blob on a pinned account still
@@ -384,6 +409,7 @@ private:
 	bool _hasStoredCustomServer = false;
 	bool _customServerPinUnknown = false;
 	bool _mtpAuthorizationWriteFailed = false;
+	bool _serverForgetBlocked = false;
 
 	base::flat_map<PeerId, FileKey> _draftsMap;
 	base::flat_map<PeerId, FileKey> _draftCursorsMap;
@@ -406,6 +432,7 @@ private:
 #ifdef TDESKTOP_UNIT_TESTS
 	Fn<bool()> _writeMtpAuthorizationOverride;
 	int _serverReenrollmentInterruptionForTest = 0;
+	int _serverForgetInterruptionForTest = 0;
 #endif
 	Fn<QByteArray()> _serializeSelf;
 	Fn<void()> _queueMapWrite;

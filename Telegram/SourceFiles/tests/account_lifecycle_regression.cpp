@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "main/main_account.h"
+#include "main/main_account_persistence.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
@@ -424,10 +425,6 @@ RegressionServerKey() {
 		return 1;
 	}
 
-	// Clear the post-auth marker while the real Main::Account is still alive.
-	// Its destructor must then recreate the marker through the clean-teardown
-	// caller, leaving the same account fail closed on the next start.
-	account->local().clearCustomServerBlocked();
 	domain.local().writeAccounts();
 	domain.finish();
 	if (domain.start(QByteArray()) != Storage::StartResult::Success) {
@@ -437,6 +434,56 @@ RegressionServerKey() {
 	const auto blocked = FindAuthorizationBlockedAccount(domain);
 	if (!blocked || !blocked->mtp().config().blocked()) {
 		return 1;
+	}
+	const auto restarted = Main::details::CommitServerForget(
+		&blocked->local(),
+		Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = RegressionServerKey()->fingerprint(),
+			.userIdKnown = true,
+			.userId = 4242,
+		},
+		[] {});
+	if (!restarted
+		|| blocked->local().hasStoredCustomServer()
+		|| blocked->local().mtpAuthorizationWriteFailed()) {
+		return 1;
+	}
+
+	domain.local().writeAccounts();
+	domain.finish();
+	if (domain.start(QByteArray()) != Storage::StartResult::Success) {
+		return 1;
+	}
+	if (domain.accounts().empty()) {
+		return 1;
+	}
+	const auto forgotten = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!forgotten->mtp().dcOptions().unenrolled()
+		|| forgotten->mtp().dcOptions().blocked()
+		|| forgotten->local().hasStoredCustomServer()
+		|| forgotten->local().mtpAuthorizationWriteFailed()
+		|| forgotten->willHaveSessionUniqueId(nullptr) != 0
+		|| !forgotten->mtp().dcOptions().configEnumDcIds().empty()) {
+		return 1;
+	}
+	auto pausedFailures = 0;
+	{
+		auto sender = MTP::Sender(&forgotten->mtp());
+		const auto requestId = sender.request(MTPupdates_GetState(
+		)).fail([&](const MTP::Error &error) {
+			if (MTP::IsServerEnrollmentPausedError(error)) {
+				++pausedFailures;
+			}
+		}).send();
+		if (!sender.pending(requestId)) {
+			return 1;
+		}
+		QCoreApplication::processEvents();
+		if (sender.pending(requestId) || pausedFailures != 1) {
+			return 1;
+		}
 	}
 	qunsetenv(failureVariable.constData());
 	return StartChatParticipantsRegression(domain, std::move(done));
