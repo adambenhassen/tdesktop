@@ -268,15 +268,23 @@ bool InitializeProfile() {
 		return false;
 	}
 
+	const auto appSandboxed = AppSandboxed();
+	const auto ipcDirectory
+		= appSandboxed ? QString::fromUtf8(homes.foundation) + u"/tmp"_q
+					   : u"/tmp"_q;
 	cForceWorkingDir(profilePath + '/');
 	{
 		QMutexLocker lock(&state.mutex);
-		state.ipcDirectory
-			= AppSandboxed() ? QString::fromUtf8(homes.foundation) + u"/tmp"_q
-							 : u"/tmp"_q;
+		state.ipcDirectory = ipcDirectory;
 		state.profile = cWorkingDir();
 		state.policy = std::make_shared<MacProtectedPathPolicy>(policy);
 		state.ready = true;
+	}
+	if (IntegrationTestActive()) {
+		const auto path = ipcDirectory.toUtf8();
+		fprintf(stderr, "Mac profile IPC selected: variant=%s directory=%s\n",
+				appSandboxed ? "build_macstore" : "non-store",
+				path.constData());
 	}
 	return true;
 }

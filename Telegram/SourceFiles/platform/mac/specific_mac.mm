@@ -123,7 +123,10 @@ QString SingleInstanceLocalServerName(const QString &hash) {
 #ifndef OS_MAC_STORE
 		return u"/tmp/"_q + hash + '-' + cGUIDStr();
 #else // OS_MAC_STORE
-		return objc_documentsPath() + hash.left(4);
+		const auto directory = Core::MacProtectedPath::IpcDirectory();
+		return directory.isEmpty()
+				   ? QString()
+				   : directory + u"/Telegramd-"_q + hash.left(16);
 #endif // OS_MAC_STORE
 	}
 	return Core::MacProtectedPath::IpcDirectory() + u"/Telegramd-"_q
