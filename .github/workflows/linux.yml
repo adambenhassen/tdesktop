@@ -26,24 +26,6 @@ on:
       - 'Telegram/configure.bat'
       - 'Telegram/Telegram.plist'
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'changelog.txt'
-      - 'LEGAL'
-      - 'LICENSE'
-      - '.github/**'
-      - '!.github/workflows/linux.yml'
-      - 'snap/**'
-      - 'Telegram/build/**'
-      - '!Telegram/build/docker/centos_env/**'
-      - 'Telegram/Resources/uwp/**'
-      - 'Telegram/Resources/winrc/**'
-      - 'Telegram/SourceFiles/platform/win/**'
-      - 'Telegram/SourceFiles/platform/mac/**'
-      - 'Telegram/Telegram/**'
-      - 'Telegram/configure.bat'
-      - 'Telegram/Telegram.plist'
   # Keeps the default branch holding a live ccache for feature branches to restore
   # from, instead of leaving it to whenever someone last pushed to it. The restore
   # refreshes the entry's 7-day expiry; the save below only fires when the build
@@ -61,8 +43,63 @@ concurrency:
 
 jobs:
 
-  linux:
-    name: Rocky Linux 8
+  linux-changes:
+    name: Detect Linux changes
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.filter.outputs.required }}
+
+    steps:
+      - name: Clone pull request merge commit.
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Detect Linux-relevant changes.
+        id: filter
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ "$(git rev-parse HEAD^1)" != "${BASE_SHA}" ]]; then
+            echo "::error::The checked-out pull request merge commit does not have the expected base as its first parent."
+            exit 1
+          fi
+
+          required=false
+          while IFS= read -r path; do
+            case "${path}" in
+              .github/workflows/linux.yml|Telegram/build/docker/centos_env/*)
+                required=true
+                break
+                ;;
+              docs/*|*.md|changelog.txt|LEGAL|LICENSE|.github/*|snap/*|Telegram/build/*|Telegram/Resources/uwp/*|Telegram/Resources/winrc/*|Telegram/SourceFiles/platform/win/*|Telegram/SourceFiles/platform/mac/*|Telegram/Telegram/*|Telegram/configure.bat|Telegram/Telegram.plist)
+                ;;
+              *)
+                required=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")
+
+          echo "required=${required}" >> "${GITHUB_OUTPUT}"
+          if [[ "${required}" == "false" ]]; then
+            echo "No Linux-relevant files changed; the Rocky Linux 8 build will be skipped."
+          fi
+
+  linux-build:
+    name: Linux build and unit tests
+    needs: linux-changes
+    if: needs.linux-changes.outputs.required == 'true'
     runs-on: ubuntu-latest
 
     strategy:
@@ -352,3 +389,43 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: out/Debug/artifact/
+
+  linux:
+    name: Rocky Linux 8
+    needs:
+      - linux-changes
+      - linux-build
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Report Rocky Linux 8 result.
+        shell: bash
+        env:
+          CHANGE_RESULT: ${{ needs.linux-changes.result }}
+          BUILD_REQUIRED: ${{ needs.linux-changes.outputs.required }}
+          BUILD_RESULT: ${{ needs.linux-build.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${CHANGE_RESULT}" != "success" ]]; then
+            echo "::error::Unable to determine whether the Linux build is required."
+            exit 1
+          fi
+
+          case "${BUILD_REQUIRED}" in
+            false)
+              echo "No Linux-relevant files changed; Rocky Linux 8 check passed without a build."
+              ;;
+            true)
+              if [[ "${BUILD_RESULT}" != "success" ]]; then
+                echo "::error::Linux build and unit tests did not succeed (result: ${BUILD_RESULT})."
+                exit 1
+              fi
+              echo "Rocky Linux 8 build and unit tests passed."
+              ;;
+            *)
+              echo "::error::Linux build requirement was not reported."
+              exit 1
+              ;;
+          esac
