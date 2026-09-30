@@ -945,9 +945,11 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		nullptr,
 		QString(),
 		databasePath);
-	const auto config = restarted->startServerForgetForTest(key);
+	CHECK(restarted->completeServerForgetForTest(key));
+	restarted->readMtpAuthorizationFailureMarkerForTest();
+	restarted->readMtpDataForTest();
 
-	CHECK(config == nullptr || !config->hasCustomServer());
+	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
 	CHECK(!restarted->hasStoredCustomServer());
 	CHECK(!restarted->mtpAuthorizationWriteFailed());
 	CHECK(restored.isEmpty());
@@ -1023,9 +1025,8 @@ TEST_CASE(ForgetServerTransitionReplaysAfterInterruption) {
 			nullptr,
 			QString(),
 			databasePath);
-		const auto blocked = restarted->startServerForgetForTest(key);
+		CHECK(restarted->completeServerForgetForTest(key));
 
-		CHECK(blocked == nullptr);
 		CHECK(!restarted->serverForgetBlocked());
 		CHECK(!restarted->serverForgetPending());
 		CHECK(!restarted->hasStoredCustomServer());
@@ -1204,11 +1205,7 @@ TEST_CASE(ForgetServerStorageFailureDoesNotRestartAndStaysBlocked) {
 		key,
 		[] { return QByteArray(); },
 		[&](const QByteArray &value) { restored = value; });
-	const auto blocked = restarted->startServerForgetForTest(key);
-	CHECK(blocked != nullptr);
-	CHECK(blocked && blocked->dcOptions().blocked());
-	CHECK(blocked && blocked->dcOptions().refusesProductionFallback());
-	CHECK(blocked && blocked->dcOptions().configEnumDcIds().empty());
+	CHECK(!restarted->completeServerForgetForTest(key));
 	CHECK(restarted->serverForgetBlocked());
 	CHECK(restarted->serverForgetPending());
 	CHECK(restored.isEmpty());

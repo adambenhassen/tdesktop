@@ -159,7 +159,7 @@ public:
 	void readMtpAuthorizationFailureMarkerForTest();
 	[[nodiscard]] std::unique_ptr<MTP::Config> startServerReenrollmentForTest(
 		MTP::AuthKeyPtr localKey);
-	[[nodiscard]] std::unique_ptr<MTP::Config> startServerForgetForTest(
+	[[nodiscard]] bool completeServerForgetForTest(
 		MTP::AuthKeyPtr localKey);
 	void setServerReenrollmentInterruptionForTest(int point);
 	void setServerForgetInterruptionForTest(int point);

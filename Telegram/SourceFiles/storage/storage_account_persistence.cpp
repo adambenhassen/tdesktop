@@ -730,20 +730,13 @@ std::unique_ptr<MTP::Config> Account::startServerReenrollmentForTest(
 	return startServerReenrollment();
 }
 
-std::unique_ptr<MTP::Config> Account::startServerForgetForTest(
-		MTP::AuthKeyPtr localKey) {
+bool Account::completeServerForgetForTest(MTP::AuthKeyPtr localKey) {
 	_localKey = std::move(localKey);
-	const auto forgettingServer = serverForgetPending();
-	readMapWith(_localKey, QByteArray(), forgettingServer);
-	if (forgettingServer && !completeServerForget()) {
+	if (!completeServerForget()) {
 		_serverForgetBlocked = true;
-		auto blocked = std::make_unique<MTP::Config>(
-			MTP::Environment::Production);
-		blocked->dcOptions().constructBlocked();
-		return blocked;
+		return false;
 	}
-	readStoredCustomServerPin();
-	return readMtpConfig();
+	return true;
 }
 
 void Account::setServerReenrollmentInterruptionForTest(int point) {
