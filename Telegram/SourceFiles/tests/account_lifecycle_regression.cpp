@@ -355,6 +355,7 @@ int RunAccountLifecycleRegression() {
 	if (!blocked || !blocked->mtp().config().blocked()) {
 		return 1;
 	}
+	qunsetenv(failureVariable.constData());
 	return RunChatParticipantsRegression(domain);
 }
 
