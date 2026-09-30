@@ -878,10 +878,7 @@ TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
 		basePath,
 		key,
 		[] { return QByteArray(); },
-		[&](const QByteArray &value) { restored = value; },
-		nullptr,
-		QString(),
-		databasePath);
+		[&](const QByteArray &value) { restored = value; });
 	restarted->readMtpAuthorizationFailureMarkerForTest();
 	CHECK(restarted->mtpAuthorizationWriteFailed());
 	restarted->readMtpDataForTest();
@@ -944,7 +941,10 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		basePath,
 		key,
 		[] { return QByteArray(); },
-		[&](const QByteArray &value) { restored = value; });
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath);
 	const auto config = restarted->startServerForgetForTest(key);
 
 	CHECK(config == nullptr || !config->hasCustomServer());
