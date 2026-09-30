@@ -14,6 +14,7 @@ fi
 
 APP="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
 MODE=non-store
+TEST_TMP_BASE="${TDESKTOP_MAC_PROFILE_TEST_TMP_BASE:-/tmp}"
 if [[ $# -eq 2 ]]; then
 	MODE="$2"
 fi
@@ -24,7 +25,7 @@ fi
 case "$MODE" in
 non-store)
 	IPC_DIRECTORY="/tmp"
-	TEST_HOME="$(mktemp -d "/tmp/telegramd-profile-test.XXXXXX")"
+	TEST_HOME="$(mktemp -d "$TEST_TMP_BASE/telegramd-profile-test.XXXXXX")"
 	;;
 build_macstore)
 	STORE_DATA="$HOME/Library/Containers/com.adambenhassen.telegramd/Data"
@@ -38,6 +39,7 @@ build_macstore)
 	;;
 esac
 TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
+mkdir -p "$IPC_DIRECTORY"
 
 PROFILE="$TEST_HOME/Library/Application Support/Telegramd"
 HOSTILE_HOME="$TEST_HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram"
@@ -49,11 +51,17 @@ SOCKET_PATH="$IPC_DIRECTORY/Telegramd-$SOCKET_SUFFIX"
 FIRST_PID=""
 
 cleanup() {
+	local status=$?
 	if [[ -n "$FIRST_PID" ]] && kill -0 "$FIRST_PID" 2>/dev/null; then
 		kill -TERM "$FIRST_PID" 2>/dev/null || true
 		wait "$FIRST_PID" 2>/dev/null || true
 	fi
-	rm -rf "$TEST_HOME"
+	if [[ "$status" -eq 0 ]]; then
+		rm -rf "$TEST_HOME"
+	else
+		printf 'Preserving failed synthetic profile state at %s\n' "$TEST_HOME" >&2
+	fi
+	return "$status"
 }
 trap cleanup EXIT
 
@@ -72,12 +80,26 @@ if ! rg -F -q "class=group-container callsite=profile.home" "$REFUSAL_LOG"; then
 	cat "$REFUSAL_LOG" >&2
 	exit 1
 fi
+if rg -F -q "Working dir: $PROFILE/" "$REFUSAL_LOG" \
+	|| rg -F -q "Connecting local socket to $SOCKET_PATH" "$REFUSAL_LOG"; then
+	echo "profile refusal occurred after profile or socket startup began." >&2
+	cat "$REFUSAL_LOG" >&2
+	exit 1
+fi
+if find "$IPC_DIRECTORY" -maxdepth 1 -name "Telegramd-lock-$LOCK_SUFFIX*" -print -quit | rg -q .; then
+	echo "profile refusal created or found an IPC lock." >&2
+	exit 1
+fi
+if [[ -S "$SOCKET_PATH" ]]; then
+	echo "profile refusal created an IPC socket." >&2
+	exit 1
+fi
 if [[ -e "$PROFILE" || -e "$HOSTILE_HOME" ]]; then
 	echo "hostile profile initialization created a profile or protected path." >&2
 	exit 1
 fi
 
-env HOME="$TEST_HOME" TMPDIR="$HOSTILE_HOME" TDESKTOP_MAC_PROFILE_TEST_HOME="$TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" >"$START_LOG" 2>&1 &
+env HOME="$TEST_HOME" TMPDIR="$TEST_TMP_BASE" TDESKTOP_MAC_PROFILE_TEST_HOME="$TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" >"$START_LOG" 2>&1 &
 FIRST_PID=$!
 
 READY=false
@@ -108,7 +130,7 @@ if [[ "$READY" != true ]]; then
 fi
 
 set +e
-env HOME="$TEST_HOME" TMPDIR="$HOSTILE_HOME" TDESKTOP_MAC_PROFILE_TEST_HOME="$TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" -quit >"$TEST_HOME/quit.log" 2>&1
+env HOME="$TEST_HOME" TMPDIR="$TEST_TMP_BASE" TDESKTOP_MAC_PROFILE_TEST_HOME="$TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" -quit >"$TEST_HOME/quit.log" 2>&1
 QUIT_STATUS=$?
 set -e
 if [[ "$QUIT_STATUS" -ne 0 ]]; then
