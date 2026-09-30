@@ -12,7 +12,7 @@ if [[ "$(git rev-parse HEAD^1)" != "${BASE_SHA}" ]]; then
 fi
 
 required=false
-if ! changed_paths="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")"; then
+if ! changed_paths="$(git diff --name-only --no-renames "${BASE_SHA}" "${GITHUB_SHA}")"; then
   echo "::error::Unable to determine changed files for the pull request."
   exit 1
 fi
