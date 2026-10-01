@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "core/application.h"
+#include "crl/crl_on_main.h"
 #include "data/data_chat.h"
 #include "data/data_peer_id.h"
 #include "data/data_session.h"
@@ -204,7 +205,9 @@ RegressionServerKey() {
 	return 1;
 }
 
-[[nodiscard]] int RunChatParticipantsRegression(Main::Domain &domain) {
+[[nodiscard]] int StartChatParticipantsRegression(
+		Main::Domain &domain,
+		Fn<void(int)> done) {
 	if (domain.accounts().size() > Main::Domain::kPremiumMaxAccounts - 2) {
 		return FailChatParticipantsRegression(
 			"not enough account slots for isolated stock and pinned sessions");
@@ -309,39 +312,42 @@ RegressionServerKey() {
 	}
 	pinned->mtp().stopForServerEnrollment();
 
-	const auto migrationDone = std::make_shared<bool>(false);
-	const auto migrationFailed = std::make_shared<bool>(false);
-	const auto migrationError = std::make_shared<QString>();
+	struct MigrationResult {
+		int done = 0;
+		int failed = 0;
+		QString error;
+	};
+	const auto migration = std::make_shared<MigrationResult>();
 	pinned->session().api().migrateChat(
 		pinnedActionChat,
-		[migrationDone](not_null<ChannelData*>) {
-			*migrationDone = true;
+		[migration](not_null<ChannelData*>) {
+			++migration->done;
 		},
-		[migrationFailed, migrationError](const QString &error) {
-			*migrationFailed = true;
-			*migrationError = error;
+		[migration](const QString &error) {
+			++migration->failed;
+			migration->error = error;
 		});
-	QCoreApplication::processEvents();
-	if (*migrationDone
-		|| !*migrationFailed
-		|| *migrationError != u"CLIENT_BAD_MIGRATION"_q) {
-		const auto error = migrationError->toUtf8();
+	crl::on_main([=] {
 		std::fprintf(
 			stderr,
 			"Pinned migration regression: done=%d failed=%d error=%s\n",
-			*migrationDone ? 1 : 0,
-			*migrationFailed ? 1 : 0,
-			error.constData());
-		return FailChatParticipantsRegression(
-			"pinned basic-group migration was not rejected locally");
-	}
-	std::fprintf(stderr, "Chat participants regression passed.\n");
+			migration->done,
+			migration->failed,
+			migration->error.toUtf8().constData());
+		if (migration->done != 0
+			|| migration->failed != 1
+			|| migration->error != u"CLIENT_BAD_MIGRATION"_q) {
+			done(FailChatParticipantsRegression(
+				"pinned basic-group migration was not rejected locally"));
+			return;
+		}
+		std::fprintf(stderr, "Chat participants regression passed.\n");
+		done(0);
+	});
 	return 0;
 }
 
-} // namespace
-
-int RunAccountLifecycleRegression() {
+[[nodiscard]] int StartAccountLifecycleRegression(Fn<void(int)> done) {
 	const auto failureVariable = QByteArray(
 		"TDESKTOP_FAIL_MTP_AUTHORIZATION_WRITE");
 	const auto failWrites = gsl::finally([&] {
@@ -433,7 +439,15 @@ int RunAccountLifecycleRegression() {
 		return 1;
 	}
 	qunsetenv(failureVariable.constData());
-	return RunChatParticipantsRegression(domain);
+	return StartChatParticipantsRegression(domain, std::move(done));
+}
+
+} // namespace
+
+void RunAccountLifecycleRegression(Fn<void(int)> done) {
+	if (const auto result = StartAccountLifecycleRegression(done)) {
+		done(result);
+	}
 }
 
 } // namespace Tests

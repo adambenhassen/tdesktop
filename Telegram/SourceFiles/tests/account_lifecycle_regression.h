@@ -7,8 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/basic_types.h"
+
 namespace Tests {
 
-[[nodiscard]] int RunAccountLifecycleRegression();
+void RunAccountLifecycleRegression(Fn<void(int)> done);
 
 } // namespace Tests
