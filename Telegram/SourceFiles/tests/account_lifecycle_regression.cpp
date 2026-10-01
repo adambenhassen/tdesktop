@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/sender.h"
+#include "storage/details/storage_file_utilities.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
@@ -151,6 +152,7 @@ RegressionOtherServerKey() {
 [[nodiscard]] bool RestartDomain(Main::Domain &domain) {
 	domain.local().writeAccounts();
 	domain.finish();
+	Storage::details::Sync();
 	return (domain.start(QByteArray()) == Storage::StartResult::Success)
 		&& !domain.accounts().empty();
 }
@@ -874,6 +876,7 @@ template <typename Result, typename Start>
 		return FailAccountLifecycleRegression(
 			"blocked account teardown attempted an authorization or marker write");
 	}
+	Storage::details::Sync();
 	if ((domain.start(QByteArray()) != Storage::StartResult::Success)
 		|| domain.accounts().empty()) {
 		return FailAccountLifecycleRegression(
@@ -994,6 +997,8 @@ template <typename Result, typename Start>
 	if (!unenrolled->mtp().dcOptions().unenrolled()
 		|| unenrolled->local().mtpAuthorizationWriteFailed()
 		|| !HasNoAuthorizationState(unenrolled)
+		|| unenrolled->local().hasStoredCustomServer()
+		|| unenrolled->local().customServerPinUnknown()
 		|| unenrolled->local().checkServerCacheBinding(
 			originalFingerprint,
 			4242) != Storage::ServerCacheBindingStatus::None) {
@@ -1051,6 +1056,7 @@ template <typename Result, typename Start>
 		return FailAccountLifecycleRegression(
 			"blocked account teardown attempted an authorization or marker write");
 	}
+	Storage::details::Sync();
 	if ((domain.start(QByteArray()) != Storage::StartResult::Success)
 		|| domain.accounts().empty()) {
 		return FailAccountLifecycleRegression(
