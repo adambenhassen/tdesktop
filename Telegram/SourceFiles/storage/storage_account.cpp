@@ -48,7 +48,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/themes/window_theme.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDebug>
 #include <QtCore/QMetaObject>
+#include <QtCore/QThread>
 
 namespace Storage {
 namespace {
@@ -1110,6 +1112,95 @@ void Account::writeCustomServerBlocked(bool pinUnknown) {
 	}
 	writePrefs();
 }
+
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+bool Account::flushAndVerifyPinPrefsForRegressionTest(
+		bool expectedPinned) {
+	if (qEnvironmentVariable(
+			"TDESKTOP_AUTH_STARTUP_REGRESSION_HANG") == "storage") {
+		qCritical().noquote()
+			<< "Auth startup regression sensitivity:"
+			<< "synchronous storage hang";
+		for (;;) {
+			QThread::sleep(1);
+		}
+	}
+	if (!writePrefs(true)) {
+		return false;
+	}
+	details::Sync();
+
+	FileReadDescriptor mapFile;
+	if (!ReadFile(mapFile, u"map"_q, _basePath)) {
+		return false;
+	}
+	QByteArray legacySalt, legacyKey, encryptedMap;
+	mapFile.stream >> legacySalt >> legacyKey >> encryptedMap;
+	if (!CheckStreamStatus(mapFile.stream)) {
+		return false;
+	}
+	EncryptedDescriptor map;
+	if (!DecryptLocal(map, encryptedMap, _localKey)) {
+		return false;
+	}
+	if (map.stream.atEnd()) {
+		return CheckStreamStatus(map.stream)
+			&& !expectedPinned
+			&& !_prefsKey;
+	}
+	quint32 keyType = 0;
+	FileKey prefsKey = 0;
+	map.stream >> keyType >> prefsKey;
+	if (!CheckStreamStatus(map.stream)
+		|| !map.stream.atEnd()
+		|| (keyType != lskPrefs)
+		|| (prefsKey != _prefsKey)
+		|| !prefsKey) {
+		return false;
+	}
+	if (!expectedPinned) {
+		return false;
+	}
+
+	FileReadDescriptor prefs;
+	if (!ReadEncryptedFile(prefs, prefsKey, _basePath, _localKey)) {
+		return false;
+	}
+	quint32 count = 0;
+	prefs.stream >> count;
+	if (!CheckStreamStatus(prefs.stream) || (count > 32)) {
+		return false;
+	}
+	auto pinned = false;
+	auto pinUnknown = false;
+	for (auto i = quint32(); i != count; ++i) {
+		quint32 keySize = 0;
+		quint32 valueSize = 0;
+		prefs.stream >> keySize >> valueSize;
+		if (!CheckStreamStatus(prefs.stream)
+			|| (keySize > 256)
+			|| (valueSize > 256)) {
+			return false;
+		}
+		auto key = QByteArray(keySize, Qt::Uninitialized);
+		auto value = QByteArray(valueSize, Qt::Uninitialized);
+		if ((prefs.stream.readRawData(key.data(), keySize) != int(keySize))
+			|| (prefs.stream.readRawData(value.data(), valueSize)
+				!= int(valueSize))) {
+			return false;
+		}
+		if (key == "mtp_custom_server_pinned") {
+			pinned = !value.isEmpty();
+		} else if (key == "mtp_custom_server_unknown") {
+			pinUnknown = !value.isEmpty();
+		}
+	}
+	return CheckStreamStatus(prefs.stream)
+		&& prefs.stream.atEnd()
+		&& (pinned == expectedPinned)
+		&& !pinUnknown;
+}
+#endif
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
 	Expects(_localKey != nullptr);

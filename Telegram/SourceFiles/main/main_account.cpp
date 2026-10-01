@@ -211,7 +211,9 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		_sessionUserId.bare,
 		int(_mtpFields.keys.size()),
 		_local->hasStoredCustomServer(),
-		_local->customServerPinUnknown());
+		_local->customServerPinUnknown(),
+		bool(config),
+		config && config->hasCustomServer());
 #endif
 	_appConfig = std::make_unique<AppConfig>(this);
 

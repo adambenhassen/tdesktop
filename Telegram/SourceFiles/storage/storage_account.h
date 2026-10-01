@@ -170,6 +170,8 @@ public:
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
 	[[nodiscard]] bool mtpAuthorizationDataExistsForRegressionTest() const;
 	[[nodiscard]] bool removePrefsForRegressionTest();
+	[[nodiscard]] bool flushAndVerifyPinPrefsForRegressionTest(
+		bool expectedPinned);
 #endif
 
 	void registerDraftSource(

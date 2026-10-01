@@ -101,6 +101,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDebug>
 #include <QtCore/QMimeDatabase>
 #include <QtCore/QStandardPaths>
+#include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
@@ -265,6 +266,17 @@ Application::~Application() {
 	style::StopManager();
 
 	Instance = nullptr;
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	if (qEnvironmentVariableIsSet(
+			"TDESKTOP_AUTH_STARTUP_REGRESSION")
+		&& (qEnvironmentVariable(
+			"TDESKTOP_AUTH_STARTUP_REGRESSION_HANG") == "teardown")) {
+		qCritical() << "Auth startup regression sensitivity: teardown hang";
+		for (;;) {
+			QThread::sleep(1);
+		}
+	}
+#endif // TDESKTOP_LIFECYCLE_REGRESSION
 }
 
 void Application::run() {
@@ -296,6 +308,13 @@ void Application::run() {
 					"TDESKTOP_AUTH_STARTUP_REGRESSION");
 			QCoreApplication::exit(124);
 		});
+		if (qEnvironmentVariable(
+				"TDESKTOP_AUTH_STARTUP_REGRESSION_HANG") == "startup") {
+			qCritical() << "Auth startup regression sensitivity: startup hang";
+			for (;;) {
+				QThread::sleep(1);
+			}
+		}
 	}
 #endif // TDESKTOP_LIFECYCLE_REGRESSION
 

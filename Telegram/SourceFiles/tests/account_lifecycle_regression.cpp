@@ -39,6 +39,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QMetaObject>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QTcpSocket>
 
 #include <algorithm>
 #include <cstdio>
@@ -56,8 +58,14 @@ constexpr auto kAuthStartupRegressionVariable =
 	"TDESKTOP_AUTH_STARTUP_REGRESSION";
 constexpr auto kAuthStartupRegressionRootVariable =
 	"TDESKTOP_AUTH_STARTUP_REGRESSION_ROOT";
+constexpr auto kAuthStartupFailPrepareVariable =
+	"TDESKTOP_AUTH_STARTUP_REGRESSION_FAIL_PREPARE";
+constexpr auto kAuthStartupForbiddenOutboundVariable =
+	"TDESKTOP_AUTH_STARTUP_REGRESSION_FORBIDDEN_OUTBOUND";
 constexpr auto kAuthStartupRegressionMarker =
 	"tdesktop-auth-startup-regression-v1";
+constexpr auto kAuthStartupObservationWindowMs = 1500;
+constexpr auto kAuthStartupForbiddenOutboundDelayMs = 250;
 constexpr auto kAuthStartupOldUserId = UserId(4242);
 constexpr auto kAuthStartupNewUserId = UserId(5252);
 
@@ -81,6 +89,8 @@ RegressionServerKey();
 
 auto gLifecycleWriteCounts = LifecycleWriteCountsForRegressionTest();
 auto gAuthStartupState = AuthStartupStateForRegressionTest();
+auto gAuthStartupForbiddenOutboundAttempt = false;
+std::unique_ptr<QTcpSocket> gAuthStartupForbiddenSocket;
 
 [[nodiscard]] std::optional<AuthStartupRegressionRequest>
 ParseAuthStartupRegressionRequest() {
@@ -243,8 +253,22 @@ void FailAuthStartupRegression(
 	domain.local().writeAccounts();
 	if (request.name == u"incomplete-pin"_q) {
 		account->local().writeCustomServerBlocked(false);
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
 	} else if (request.name == u"unreadable-config"_q) {
 		account->local().writeCustomServerBlocked(false);
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
 		if (!RemoveAuthStartupConfig()) {
 			FailAuthStartupRegression(
 				request.name,
@@ -253,7 +277,13 @@ void FailAuthStartupRegression(
 		}
 	} else if (request.name == u"unreadable-pin"_q) {
 		account->local().writeCustomServerBlocked(false);
-		Storage::details::Sync();
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
 		if (!account->local().removePrefsForRegressionTest()) {
 			FailAuthStartupRegression(
 				request.name,
@@ -267,6 +297,13 @@ void FailAuthStartupRegression(
 			.userIdKnown = true,
 			.userId = kAuthStartupOldUserId.bare,
 		};
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
 		account->local().setServerForgetInterruptionForTest(
 			request.forgetPoint);
 		if (account->local().beginServerForget(binding)
@@ -281,8 +318,21 @@ void FailAuthStartupRegression(
 			request.name,
 			"unsupported fixture case");
 		return false;
+	} else if (!account->local()
+		.flushAndVerifyPinPrefsForRegressionTest(false)) {
+		FailAuthStartupRegression(
+			request.name,
+			"the persisted account map did not reload the expected absent pin prefs");
+		return false;
 	}
 	Storage::details::Sync();
+	if (qEnvironmentVariable(kAuthStartupFailPrepareVariable)
+		== request.name) {
+		FailAuthStartupRegression(
+			request.name,
+			"sensitivity injection: prepare failed after the fixture was verified");
+		return false;
+	}
 	return true;
 }
 
@@ -313,24 +363,39 @@ void FailAuthStartupRegression(
 		return false;
 	}
 	if ((request.name == u"missing-pin"_q)
-		&& (startup.hasStoredPin || startup.pinUnknown)) {
+		&& (startup.hasStoredPin
+			|| startup.pinUnknown
+			|| !startup.configReadable
+			|| startup.configHasCustomServer)) {
 		FailAuthStartupRegression(
 			request.name,
-			"fixture unexpectedly contained a custom-server pin marker");
+			"startup did not reload the distinct missing-pin fixture state");
 		return false;
 	}
-	if (((request.name == u"incomplete-pin"_q)
-			|| (request.name == u"unreadable-config"_q))
-		&& (!startup.hasStoredPin || startup.pinUnknown)) {
+	if ((request.name == u"incomplete-pin"_q)
+		&& (!startup.hasStoredPin
+			|| startup.pinUnknown
+			|| !startup.configReadable
+			|| startup.configHasCustomServer)) {
 		FailAuthStartupRegression(
 			request.name,
-			"normal startup did not read the stored incomplete-pin marker");
+			"startup did not reload a readable marker with an incomplete config");
 		return false;
 	}
-	if ((request.name == u"unreadable-pin"_q) && !startup.pinUnknown) {
+	if ((request.name == u"unreadable-config"_q)
+		&& (!startup.hasStoredPin
+			|| startup.pinUnknown
+			|| startup.configReadable)) {
 		FailAuthStartupRegression(
 			request.name,
-			"normal startup did not detect the unreadable pin preferences");
+			"startup did not reload the stored marker with an unreadable config");
+		return false;
+	}
+	if ((request.name == u"unreadable-pin"_q)
+		&& (!startup.pinUnknown || !startup.configReadable)) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup did not reload unreadable prefs beside a readable config");
 		return false;
 	}
 	const auto blockedOrPaused = account->mtp().config().blocked()
@@ -371,6 +436,12 @@ void FailAuthStartupRegression(
 		FailAuthStartupRegression(
 			request.name,
 			"a newly entered identity inherited authorization keys");
+		return false;
+	}
+	if (gAuthStartupForbiddenOutboundAttempt) {
+		FailAuthStartupRegression(
+			request.name,
+			"deferred synthetic forbidden outbound attempt was observed");
 		return false;
 	}
 	return true;
@@ -428,32 +499,63 @@ void RunAuthStartupRegression(Fn<void(int)> done) {
 	}
 	const auto success = request->prepare
 		? PrepareAuthStartupRegression(*request)
-		: VerifyAuthStartupRegression(*request);
+		: false;
 	if (success) {
 		std::fprintf(
 			stderr,
-			"Auth startup regression %s: case=%s\n",
-			request->prepare ? "prepared" : "passed",
+			"Auth startup regression prepared: case=%s\n",
 			request->name.toUtf8().constData());
 	}
 	if (request->prepare) {
 		std::fflush(nullptr);
 		std::_Exit(success ? 0 : 1);
 	}
-	done(success ? 0 : 1);
+	if (qEnvironmentVariableIsSet(kAuthStartupForbiddenOutboundVariable)) {
+		QTimer::singleShot(
+			kAuthStartupForbiddenOutboundDelayMs,
+			QCoreApplication::instance(),
+			[] {
+				gAuthStartupForbiddenOutboundAttempt = true;
+				std::fprintf(
+					stderr,
+					"Auth startup regression synthetic forbidden outbound attempt: 127.0.0.1:9\n");
+				gAuthStartupForbiddenSocket = std::make_unique<QTcpSocket>();
+				gAuthStartupForbiddenSocket->connectToHost(
+					QHostAddress::LocalHost,
+					9);
+			});
+	}
+	QTimer::singleShot(
+		kAuthStartupObservationWindowMs,
+		QCoreApplication::instance(),
+		[request = *request, done = std::move(done)]() mutable {
+			const auto passed = VerifyAuthStartupRegression(request);
+			if (passed) {
+				std::fprintf(
+					stderr,
+					"Auth startup regression passed after %dms observation: case=%s\n",
+					kAuthStartupObservationWindowMs,
+					request.name.toUtf8().constData());
+			}
+			done(passed ? 0 : 1);
+		});
 }
 
 void RecordAuthStartupStateForRegressionTest(
 		uint64 userId,
 		int authorizationKeyCount,
 		bool hasStoredPin,
-		bool pinUnknown) {
+		bool pinUnknown,
+		bool configReadable,
+		bool configHasCustomServer) {
 	if (!gAuthStartupState.observed) {
 		gAuthStartupState = {
 			.userId = userId,
 			.authorizationKeyCount = authorizationKeyCount,
 			.hasStoredPin = hasStoredPin,
 			.pinUnknown = pinUnknown,
+			.configReadable = configReadable,
+			.configHasCustomServer = configHasCustomServer,
 			.observed = true,
 		};
 	}

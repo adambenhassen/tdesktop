@@ -17,6 +17,8 @@ struct AuthStartupStateForRegressionTest final {
 	int authorizationKeyCount = 0;
 	bool hasStoredPin = false;
 	bool pinUnknown = false;
+	bool configReadable = false;
+	bool configHasCustomServer = false;
 	bool observed = false;
 };
 
@@ -25,7 +27,9 @@ void RecordAuthStartupStateForRegressionTest(
 	uint64 userId,
 	int authorizationKeyCount,
 	bool hasStoredPin,
-	bool pinUnknown);
+	bool pinUnknown,
+	bool configReadable,
+	bool configHasCustomServer);
 [[nodiscard]] AuthStartupStateForRegressionTest
 GetAuthStartupStateForRegressionTest();
 void RunAuthStartupRegression(Fn<void(int)> done);
