@@ -34,7 +34,7 @@ TEST_CASE(SignupFailureRoutesUsernameAndNameValidation) {
 	CHECK(unavailable.action == SignupFailureAction::ReturnToInput);
 	CHECK(unavailable.backAvailable);
 
-	for (const auto type : { u"FIRSTNAME_INVALID"_q, u"LASTNAME_INVALID"_q }) {
+	for (const auto &type : { u"FIRSTNAME_INVALID"_q, u"LASTNAME_INVALID"_q }) {
 		const auto name = ClassifySignupFailure(type, 400, false, false);
 		CHECK(name.message == SignupFailureMessage::NameInvalid);
 		CHECK(name.destination == SignupFailureDestination::Name);
@@ -88,7 +88,7 @@ TEST_CASE(SignupInviteAndSessionFailuresStayOnThePasswordStep) {
 }
 
 TEST_CASE(SignupCodeTicketIsReissuedAtMostOnce) {
-	for (const auto type : { u"PHONE_CODE_INVALID"_q, u"PHONE_CODE_EXPIRED"_q }) {
+	for (const auto &type : { u"PHONE_CODE_INVALID"_q, u"PHONE_CODE_EXPIRED"_q }) {
 		const auto first = ClassifySignupFailure(type, 400, false, false);
 		CHECK(first.message == SignupFailureMessage::CodeTicketExpired);
 		CHECK(first.destination == SignupFailureDestination::Password);
