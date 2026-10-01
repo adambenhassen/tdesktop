@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "api/api_chat_participants.h"
 #include "ui/boxes/confirm_box.h"
+#include "main/main_account.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "main/main_domain.h"
@@ -317,6 +318,10 @@ Main::Session &PeerData::session() const {
 
 Main::Account &PeerData::account() const {
 	return session().account();
+}
+
+bool PeerData::usesCustomServer() const {
+	return account().mtp().dcOptions().hasCustomServer();
 }
 
 void PeerData::updateNameDelayed(

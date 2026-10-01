@@ -420,8 +420,9 @@ void Application::run() {
 	}
 
 	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
-		regressionResult |= Tests::RunAccountLifecycleRegression();
-		QCoreApplication::exit(regressionResult);
+		Tests::RunAccountLifecycleRegression([=](int result) {
+			QCoreApplication::exit(regressionResult | result);
+		});
 		return;
 	}
 	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {

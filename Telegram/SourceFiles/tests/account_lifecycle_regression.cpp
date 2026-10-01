@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "core/application.h"
+#include "crl/crl_on_main.h"
 #include "data/data_chat.h"
 #include "data/data_peer_id.h"
 #include "data/data_session.h"
@@ -107,18 +108,22 @@ RegressionServerKey() {
 [[nodiscard]] MTPmessages_ChatFull RegressionChatFullReply(
 		ChatId chatId,
 		int version,
-		QString selfPhone) {
+		QString selfPhone,
+		UserId creatorId) {
+	const auto memberId = (creatorId == UserId(1))
+		? UserId(2)
+		: UserId(1);
 	const auto participants = MTP_chatParticipants(
 		MTP_long(chatId.bare),
 		MTP_vector<MTPChatParticipant>({
 			MTP_chatParticipantCreator(
 				MTP_flags(MTPDchatParticipantCreator::Flags()),
-				MTP_long(UserId(2).bare),
+				MTP_long(creatorId.bare),
 				MTP_string(QString())),
 			MTP_chatParticipant(
 				MTP_flags(MTPDchatParticipant::Flags()),
-				MTP_long(UserId(1).bare),
-				MTP_long(UserId(2).bare),
+				MTP_long(memberId.bare),
+				MTP_long(creatorId.bare),
 				MTP_int(0),
 				MTP_string(QString())),
 			MTP_chatParticipant(
@@ -182,9 +187,11 @@ RegressionServerKey() {
 		});
 }
 
-[[nodiscard]] bool HasExpectedParticipants(not_null<ChatData*> chat) {
+[[nodiscard]] bool HasExpectedParticipants(
+		not_null<ChatData*> chat,
+		UserId creatorId) {
 	return (chat->participants.size() == 3)
-		&& (chat->creator == UserId(2))
+		&& (chat->creator == creatorId)
 		&& HasParticipant(chat, UserId(1))
 		&& HasParticipant(chat, UserId(2))
 		&& HasParticipant(chat, UserId(9));
@@ -198,7 +205,9 @@ RegressionServerKey() {
 	return 1;
 }
 
-[[nodiscard]] int RunChatParticipantsRegression(Main::Domain &domain) {
+[[nodiscard]] int StartChatParticipantsRegression(
+		Main::Domain &domain,
+		Fn<void(int)> done) {
 	if (domain.accounts().size() > Main::Domain::kPremiumMaxAccounts - 2) {
 		return FailChatParticipantsRegression(
 			"not enough account slots for isolated stock and pinned sessions");
@@ -219,7 +228,7 @@ RegressionServerKey() {
 		static_cast<PeerData*>(&*stockChat));
 	stock->session().api().processFullPeer(
 		stockPeer,
-		RegressionChatFullReply(chatId, 1, QString()));
+		RegressionChatFullReply(chatId, 1, QString(), UserId(2)));
 	if (stock->session().user()->isLoaded()
 		|| !stockChat->participants.empty()) {
 		return FailChatParticipantsRegression(
@@ -227,9 +236,9 @@ RegressionServerKey() {
 	}
 	stock->session().api().processFullPeer(
 		stockPeer,
-		RegressionChatFullReply(chatId, 2, u"+10000000001"_q));
+		RegressionChatFullReply(chatId, 2, u"+10000000001"_q, UserId(2)));
 	if (!stock->session().user()->isLoaded()
-		|| !HasExpectedParticipants(stockChat)) {
+		|| !HasExpectedParticipants(stockChat, UserId(2))) {
 		return FailChatParticipantsRegression(
 			"stock session with phone did not load creator and members");
 	}
@@ -252,19 +261,93 @@ RegressionServerKey() {
 		static_cast<PeerData*>(&*pinnedChat));
 	pinned->session().api().processFullPeer(
 		pinnedPeer,
-		RegressionChatFullReply(chatId, 1, QString()));
+		RegressionChatFullReply(chatId, 1, QString(), UserId(2)));
 	if (!pinned->session().user()->isLoaded()
-		|| !HasExpectedParticipants(pinnedChat)) {
+		|| !HasExpectedParticipants(pinnedChat, UserId(2))) {
 		return FailChatParticipantsRegression(
 			"pinned phone-free self did not retain creator and members");
 	}
-	std::fprintf(stderr, "Chat participants regression passed.\n");
+
+	const auto actionChatId = ChatId(1052);
+	const auto stockActionChat = stock->session().data().chat(actionChatId);
+	const auto stockActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*stockActionChat));
+	stock->session().api().processFullPeer(
+		stockActionPeer,
+		RegressionChatFullReply(
+			actionChatId,
+			1,
+			u"+10000000001"_q,
+			selfId));
+	stockActionChat->setFlags(ChatDataFlag::Creator);
+	if (!HasExpectedParticipants(stockActionChat, selfId)
+		|| !stockActionChat->canEditInformation()
+		|| !stockActionChat->canAddMembers()
+		|| !stockActionChat->canAddAdmins()
+		|| !stockActionChat->canBanMembers()) {
+		return FailChatParticipantsRegression(
+			"stock creator lost a supported basic-group action");
+	}
+
+	const auto pinnedActionChat = pinned->session().data().chat(actionChatId);
+	const auto pinnedActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*pinnedActionChat));
+	pinned->session().api().processFullPeer(
+		pinnedActionPeer,
+		RegressionChatFullReply(actionChatId, 1, QString(), selfId));
+	pinnedActionChat->setFlags(ChatDataFlag::Creator);
+	if (!HasExpectedParticipants(pinnedActionChat, selfId)
+		|| !pinnedActionChat->canEditInformation()
+		|| !pinnedActionChat->canAddMembers()
+		|| pinnedActionChat->canAddAdmins()
+		|| !pinnedActionChat->canBanMembers()) {
+		return FailChatParticipantsRegression(
+			"pinned creator lost a supported action or retained admin grants");
+	}
+	if (!pinnedActionChat->usesCustomServer()
+		|| pinnedActionChat->isDeactivated()
+		|| pinnedActionChat->migrateTo()) {
+		return FailChatParticipantsRegression(
+			"pinned migration fixture is not an active custom-server group");
+	}
+	pinned->mtp().stopForServerEnrollment();
+
+	struct MigrationResult {
+		int done = 0;
+		int failed = 0;
+		QString error;
+	};
+	const auto migration = std::make_shared<MigrationResult>();
+	pinned->session().api().migrateChat(
+		pinnedActionChat,
+		[migration](not_null<ChannelData*>) {
+			++migration->done;
+		},
+		[migration](const QString &error) {
+			++migration->failed;
+			migration->error = error;
+		});
+	crl::on_main([=] {
+		std::fprintf(
+			stderr,
+			"Pinned migration regression: done=%d failed=%d error=%s\n",
+			migration->done,
+			migration->failed,
+			migration->error.toUtf8().constData());
+		if (migration->done != 0
+			|| migration->failed != 1
+			|| migration->error != u"CLIENT_BAD_MIGRATION"_q) {
+			done(FailChatParticipantsRegression(
+				"pinned basic-group migration was not rejected locally"));
+			return;
+		}
+		std::fprintf(stderr, "Chat participants regression passed.\n");
+		done(0);
+	});
 	return 0;
 }
 
-} // namespace
-
-int RunAccountLifecycleRegression() {
+[[nodiscard]] int StartAccountLifecycleRegression(Fn<void(int)> done) {
 	const auto failureVariable = QByteArray(
 		"TDESKTOP_FAIL_MTP_AUTHORIZATION_WRITE");
 	const auto failWrites = gsl::finally([&] {
@@ -356,7 +439,15 @@ int RunAccountLifecycleRegression() {
 		return 1;
 	}
 	qunsetenv(failureVariable.constData());
-	return RunChatParticipantsRegression(domain);
+	return StartChatParticipantsRegression(domain, std::move(done));
+}
+
+} // namespace
+
+void RunAccountLifecycleRegression(Fn<void(int)> done) {
+	if (const auto result = StartAccountLifecycleRegression(done)) {
+		done(result);
+	}
 }
 
 } // namespace Tests
