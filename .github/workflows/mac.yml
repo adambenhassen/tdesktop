@@ -383,7 +383,7 @@ jobs:
       - name: Checkout exact candidate source.
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.auth_regression_sha }}
+          ref: ${{ env.CANDIDATE_SHA }}
           path: candidate-source
           persist-credentials: false
 
@@ -400,21 +400,26 @@ jobs:
           run_conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq .conclusion)"
           run_path="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq .path)"
 
+          printf 'expected_candidate_sha=%s live_head=%s live_state=%s live_base=%s build_run_id=%s build_run_sha=%s build_run_status=%s build_run_conclusion=%s build_run_path=%s candidate_checkout_sha=%s\n' \
+            "$CANDIDATE_SHA" "$live_head" "$live_state" "$live_base" \
+            "$BUILD_RUN_ID" "$run_sha" "$run_status" "$run_conclusion" "$run_path" \
+            "$(git -C candidate-source rev-parse HEAD)"
+
           test "$live_head" = "$CANDIDATE_SHA" || {
             echo "::error::PR 74 moved: expected $CANDIDATE_SHA, live head is $live_head."
             exit 1
           }
-          test "$live_state" = "open"
-          test "$live_base" = "dev"
-          test "$run_sha" = "$CANDIDATE_SHA"
-          test "$run_status" = "completed"
-          test "$run_conclusion" = "success"
-          test "$run_path" = ".github/workflows/mac.yml"
+          test "$live_state" = "open" || { echo "::error::PR 74 is not open (state=$live_state)."; exit 1; }
+          test "$live_base" = "dev" || { echo "::error::PR 74 base is $live_base, expected dev."; exit 1; }
+          test "$run_sha" = "$CANDIDATE_SHA" || { echo "::error::Build run $BUILD_RUN_ID SHA is $run_sha, expected $CANDIDATE_SHA."; exit 1; }
+          test "$run_status" = "completed" || { echo "::error::Build run $BUILD_RUN_ID is $run_status, expected completed."; exit 1; }
+          test "$run_conclusion" = "success" || { echo "::error::Build run $BUILD_RUN_ID conclusion is $run_conclusion, expected success."; exit 1; }
+          test "$run_path" = ".github/workflows/mac.yml" || { echo "::error::Build run $BUILD_RUN_ID used workflow $run_path, expected .github/workflows/mac.yml."; exit 1; }
 
           candidate_checkout="$(git -C candidate-source rev-parse HEAD)"
-          test "$candidate_checkout" = "$CANDIDATE_SHA"
+          test "$candidate_checkout" = "$CANDIDATE_SHA" || { echo "::error::Candidate checkout is $candidate_checkout, expected $CANDIDATE_SHA."; exit 1; }
           contract="candidate-source/Telegram/SourceFiles/tests/auth_startup_regression.md"
-          test -f "$contract"
+          test -f "$contract" || { echo "::error::Candidate fixture contract is missing: $contract."; exit 1; }
 
           {
             echo "tested_sha=$CANDIDATE_SHA"
