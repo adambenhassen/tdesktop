@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/storage_account.h"
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+#include "tests/account_lifecycle_regression.h"
+#endif
+
 #include "storage/localstorage.h"
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
@@ -1083,6 +1087,10 @@ void Account::readMtpData() {
 void Account::writeCustomServerBlocked(bool pinUnknown) {
 	Expects(_localKey != nullptr);
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordLifecycleWriteForRegressionTest(
+		Tests::LifecycleWriteForRegressionTest::CustomServerBlockMarker);
+#endif
 	// The block has to outlive this launch on its own. The blocked
 	// config is never written back, and readPrefs() deletes the prefs
 	// file it failed to read, so without this the next start finds no

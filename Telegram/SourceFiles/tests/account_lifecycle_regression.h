@@ -11,6 +11,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Tests {
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+enum class LifecycleWriteForRegressionTest {
+	AuthorizationSnapshot,
+	CustomServerBlockMarker,
+};
+
+struct LifecycleWriteCountsForRegressionTest {
+	int authorizationSnapshot = 0;
+	int blockMarker = 0;
+};
+
+void RecordLifecycleWriteForRegressionTest(
+	LifecycleWriteForRegressionTest operation);
+void ResetLifecycleWriteCountsForRegressionTest();
+[[nodiscard]] LifecycleWriteCountsForRegressionTest
+GetLifecycleWriteCountsForRegressionTest();
+#endif
+
 void RunAccountLifecycleRegression(Fn<void(int)> done);
 
 } // namespace Tests

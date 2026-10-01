@@ -40,6 +40,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <thread>
 
 namespace Tests {
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+namespace {
+
+auto gLifecycleWriteCounts = LifecycleWriteCountsForRegressionTest();
+
+} // namespace
+
+void RecordLifecycleWriteForRegressionTest(
+		LifecycleWriteForRegressionTest operation) {
+	switch (operation) {
+	case LifecycleWriteForRegressionTest::AuthorizationSnapshot:
+		++gLifecycleWriteCounts.authorizationSnapshot;
+		break;
+	case LifecycleWriteForRegressionTest::CustomServerBlockMarker:
+		++gLifecycleWriteCounts.blockMarker;
+		break;
+	}
+}
+
+void ResetLifecycleWriteCountsForRegressionTest() {
+	gLifecycleWriteCounts = LifecycleWriteCountsForRegressionTest();
+}
+
+LifecycleWriteCountsForRegressionTest
+GetLifecycleWriteCountsForRegressionTest() {
+	return gLifecycleWriteCounts;
+}
+#endif
+
 namespace {
 
 const char kRegressionServerKey[] = R"(-----BEGIN RSA PUBLIC KEY-----
@@ -933,11 +962,46 @@ template <typename Result, typename Start>
 		domain.accounts().front().account.get());
 	if (!blockedWithoutAuthorizationFailure->mtp().config().blocked()
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
+		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| !blockedWithoutAuthorizationFailure->local().hasStoredCustomServer()
+		|| blockedWithoutAuthorizationFailure->local().customServerPinUnknown()) {
+		return FailAccountLifecycleRegression(
+			"blocked startup did not retain its existing marker and empty auth state");
+	}
+	ResetLifecycleWriteCountsForRegressionTest();
+	qputenv(failureVariable.constData(), "1");
+	const auto authorizationAttemptFailed =
+		!blockedWithoutAuthorizationFailure->local().writeMtpAuthorization();
+	qunsetenv(failureVariable.constData());
+	const auto authorizationAttempts = GetLifecycleWriteCountsForRegressionTest();
+	if (!authorizationAttemptFailed
+		|| authorizationAttempts.authorizationSnapshot != 1
+		|| authorizationAttempts.blockMarker != 0
+		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()) {
 		return FailAccountLifecycleRegression(
-			"synthetic blocked startup did not retain its empty auth state");
+			"authorization snapshot observer missed an isolated write attempt");
 	}
-	if (!RestartDomain(domain)) {
+	ResetLifecycleWriteCountsForRegressionTest();
+	blockedWithoutAuthorizationFailure->local().writeCustomServerBlocked(false);
+	const auto markerAttempts = GetLifecycleWriteCountsForRegressionTest();
+	if (markerAttempts.authorizationSnapshot != 0
+		|| markerAttempts.blockMarker != 1
+		|| !blockedWithoutAuthorizationFailure->local().hasStoredCustomServer()) {
+		return FailAccountLifecycleRegression(
+			"block marker observer missed an identical-value rewrite");
+	}
+	domain.local().writeAccounts();
+	ResetLifecycleWriteCountsForRegressionTest();
+	domain.finish();
+	const auto teardownAttempts = GetLifecycleWriteCountsForRegressionTest();
+	if (teardownAttempts.authorizationSnapshot != 0
+		|| teardownAttempts.blockMarker != 0) {
+		return FailAccountLifecycleRegression(
+			"blocked account teardown attempted an authorization or marker write");
+	}
+	if ((domain.start(QByteArray()) != Storage::StartResult::Success)
+		|| domain.accounts().empty()) {
 		return FailAccountLifecycleRegression(
 			"blocked teardown did not complete its restart");
 	}

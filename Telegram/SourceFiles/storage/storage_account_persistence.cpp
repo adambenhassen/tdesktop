@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/storage_account.h"
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+#include "tests/account_lifecycle_regression.h"
+#endif
+
 #include "base/const_string.h"
 #include "main/main_account.h"
 #include "mtproto/mtproto_config.h"
@@ -263,6 +267,8 @@ Account::~Account() {
 
 bool Account::writeMtpAuthorization() {
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordLifecycleWriteForRegressionTest(
+		Tests::LifecycleWriteForRegressionTest::AuthorizationSnapshot);
 	if (qEnvironmentVariableIsSet(
 			"TDESKTOP_FAIL_MTP_AUTHORIZATION_WRITE")) {
 		return false;
