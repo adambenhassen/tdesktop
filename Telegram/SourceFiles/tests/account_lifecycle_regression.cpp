@@ -29,12 +29,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
-#include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
 #include <QtCore/QTimer>
 
 #include <algorithm>
 #include <cstdio>
+#include <future>
+#include <memory>
+#include <optional>
+#include <thread>
 
 namespace Tests {
 namespace {
@@ -167,28 +170,117 @@ RegressionOtherServerKey() {
 		retainedUserId) == Storage::ServerCacheBindingStatus::Match;
 }
 
+template <typename Result, typename Start>
+[[nodiscard]] std::optional<Result> AwaitCacheCallback(
+	Start start,
+	int timeoutMs = 5000) {
+	struct State {
+		std::optional<Result> result;
+		QEventLoop *loop = nullptr;
+		bool active = true;
+		bool completed = false;
+	};
+	const auto state = std::make_shared<State>();
+	auto loop = QEventLoop();
+	const auto application = QCoreApplication::instance();
+	if (!application) {
+		return std::nullopt;
+	}
+	state->loop = &loop;
+	QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+	// The callback only posts owned state; the queued handler touches the loop
+	// while it is active on this thread.
+	start([state, application](Result result) mutable {
+		QMetaObject::invokeMethod(
+			application,
+			[state, result = std::move(result)]() mutable {
+				if (!state->active || state->completed || !state->loop) {
+					return;
+				}
+				state->result.emplace(std::move(result));
+				state->completed = true;
+				state->loop->quit();
+			},
+			Qt::QueuedConnection);
+	});
+	loop.exec();
+	state->active = false;
+	state->loop = nullptr;
+	return std::move(state->result);
+}
+
+[[nodiscard]] bool CacheCallbackTimeoutIsSafe() {
+	const auto failure = AwaitCacheCallback<int>([](auto done) {
+		done(-1);
+	});
+	if (!failure || (*failure != -1)) {
+		return false;
+	}
+	auto release = std::promise<void>();
+	const auto waitForRelease = release.get_future().share();
+	auto delayed = std::thread();
+	const auto timedOut = AwaitCacheCallback<int>([&](auto done) {
+		delayed = std::thread([done = std::move(done), waitForRelease]() mutable {
+			waitForRelease.wait();
+			done(1);
+		});
+	}, 1);
+	release.set_value();
+	delayed.join();
+	QCoreApplication::processEvents();
+	return !timedOut;
+}
+
+[[nodiscard]] bool CacheOperationSucceeded(
+		const std::optional<Storage::Cache::Error> &result) {
+	return result
+		&& (result->type == Storage::Cache::Error::Type::None);
+}
+
+[[nodiscard]] bool OpenCache(
+		Storage::Cache::Database &cache,
+		not_null<Main::Account*> account) {
+	return CacheOperationSucceeded(AwaitCacheCallback<Storage::Cache::Error>(
+		[&](auto done) {
+			cache.open(account->local().cacheKey(), std::move(done));
+		}));
+}
+
+[[nodiscard]] bool WriteCachePayload(
+		not_null<Main::Account*> account,
+		const Storage::Cache::Key &key,
+		const QByteArray &payload) {
+	auto cache = Core::App().databases().get(
+		account->local().cachePath(),
+		account->local().cacheSettings());
+	if (!OpenCache(*cache, account)) {
+		return false;
+	}
+	return CacheOperationSucceeded(AwaitCacheCallback<Storage::Cache::Error>(
+		[&](auto done) {
+			cache->put(key, QByteArray(payload), std::move(done));
+		}));
+}
+
 [[nodiscard]] bool CachePayloadMatches(
 		Storage::Cache::Database &cache,
 		const Storage::Cache::Key &key,
 		const QByteArray &expected) {
-	auto completed = false;
-	auto payload = QByteArray();
-	auto loop = QEventLoop();
-	auto timeout = QTimer();
-	timeout.setSingleShot(true);
-	QObject::connect(
-		&timeout,
-		&QTimer::timeout,
-		&loop,
-		&QEventLoop::quit);
-	cache.get(key, [&](QByteArray &&value) {
-		payload = std::move(value);
-		completed = true;
-		QMetaObject::invokeMethod(&loop, "quit", Qt::QueuedConnection);
+	const auto payload = AwaitCacheCallback<QByteArray>([&](auto done) {
+		cache.get(key, std::move(done));
 	});
-	timeout.start(5000);
-	loop.exec();
-	return completed && (payload == expected);
+	return payload && (*payload == expected);
+}
+
+[[nodiscard]] bool PersistedCachePayloadMatches(
+		not_null<Main::Account*> account,
+		const Storage::Cache::Key &key,
+		const QByteArray &expected) {
+	auto cache = Core::App().databases().get(
+		account->local().cachePath(),
+		account->local().cacheSettings());
+	return OpenCache(*cache, account)
+		&& CachePayloadMatches(*cache, key, expected);
 }
 
 [[nodiscard]] Main::Account *FindAuthorizationBlockedAccount(
@@ -510,17 +602,13 @@ RegressionOtherServerKey() {
 	};
 	const auto cachePayload = QByteArray(
 		"main-1062-cache-regression-payload");
-	const auto cachePath = account->local().cachePath();
-	{
-		auto cacheDatabase = Core::App().databases().get(
-			cachePath,
-			account->local().cacheSettings());
-		cacheDatabase->put(cacheKey, QByteArray(cachePayload));
-		if (!CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)
-			|| !QFileInfo::exists(cachePath)) {
-			return FailAccountLifecycleRegression(
-				"could not seed the cache payload");
-		}
+	if (!CacheCallbackTimeoutIsSafe()) {
+		return FailAccountLifecycleRegression(
+			"cache callback wait mishandled failure or late completion");
+	}
+	if (!WriteCachePayload(account, cacheKey, cachePayload)) {
+		return FailAccountLifecycleRegression(
+			"could not seed the cache payload");
 	}
 	if (!account->sessionExists()
 		&& !account->mtp().dcOptions().hasCustomServer()
@@ -633,11 +721,10 @@ RegressionOtherServerKey() {
 	}
 	const auto forgotten = not_null<Main::Account*>(
 		domain.accounts().front().account.get());
-	auto cacheDatabase = Core::App().databases().get(
-		cachePath,
-		forgotten->local().cacheSettings());
-	if (!QFileInfo::exists(cachePath)
-		|| !CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)
+	if (!PersistedCachePayloadMatches(
+			forgotten,
+			cacheKey,
+			cachePayload)
 		|| !forgotten->mtp().dcOptions().unenrolled()
 		|| forgotten->mtp().dcOptions().blocked()
 		|| forgotten->local().hasStoredCustomServer()
@@ -779,8 +866,10 @@ RegressionOtherServerKey() {
 		return FailAccountLifecycleRegression(
 			"changed server fingerprint bypassed cache confirmation");
 	}
-	if (!QFileInfo::exists(cachePath)
-		|| !CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)) {
+	if (!PersistedCachePayloadMatches(
+			unenrolled,
+			cacheKey,
+			cachePayload)) {
 		return FailAccountLifecycleRegression(
 			"declined fingerprint change damaged the cached payload");
 	}
@@ -808,8 +897,10 @@ RegressionOtherServerKey() {
 		return FailAccountLifecycleRegression(
 			"changed user id bypassed cache confirmation");
 	}
-	if (!QFileInfo::exists(cachePath)
-		|| !CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)) {
+	if (!PersistedCachePayloadMatches(
+			unenrolled,
+			cacheKey,
+			cachePayload)) {
 		return FailAccountLifecycleRegression(
 			"declined user-id change damaged the cached payload");
 	}
