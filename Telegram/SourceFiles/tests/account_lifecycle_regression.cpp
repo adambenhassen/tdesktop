@@ -301,19 +301,37 @@ RegressionServerKey() {
 		return FailChatParticipantsRegression(
 			"pinned creator lost a supported action or retained admin grants");
 	}
+	if (!pinnedActionChat->usesCustomServer()
+		|| pinnedActionChat->isDeactivated()
+		|| pinnedActionChat->migrateTo()) {
+		return FailChatParticipantsRegression(
+			"pinned migration fixture is not an active custom-server group");
+	}
+	pinned->mtp().stopForServerEnrollment();
 
 	const auto migrationDone = std::make_shared<bool>(false);
+	const auto migrationFailed = std::make_shared<bool>(false);
 	const auto migrationError = std::make_shared<QString>();
 	pinned->session().api().migrateChat(
 		pinnedActionChat,
 		[migrationDone](not_null<ChannelData*>) {
 			*migrationDone = true;
 		},
-		[migrationError](const QString &error) {
+		[migrationFailed, migrationError](const QString &error) {
+			*migrationFailed = true;
 			*migrationError = error;
 		});
 	QCoreApplication::processEvents();
-	if (*migrationDone || *migrationError != u"BAD_MIGRATION"_q) {
+	if (*migrationDone
+		|| !*migrationFailed
+		|| *migrationError != u"CLIENT_BAD_MIGRATION"_q) {
+		const auto error = migrationError->toUtf8();
+		std::fprintf(
+			stderr,
+			"Pinned migration regression: done=%d failed=%d error=%s\n",
+			*migrationDone ? 1 : 0,
+			*migrationFailed ? 1 : 0,
+			error.constData());
 		return FailChatParticipantsRegression(
 			"pinned basic-group migration was not rejected locally");
 	}
