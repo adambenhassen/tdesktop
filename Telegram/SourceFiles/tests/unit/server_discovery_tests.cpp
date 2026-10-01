@@ -758,18 +758,23 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	if (!connected) {
 		return;
 	}
-#if defined Q_OS_WIN
-	const auto invalidPeer = INVALID_SOCKET;
-#else
-	const auto invalidPeer = -1;
-#endif
-	const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-	CHECK(peer != invalidPeer);
-	if (peer == invalidPeer) {
+	server.resumeAccepting();
+	const auto connectionAvailable = server.hasPendingConnections()
+		|| server.waitForNewConnection(1000);
+	CHECK(connectionAvailable);
+	if (!connectionAvailable) {
 		return;
 	}
-	CloseNativeTestSocket(peer);
-	client.waitForDisconnected(1000);
+	const auto peer = server.nextPendingConnection();
+	CHECK(peer != nullptr);
+	if (!peer) {
+		return;
+	}
+	peer->disconnectFromHost();
+	peer->deleteLater();
+	if (client.state() != QAbstractSocket::UnconnectedState) {
+		client.waitForDisconnected(1000);
+	}
 }
 
 #if !defined Q_OS_WIN
