@@ -54,8 +54,11 @@ void RecordLifecycleWriteForRegressionTest(
 	case LifecycleWriteForRegressionTest::AuthorizationSnapshot:
 		++gLifecycleWriteCounts.authorizationSnapshot;
 		break;
+	case LifecycleWriteForRegressionTest::AuthorizationFailureMarker:
+		++gLifecycleWriteCounts.authorizationFailureMarker;
+		break;
 	case LifecycleWriteForRegressionTest::CustomServerBlockMarker:
-		++gLifecycleWriteCounts.blockMarker;
+		++gLifecycleWriteCounts.customServerBlockMarker;
 		break;
 	}
 }
@@ -839,7 +842,30 @@ template <typename Result, typename Start>
 		return FailAccountLifecycleRegression(
 			"active teardown-only failure did not block the next startup");
 	}
-	if (!RestartDomain(domain)) {
+	ResetLifecycleWriteCountsForRegressionTest();
+	if (!failedTeardown->local().writeMtpAuthorizationFailure()) {
+		return FailAccountLifecycleRegression(
+			"could not rewrite the retained authorization failure marker");
+	}
+	const auto markerRewriteAttempts = GetLifecycleWriteCountsForRegressionTest();
+	if (markerRewriteAttempts.authorizationSnapshot != 0
+		|| markerRewriteAttempts.authorizationFailureMarker != 1
+		|| markerRewriteAttempts.customServerBlockMarker != 0) {
+		return FailAccountLifecycleRegression(
+			"authorization failure marker observer missed an identical-value rewrite");
+	}
+	domain.local().writeAccounts();
+	ResetLifecycleWriteCountsForRegressionTest();
+	domain.finish();
+	const auto blockedTeardownAttempts = GetLifecycleWriteCountsForRegressionTest();
+	if (blockedTeardownAttempts.authorizationSnapshot != 0
+		|| blockedTeardownAttempts.authorizationFailureMarker != 0
+		|| blockedTeardownAttempts.customServerBlockMarker != 0) {
+		return FailAccountLifecycleRegression(
+			"blocked account teardown attempted an authorization or marker write");
+	}
+	if ((domain.start(QByteArray()) != Storage::StartResult::Success)
+		|| domain.accounts().empty()) {
 		return FailAccountLifecycleRegression(
 			"could not restart after blocked teardown");
 	}
@@ -977,7 +1003,8 @@ template <typename Result, typename Start>
 	const auto authorizationAttempts = GetLifecycleWriteCountsForRegressionTest();
 	if (!authorizationAttemptFailed
 		|| authorizationAttempts.authorizationSnapshot != 1
-		|| authorizationAttempts.blockMarker != 0
+		|| authorizationAttempts.authorizationFailureMarker != 0
+		|| authorizationAttempts.customServerBlockMarker != 0
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()) {
 		return FailAccountLifecycleRegression(
@@ -987,7 +1014,8 @@ template <typename Result, typename Start>
 	blockedWithoutAuthorizationFailure->local().writeCustomServerBlocked(false);
 	const auto markerAttempts = GetLifecycleWriteCountsForRegressionTest();
 	if (markerAttempts.authorizationSnapshot != 0
-		|| markerAttempts.blockMarker != 1
+		|| markerAttempts.authorizationFailureMarker != 0
+		|| markerAttempts.customServerBlockMarker != 1
 		|| !blockedWithoutAuthorizationFailure->local().hasStoredCustomServer()) {
 		return FailAccountLifecycleRegression(
 			"block marker observer missed an identical-value rewrite");
@@ -997,7 +1025,8 @@ template <typename Result, typename Start>
 	domain.finish();
 	const auto teardownAttempts = GetLifecycleWriteCountsForRegressionTest();
 	if (teardownAttempts.authorizationSnapshot != 0
-		|| teardownAttempts.blockMarker != 0) {
+		|| teardownAttempts.authorizationFailureMarker != 0
+		|| teardownAttempts.customServerBlockMarker != 0) {
 		return FailAccountLifecycleRegression(
 			"blocked account teardown attempted an authorization or marker write");
 	}

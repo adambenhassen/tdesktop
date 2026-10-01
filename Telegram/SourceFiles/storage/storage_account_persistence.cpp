@@ -298,6 +298,10 @@ bool Account::writeMtpAuthorization() {
 bool Account::writeMtpAuthorizationFailure() {
 	Expects(_localKey != nullptr);
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordLifecycleWriteForRegressionTest(
+		Tests::LifecycleWriteForRegressionTest::AuthorizationFailureMarker);
+#endif
 	writePref<bool>(kMtpAuthorizationWriteFailedPref, true);
 	const auto prefsWritten = writePrefs(true);
 	EncryptedDescriptor marker(sizeof(quint32));

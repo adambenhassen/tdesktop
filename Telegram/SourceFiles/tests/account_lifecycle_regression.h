@@ -14,12 +14,14 @@ namespace Tests {
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
 enum class LifecycleWriteForRegressionTest {
 	AuthorizationSnapshot,
+	AuthorizationFailureMarker,
 	CustomServerBlockMarker,
 };
 
 struct LifecycleWriteCountsForRegressionTest {
 	int authorizationSnapshot = 0;
-	int blockMarker = 0;
+	int authorizationFailureMarker = 0;
+	int customServerBlockMarker = 0;
 };
 
 void RecordLifecycleWriteForRegressionTest(
