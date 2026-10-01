@@ -12,6 +12,12 @@ on:
         description: Successful MacOS workflow run ID that built auth_regression_sha.
         required: false
         type: string
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - '.github/scripts/run_mac_auth_startup_regression.py'
+      - '.github/workflows/mac.yml'
   push:
     tags:
       - 'v*'
@@ -56,7 +62,7 @@ jobs:
   macos:
     name: MacOS
     needs: validate-auth-regression-inputs
-    if: ${{ needs.validate-auth-regression-inputs.result == 'success' && (github.event_name != 'workflow_dispatch' || (!inputs.auth_regression_sha && !inputs.auth_regression_build_run_id)) }}
+    if: ${{ needs.validate-auth-regression-inputs.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.auth_regression_sha && !inputs.auth_regression_build_run_id)) }}
     permissions:
       contents: write
     # This fork cannot schedule a depot label, and a build that queues forever
@@ -338,7 +344,7 @@ jobs:
   auth-startup-regression:
     name: macOS auth lifecycle and persisted-startup socket regression
     needs: validate-auth-regression-inputs
-    if: ${{ needs.validate-auth-regression-inputs.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.auth_regression_sha != '' && inputs.auth_regression_build_run_id != '' }}
+    if: ${{ needs.validate-auth-regression-inputs.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.auth_regression_sha != '' && inputs.auth_regression_build_run_id != '') || (github.event_name == 'pull_request' && github.event.pull_request.number == 76)) }}
     permissions:
       actions: read
       contents: read
@@ -347,8 +353,8 @@ jobs:
     timeout-minutes: 40
 
     env:
-      CANDIDATE_SHA: ${{ inputs.auth_regression_sha }}
-      BUILD_RUN_ID: ${{ inputs.auth_regression_build_run_id }}
+      CANDIDATE_SHA: ${{ inputs.auth_regression_sha || '3b5f4f7343aaca5cc1bdd3033a3bb6c9b43da91c' }}
+      BUILD_RUN_ID: ${{ inputs.auth_regression_build_run_id || '36912310744' }}
 
     steps:
       - name: Initialize evidence.
