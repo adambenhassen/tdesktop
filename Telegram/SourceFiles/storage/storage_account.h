@@ -165,6 +165,9 @@ public:
 	void setServerReenrollmentInterruptionForTest(int point);
 	void setServerForgetInterruptionForTest(int point);
 #endif
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	[[nodiscard]] bool mtpAuthorizationDataExistsForRegressionTest() const;
+#endif
 
 	void registerDraftSource(
 		not_null<History*> history,

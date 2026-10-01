@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
+#include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/sender.h"
 #include "storage/storage_account.h"
@@ -43,6 +44,15 @@ t6N/byY9Nw9p21Og3AoXSL2q/2IJ1WRUhebgAdGVMlV1fkuOQoEzR7EdpqtQD9Cs
 5+bfo3Nhmcyvk5ftB0WkJ9z6bNZ7yxrP8wIDAQAB
 -----END RSA PUBLIC KEY-----)";
 
+const char kRegressionOtherServerKey[] = R"(-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAyMEdY1aR+sCR3ZSJrtztKTKqigvO/vBfqACJLZtS7QMgCGXJ6XIR
+yy7mx66W0/sOFa7/1mAZtEoIokDP3ShoqF4fVNb6XeqgQfaUHd8wJpDWHcR2OFwv
+plUUI1PLTktZ9uW2WE23b+ixNwJjJGwBDJPQEQFBE+vfmH0JP503wr5INS1poWg/
+j25sIWeYPHYeOrFp/eXaqhISP6G+q2IeTaWTXpwZj4LzXq5YOpk4bYEQ6mvRq7D1
+aHWfYmlEGepfaYR8Q0YqvvhYtMte3ITnuSJs171+GDqpdKcSwHnd6FudwGO4pcCO
+j4WcDuXc2CTHgH8gFTNhp/Y8/SpDOhvn9QIDAQAB
+-----END RSA PUBLIC KEY-----)";
+
 [[nodiscard]] std::shared_ptr<MTP::details::RSAPublicKey>
 RegressionServerKey() {
 	return std::make_shared<MTP::details::RSAPublicKey>(bytes::make_span(
@@ -50,15 +60,107 @@ RegressionServerKey() {
 		sizeof(kRegressionServerKey) - 1));
 }
 
-[[nodiscard]] bool ConfigurePinnedServer(not_null<Main::Account*> account) {
+[[nodiscard]] std::shared_ptr<MTP::details::RSAPublicKey>
+RegressionOtherServerKey() {
+	return std::make_shared<MTP::details::RSAPublicKey>(bytes::make_span(
+		kRegressionOtherServerKey,
+		sizeof(kRegressionOtherServerKey) - 1));
+}
+
+[[nodiscard]] bool ConfigurePinnedServer(
+		not_null<Main::Account*> account,
+		std::shared_ptr<MTP::details::RSAPublicKey> key) {
 	const auto configured = account->mtp().dcOptions().setCustomServer(
 		MTP::CustomServer{
 			.dcId = 2,
 			.ip = "127.0.0.1",
 			.port = 8443,
-			.key = RegressionServerKey(),
+			.key = std::move(key),
 		});
 	return configured && account->local().writeMtpConfig(true);
+}
+
+[[nodiscard]] MTP::AuthKeyPtr RegressionAuthKey(int byte) {
+	auto data = MTP::AuthKey::Data();
+	std::fill(
+		data.begin(),
+		data.end(),
+		static_cast<gsl::byte>(byte));
+	return std::make_shared<MTP::AuthKey>(
+		MTP::AuthKey::Type::Generated,
+		2,
+		data);
+}
+
+[[nodiscard]] bool HasAuthKey(
+		not_null<Main::Account*> account,
+		MTP::AuthKey::KeyId keyId) {
+	const auto keys = account->mtp().getKeysForWrite();
+	return std::any_of(keys.begin(), keys.end(), [=](const auto &key) {
+		return key->keyId() == keyId;
+	});
+}
+
+[[nodiscard]] bool RestartDomain(Main::Domain &domain) {
+	domain.local().writeAccounts();
+	domain.finish();
+	return (domain.start(QByteArray()) == Storage::StartResult::Success)
+		&& !domain.accounts().empty();
+}
+
+[[nodiscard]] int FailAccountLifecycleRegression(const char *reason) {
+	std::fprintf(
+		stderr,
+		"Account lifecycle regression failed: %s\n",
+		reason);
+	return 1;
+}
+
+[[nodiscard]] MTPUser RegressionUser(
+	UserId id,
+	bool self,
+	const QString &phone);
+
+[[nodiscard]] bool CacheMismatchWaitsForDestructiveConfirmation(
+		not_null<Main::Account*> account,
+		std::shared_ptr<MTP::details::RSAPublicKey> candidateKey,
+		UserId candidateUserId,
+		uint64 retainedFingerprint,
+		uint64 retainedUserId) {
+	if (!ConfigurePinnedServer(account, candidateKey)) {
+		return false;
+	}
+	account->setSessionUserId(candidateUserId);
+	if (account->createSession(
+			RegressionUser(candidateUserId, true, QString()),
+			std::make_unique<Main::SessionSettings>())) {
+		return false;
+	}
+	const auto candidateFingerprint = candidateKey->fingerprint();
+	if (account->sessionExists()
+		|| !account->serverCacheBindingMismatchPending()
+		|| account->mtp().isServerEnrollmentNetworkAllowed()
+		|| account->local().checkServerCacheBinding(
+			retainedFingerprint,
+			retainedUserId) != Storage::ServerCacheBindingStatus::Match
+		|| account->local().checkServerCacheBinding(
+			candidateFingerprint,
+			candidateUserId.bare)
+			!= Storage::ServerCacheBindingStatus::Mismatch) {
+		return false;
+	}
+	if (account->beginServerReenrollment(
+			Main::details::ServerReenrollmentPrompt::IdentityChange,
+			true)
+		|| account->beginServerReenrollment(
+			Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+			false)
+		|| account->local().serverReenrollmentPending()) {
+		return false;
+	}
+	return account->local().checkServerCacheBinding(
+		retainedFingerprint,
+		retainedUserId) == Storage::ServerCacheBindingStatus::Match;
 }
 
 [[nodiscard]] Main::Account *FindAuthorizationBlockedAccount(
@@ -246,7 +348,7 @@ RegressionServerKey() {
 
 	const auto pinned = domain.add(MTP::Environment::Production);
 	pinned->mtp().stopForServerEnrollment();
-	if (!ConfigurePinnedServer(pinned)) {
+	if (!ConfigurePinnedServer(pinned, RegressionServerKey())) {
 		return FailChatParticipantsRegression(
 			"could not pin the custom test server");
 	}
@@ -357,10 +459,17 @@ RegressionServerKey() {
 
 	auto &domain = Core::App().domain();
 	if (!domain.started()) {
-		return 1;
+		return FailAccountLifecycleRegression(
+			"application domain did not start");
 	}
 	if (Core::App().activePrimaryWindow()) {
-		return 1;
+		return FailAccountLifecycleRegression(
+			"application unexpectedly created a primary window");
+	}
+	if (domain.accounts().size() != 1
+		|| domain.accounts().front().account->sessionExists()) {
+		return FailAccountLifecycleRegression(
+			"regression requires one fresh account in its isolated workdir");
 	}
 
 	// This is the production post-auth caller. It must keep the session
@@ -373,7 +482,8 @@ RegressionServerKey() {
 			|| !account->mtp().dcOptions().configEnumDcIds().empty())) {
 		// A fresh account is allowed to show enrollment, but it must not
 		// carry the built-in production table while it waits there.
-		return 1;
+		return FailAccountLifecycleRegression(
+			"fresh account retained production endpoints before enrollment");
 	}
 	// Sender destruction must cancel a refused request before queued delivery.
 	account->mtp().stopForServerEnrollment();
@@ -385,12 +495,14 @@ RegressionServerKey() {
 			++cancelledFailures;
 		}).send();
 		if (!sender.pending(requestId)) {
-			return 1;
+			return FailAccountLifecycleRegression(
+				"stopped sender did not retain its request");
 		}
 	}
 	QCoreApplication::processEvents();
 	if (cancelledFailures) {
-		return 1;
+		return FailAccountLifecycleRegression(
+			"destroyed sender delivered a cancelled request");
 	}
 	auto liveFailures = 0;
 	{
@@ -402,15 +514,20 @@ RegressionServerKey() {
 			}
 		}).send();
 		if (!sender.pending(requestId)) {
-			return 1;
+			return FailAccountLifecycleRegression(
+				"paused sender did not retain its request");
 		}
 		QCoreApplication::processEvents();
 		if (sender.pending(requestId) || liveFailures != 1) {
-			return 1;
+			return FailAccountLifecycleRegression(
+				"paused request was not rejected locally");
 		}
 	}
-	if (!ConfigurePinnedServer(account)) {
-		return 1;
+	const auto originalKey = RegressionServerKey();
+	const auto originalFingerprint = originalKey->fingerprint();
+	if (!ConfigurePinnedServer(account, originalKey)) {
+		return FailAccountLifecycleRegression(
+			"could not pin the test server");
 	}
 	account->setSessionUserId(UserId(4242));
 	qputenv(failureVariable.constData(), "1");
@@ -422,43 +539,51 @@ RegressionServerKey() {
 	if (published || account->sessionExists()
 		|| account->willHaveSessionUniqueId(nullptr) == 0
 		|| !account->local().mtpAuthorizationWriteFailed()) {
-		return 1;
+		return FailAccountLifecycleRegression(
+			"post-auth write failure published a session or lost its marker");
 	}
+	qunsetenv(failureVariable.constData());
 
 	// The failed post-auth write already persisted the block marker; leaving
 	// it in place verifies startup restores that durable block.
-	domain.local().writeAccounts();
-	domain.finish();
-	if (domain.start(QByteArray()) != Storage::StartResult::Success) {
-		return 1;
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart after the post-auth write failure");
 	}
 
 	const auto blocked = FindAuthorizationBlockedAccount(domain);
 	if (!blocked || !blocked->mtp().config().blocked()) {
-		return 1;
+		return FailAccountLifecycleRegression(
+			"post-auth failure did not restore a blocked account");
+	}
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart after blocked account teardown");
+	}
+	const auto stillBlocked = FindAuthorizationBlockedAccount(domain);
+	if (!stillBlocked || !stillBlocked->mtp().config().blocked()) {
+		return FailAccountLifecycleRegression(
+			"blocked teardown cleared the durable authorization failure");
 	}
 	const auto restarted = Main::details::CommitServerForget(
-		&blocked->local(),
+		&stillBlocked->local(),
 		Storage::ServerCacheBinding{
 			.fingerprintKnown = true,
-			.fingerprint = RegressionServerKey()->fingerprint(),
+			.fingerprint = originalFingerprint,
 			.userIdKnown = true,
 			.userId = 4242,
 		},
 		[] {});
 	if (!restarted
-		|| blocked->local().hasStoredCustomServer()
-		|| blocked->local().mtpAuthorizationWriteFailed()) {
-		return 1;
+		|| stillBlocked->local().hasStoredCustomServer()
+		|| stillBlocked->local().mtpAuthorizationWriteFailed()) {
+		return FailAccountLifecycleRegression(
+			"Forget did not durably clear the blocked server state");
 	}
 
-	domain.local().writeAccounts();
-	domain.finish();
-	if (domain.start(QByteArray()) != Storage::StartResult::Success) {
-		return 1;
-	}
-	if (domain.accounts().empty()) {
-		return 1;
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart after Forget");
 	}
 	const auto forgotten = not_null<Main::Account*>(
 		domain.accounts().front().account.get());
@@ -467,8 +592,10 @@ RegressionServerKey() {
 		|| forgotten->local().hasStoredCustomServer()
 		|| forgotten->local().mtpAuthorizationWriteFailed()
 		|| forgotten->willHaveSessionUniqueId(nullptr) != 0
-		|| !forgotten->mtp().dcOptions().configEnumDcIds().empty()) {
-		return 1;
+		|| !forgotten->mtp().dcOptions().configEnumDcIds().empty()
+		|| forgotten->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"Forget did not restart unenrolled without auth data or endpoints");
 	}
 	auto pausedFailures = 0;
 	{
@@ -480,14 +607,193 @@ RegressionServerKey() {
 			}
 		}).send();
 		if (!sender.pending(requestId)) {
-			return 1;
+			return FailAccountLifecycleRegression(
+				"unenrolled sender did not retain its request");
 		}
 		QCoreApplication::processEvents();
 		if (sender.pending(requestId) || pausedFailures != 1) {
-			return 1;
+			return FailAccountLifecycleRegression(
+				"unenrolled request was not rejected locally");
 		}
 	}
+
+	const auto initialKey = RegressionAuthKey(0x11);
+	forgotten->mtp().dcPersistentKeyChanged(2, initialKey);
+	if (!ConfigurePinnedServer(forgotten, originalKey)) {
+		return FailAccountLifecycleRegression(
+			"could not configure the matching server after Forget");
+	}
+	forgotten->setSessionUserId(UserId(4242));
+	if (!forgotten->createSession(
+			RegressionUser(UserId(4242), true, QString()),
+			std::make_unique<Main::SessionSettings>())
+		|| !forgotten->sessionExists()
+		|| forgotten->serverCacheBindingMismatchPending()
+		|| forgotten->local().checkServerCacheBinding(
+			originalFingerprint,
+			4242) != Storage::ServerCacheBindingStatus::Match) {
+		return FailAccountLifecycleRegression(
+			"matching server and user identity did not reuse the retained cache");
+	}
+	forgotten->mtp().resume();
+	const auto finalKey = RegressionAuthKey(0x22);
+	const auto finalKeyId = finalKey->keyId();
+	forgotten->mtp().dcPersistentKeyChanged(2, finalKey);
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart after active account teardown");
+	}
+	auto active = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!active->sessionExists()
+		|| !HasAuthKey(active, finalKeyId)
+		|| !active->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"active teardown did not persist its final authorization snapshot");
+	}
+
+	const auto teardownFailureKey = RegressionAuthKey(0x33);
+	active->mtp().dcPersistentKeyChanged(2, teardownFailureKey);
+	qputenv(failureVariable.constData(), "1");
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart after teardown-only authorization failure");
+	}
 	qunsetenv(failureVariable.constData());
+	auto failedTeardown = FindAuthorizationBlockedAccount(domain);
+	if (!failedTeardown
+		|| !failedTeardown->mtp().config().blocked()
+		|| !failedTeardown->local().mtpAuthorizationWriteFailed()) {
+		return FailAccountLifecycleRegression(
+			"active teardown-only failure did not block the next startup");
+	}
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart after blocked teardown");
+	}
+	failedTeardown = FindAuthorizationBlockedAccount(domain);
+	if (!failedTeardown
+		|| !failedTeardown->mtp().config().blocked()
+		|| !failedTeardown->local().mtpAuthorizationWriteFailed()) {
+		return FailAccountLifecycleRegression(
+			"blocked teardown changed its durable authorization state");
+	}
+	if (!Main::details::CommitServerForget(
+			&failedTeardown->local(),
+			Storage::ServerCacheBinding{
+				.fingerprintKnown = true,
+				.fingerprint = originalFingerprint,
+				.userIdKnown = true,
+				.userId = 4242,
+			},
+			[] {})
+		|| !RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not return to enrollment after teardown block");
+	}
+	auto unenrolled = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!unenrolled->mtp().dcOptions().unenrolled()
+		|| unenrolled->local().mtpAuthorizationWriteFailed()
+		|| unenrolled->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| unenrolled->local().checkServerCacheBinding(
+			originalFingerprint,
+			4242) != Storage::ServerCacheBindingStatus::Match) {
+		return FailAccountLifecycleRegression(
+			"Forget did not retain only the cache identity binding");
+	}
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"paused teardown did not complete its restart");
+	}
+	unenrolled = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!unenrolled->mtp().dcOptions().unenrolled()
+		|| unenrolled->local().mtpAuthorizationWriteFailed()
+		|| unenrolled->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"paused teardown wrote authorization data or a failure marker");
+	}
+
+	if (!CacheMismatchWaitsForDestructiveConfirmation(
+			unenrolled,
+			RegressionOtherServerKey(),
+			UserId(4242),
+			originalFingerprint,
+			4242)) {
+		return FailAccountLifecycleRegression(
+			"changed server fingerprint bypassed cache confirmation");
+	}
+	if (!Main::details::CommitServerForget(
+			&unenrolled->local(),
+			Storage::ServerCacheBinding{
+				.fingerprintKnown = true,
+				.fingerprint = originalFingerprint,
+				.userIdKnown = true,
+				.userId = 4242,
+			},
+			[] {})
+		|| !RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not reset the declined fingerprint change");
+	}
+	unenrolled = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!CacheMismatchWaitsForDestructiveConfirmation(
+			unenrolled,
+			originalKey,
+			UserId(5252),
+			originalFingerprint,
+			4242)) {
+		return FailAccountLifecycleRegression(
+			"changed user id bypassed cache confirmation");
+	}
+	if (!unenrolled->beginServerReenrollment(
+			Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
+			true)
+		|| !unenrolled->local().serverReenrollmentPending()
+		|| !RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"confirmed identity change did not schedule destructive cleanup");
+	}
+	unenrolled = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!unenrolled->mtp().dcOptions().unenrolled()
+		|| unenrolled->local().mtpAuthorizationWriteFailed()
+		|| unenrolled->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| unenrolled->local().checkServerCacheBinding(
+			originalFingerprint,
+			4242) != Storage::ServerCacheBindingStatus::None) {
+		return FailAccountLifecycleRegression(
+			"confirmed identity change did not discard the old cache binding");
+	}
+
+	unenrolled->local().writeCustomServerBlocked(false);
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"could not restart the synthetic blocked account");
+	}
+	auto blockedWithoutAuthorizationFailure = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!blockedWithoutAuthorizationFailure->mtp().config().blocked()
+		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
+		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"synthetic blocked startup did not retain its empty auth state");
+	}
+	if (!RestartDomain(domain)) {
+		return FailAccountLifecycleRegression(
+			"blocked teardown did not complete its restart");
+	}
+	blockedWithoutAuthorizationFailure = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (!blockedWithoutAuthorizationFailure->mtp().config().blocked()
+		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
+		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"blocked teardown wrote authorization data or a failure marker");
+	}
+
 	return StartChatParticipantsRegression(domain, std::move(done));
 }
 

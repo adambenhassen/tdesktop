@@ -325,6 +325,15 @@ bool Account::writeMtpData(bool sync) {
 		sync);
 }
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+bool Account::mtpAuthorizationDataExistsForRegressionTest() const {
+	const auto base = BaseGlobalPath() + ToFilePart(_dataNameKey);
+	return QFileInfo::exists(base + 's')
+		|| QFileInfo::exists(base + '0')
+		|| QFileInfo::exists(base + '1');
+}
+#endif
+
 std::optional<ServerCacheBinding> Account::readServerCacheBinding() const {
 	const auto base = _basePath + kServerCacheBindingFile;
 	const auto exists = QFileInfo::exists(base + 's')
