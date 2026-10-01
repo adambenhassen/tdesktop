@@ -180,22 +180,10 @@ run_spoiler_cache_symlink_case() {
 		"expected=$LOCK_PATH found=$(find_lock_path)" || FAILURES=$((FAILURES + 1))
 	report_result "${case_name}_bound_socket" "$SOCKET_LISTENER_READY" \
 		"path=$SOCKET_PATH filesystem_socket=$SOCKET_FILE_READY" || FAILURES=$((FAILURES + 1))
-	refusal="$(grep -F 'class=group-container callsite=emojiCacheFolder' \
-		"$START_LOG" "$PROFILE/log.txt" 2>/dev/null || true)"
-	if [[ -n "$refusal" ]]; then
-		report_result "${case_name}_cache_refusal" true "$refusal"
-	else
-		report_result "${case_name}_cache_refusal" false "missing protected-path refusal from emojiCacheFolder" || FAILURES=$((FAILURES + 1))
-	fi
 	if ! fixture_unchanged "$fixture" "$fixture_is_file" "$fixture_contents"; then
 		report_result "${case_name}_fixture_untouched" false "fixture=$fixture" || FAILURES=$((FAILURES + 1))
 	else
 		report_result "${case_name}_fixture_untouched" true "fixture=$fixture"
-	fi
-	if (( FAILURES > 0 )); then
-		cat "$START_LOG" >&2
-		[[ -f "$PROFILE/log.txt" ]] && cat "$PROFILE/log.txt" >&2
-		return 1
 	fi
 
 	set +e
@@ -227,6 +215,13 @@ run_spoiler_cache_symlink_case() {
 	FIRST_PID=""
 	report_result "${case_name}_first_instance_exit" "$([[ "$first_status" -eq 0 ]] && printf true || printf false)" \
 		"status=$first_status" || FAILURES=$((FAILURES + 1))
+	refusal="$(grep -F 'class=group-container callsite=emojiCacheFolder' \
+		"$START_LOG" "$PROFILE/log.txt" 2>/dev/null || true)"
+	if [[ -n "$refusal" ]]; then
+		report_result "${case_name}_cache_refusal" true "$refusal"
+	else
+		report_result "${case_name}_cache_refusal" false "missing protected-path refusal from emojiCacheFolder" || FAILURES=$((FAILURES + 1))
+	fi
 	if ! fixture_unchanged "$fixture" "$fixture_is_file" "$fixture_contents"; then
 		report_result "${case_name}_fixture_untouched_after_exit" false "fixture=$fixture" || FAILURES=$((FAILURES + 1))
 	else
