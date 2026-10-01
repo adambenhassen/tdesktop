@@ -758,18 +758,23 @@ TEST_CASE(LocalDiscoveryFailsOverToLaterResolvedAddress) {
 	if (!connected) {
 		return;
 	}
-#if defined Q_OS_WIN
-	const auto invalidPeer = INVALID_SOCKET;
-#else
-	const auto invalidPeer = -1;
-#endif
-	const auto peer = AcceptNativeTestSocket(server.socketDescriptor());
-	CHECK(peer != invalidPeer);
-	if (peer == invalidPeer) {
+	server.resumeAccepting();
+	const auto connectionAvailable = server.hasPendingConnections()
+		|| server.waitForNewConnection(1000);
+	CHECK(connectionAvailable);
+	if (!connectionAvailable) {
 		return;
 	}
-	CloseNativeTestSocket(peer);
-	client.waitForDisconnected(1000);
+	const auto peer = server.nextPendingConnection();
+	CHECK(peer != nullptr);
+	if (!peer) {
+		return;
+	}
+	peer->disconnectFromHost();
+	peer->deleteLater();
+	if (client.state() != QAbstractSocket::UnconnectedState) {
+		client.waitForDisconnected(1000);
+	}
 }
 
 #if !defined Q_OS_WIN
@@ -882,7 +887,12 @@ TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 	auto failed = false;
 	auto receivedRequest = QByteArray();
 	QTimer poll;
-	QObject::connect(&poll, &QTimer::timeout, &owner, [&] {
+	QEventLoop earlyResponsePollLoop;
+	auto earlyResponsePollRanBeforePeerClose = false;
+	auto responsePoll = [&] {
+		if (!firstPeerClosed) {
+			return;
+		}
 		if (responsePeer == -1) {
 			responsePeer = AcceptNativeTestSocket(server.socketDescriptor());
 			if (responsePeer == -1) {
@@ -931,7 +941,8 @@ TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 		responseSent = (responseOffset == response.size());
 		CloseNativeTestSocket(responsePeer);
 		responsePeer = -1;
-	});
+	};
+	QObject::connect(&poll, &QTimer::timeout, &owner, responsePoll);
 	poll.start(1);
 
 	discovery.start(
@@ -955,6 +966,34 @@ TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 				if (firstPeerClosed) {
 					return;
 				}
+				auto writeNotifier = static_cast<QSocketNotifier*>(nullptr);
+				for (const auto notifier :
+					discovery.findChildren<QSocketNotifier*>()) {
+					if (notifier->type() == QSocketNotifier::Write) {
+						writeNotifier = notifier;
+						break;
+					}
+				}
+				CHECK(writeNotifier != nullptr);
+				if (!writeNotifier) {
+					return;
+				}
+				writeNotifier->setEnabled(false);
+				auto earlyResponsePollRan = false;
+				QTimer::singleShot(0, &earlyResponsePollLoop, [&] {
+					earlyResponsePollRanBeforePeerClose = !firstPeerClosed;
+					responsePoll();
+					CHECK(responsePeer == -1);
+					CHECK_EQ(peersAccepted, 0);
+					earlyResponsePollRan = true;
+					earlyResponsePollLoop.quit();
+				});
+				QTimer::singleShot(
+					1000,
+					&earlyResponsePollLoop,
+					&QEventLoop::quit);
+				earlyResponsePollLoop.exec();
+				CHECK(earlyResponsePollRan);
 				const auto peer = AcceptNativeTestSocket(
 					server.socketDescriptor());
 				CHECK(peer != -1);
@@ -1014,6 +1053,7 @@ TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 	CHECK_EQ(peersAccepted, 2);
 	CHECK(firstPeerClosed);
 	CHECK(resetReachedClientBeforeSend);
+	CHECK(earlyResponsePollRanBeforePeerClose);
 	CHECK_EQ(receivedRequest, request);
 	CHECK(responseSent);
 	CHECK(finished);
