@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "config.h"
 #include "intro/intro_signup_controls.h"
+#include "intro/intro_signup_error.h"
 #include "intro/intro_username_validation.h"
 #include "intro/intro_widget.h"
 #include "lang/lang_keys.h"
@@ -230,40 +231,76 @@ void SignUpPasswordWidget::signUpDone(
 }
 
 void SignUpPasswordWidget::signUpFail(const MTP::Error &error) {
-	const auto &type = error.type();
-	// A 4xx RPC response is a definite rejection before account creation.
-	// Keep Back withdrawn for transport and 5xx failures: the request may
-	// have reached the server and committed before the failure was reported.
-	if (error.code() >= 400 && error.code() < 500) {
-		_backAvailable = true;
-	}
-	if (type == u"INPUT_REQUEST_INVALID"_q) {
-		showFormError(tr::lng_intro_signup_closed(tr::now));
-	} else if (type == u"USERNAME_OCCUPIED"_q) {
-		showFormError(tr::lng_intro_signup_taken(
+	const auto decision = ClassifySignupFailure(
+		error.type(),
+		error.code(),
+		MTP::IsFloodError(error),
+		_reissuedOnce);
+	_backAvailable = decision.backAvailable;
+
+	auto text = QString();
+	switch (decision.message) {
+	case SignupFailureMessage::RegistrationClosed:
+		text = tr::lng_intro_signup_closed(tr::now);
+		break;
+	case SignupFailureMessage::UsernameTaken:
+		text = tr::lng_intro_signup_taken(
 			tr::now,
 			lt_username,
-			getData()->phone));
-	} else if (type == u"PHONE_NUMBER_INVALID"_q) {
-		routeBackWithUsernameError(
-			tr::lng_intro_username_unavailable(tr::now));
-	} else if (type == u"FIRSTNAME_INVALID"_q) {
-		routeBackWithNameError(
-			tr::lng_intro_signup_name_bad(tr::now));
-	} else if (type == u"PHONE_CODE_INVALID"_q
-		|| type == u"PHONE_CODE_EXPIRED"_q) {
-		reissueCode();
-	} else if (MTP::IsFloodError(error)) {
-		showFormError(tr::lng_intro_signup_flood(
+			getData()->phone);
+		break;
+	case SignupFailureMessage::UsernameUnavailable:
+		text = tr::lng_intro_username_unavailable(tr::now);
+		break;
+	case SignupFailureMessage::UsernameInvalid:
+		text = tr::lng_intro_username_bad(tr::now);
+		break;
+	case SignupFailureMessage::NameInvalid:
+		text = tr::lng_intro_signup_name_bad(tr::now);
+		break;
+	case SignupFailureMessage::InvitationUnavailable:
+		text = tr::lng_intro_signup_invite_unusable(tr::now);
+		break;
+	case SignupFailureMessage::SessionCannotContinue:
+		text = tr::lng_intro_signup_session_invalid(tr::now);
+		break;
+	case SignupFailureMessage::CodeTicketExpired:
+		text = tr::lng_intro_signup_expired(tr::now);
+		break;
+	case SignupFailureMessage::FloodWait:
+		text = tr::lng_intro_signup_flood(
 			tr::now,
 			lt_duration,
-			Ui::FormatDurationWords(FloodWaitSeconds(type))));
-	} else {
-		LOG(("Intro Sign-up Error: auth.signUp failed with %1 (%2)")
-			.arg(type)
-			.arg(error.code()));
-		showFormError(tr::lng_intro_server_error(tr::now));
+			Ui::FormatDurationWords(decision.floodWaitSeconds));
+		break;
+	case SignupFailureMessage::ServerError:
+		text = tr::lng_intro_server_error(tr::now);
+		break;
 	}
+	if (decision.message == SignupFailureMessage::ServerError) {
+		LOG(("Intro Sign-up Error: auth.signUp failed with %1 (%2)")
+			.arg(error.type())
+			.arg(error.code()));
+	}
+
+	switch (decision.action) {
+	case SignupFailureAction::ReissueCode:
+		reissueCode();
+		return;
+	case SignupFailureAction::ReturnToInput:
+		if (decision.destination == SignupFailureDestination::Username) {
+			routeBackWithUsernameError(text);
+			return;
+		} else if (decision.destination == SignupFailureDestination::Name) {
+			routeBackWithNameError(text);
+			return;
+		}
+		break;
+	case SignupFailureAction::ShowError:
+		showFormError(text);
+		return;
+	}
+	showFormError(text);
 }
 
 void SignUpPasswordWidget::reissueCode() {
