@@ -141,6 +141,13 @@ RegressionOtherServerKey() {
 	});
 }
 
+[[nodiscard]] bool HasNoAuthorizationState(
+		not_null<Main::Account*> account) {
+	return account->mtp().getKeysForWrite().empty()
+		&& !account->sessionExists()
+		&& (account->willHaveSessionUniqueId(nullptr) == 0);
+}
+
 [[nodiscard]] bool RestartDomain(Main::Domain &domain) {
 	domain.local().writeAccounts();
 	domain.finish();
@@ -747,6 +754,10 @@ template <typename Result, typename Start>
 		return FailAccountLifecycleRegression(
 			"Forget did not durably clear the blocked server state");
 	}
+	if (stillBlocked->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"Forget left the persisted authorization snapshot before restart");
+	}
 
 	if (!RestartDomain(domain)) {
 		return FailAccountLifecycleRegression(
@@ -762,9 +773,8 @@ template <typename Result, typename Start>
 		|| forgotten->mtp().dcOptions().blocked()
 		|| forgotten->local().hasStoredCustomServer()
 		|| forgotten->local().mtpAuthorizationWriteFailed()
-		|| forgotten->willHaveSessionUniqueId(nullptr) != 0
-		|| !forgotten->mtp().dcOptions().configEnumDcIds().empty()
-		|| forgotten->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		|| !HasNoAuthorizationState(forgotten)
+		|| !forgotten->mtp().dcOptions().configEnumDcIds().empty()) {
 		return FailAccountLifecycleRegression(
 			"Forget did not restart unenrolled without auth data or endpoints");
 	}
@@ -876,6 +886,10 @@ template <typename Result, typename Start>
 		return FailAccountLifecycleRegression(
 			"blocked teardown changed its durable authorization state");
 	}
+	if (!failedTeardown->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"blocked teardown lost the prior authorization snapshot");
+	}
 	if (!Main::details::CommitServerForget(
 			&failedTeardown->local(),
 			Storage::ServerCacheBinding{
@@ -884,8 +898,15 @@ template <typename Result, typename Start>
 				.userIdKnown = true,
 				.userId = 4242,
 			},
-			[] {})
-		|| !RestartDomain(domain)) {
+			[] {})) {
+		return FailAccountLifecycleRegression(
+			"could not Forget the blocked account after teardown");
+	}
+	if (failedTeardown->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		return FailAccountLifecycleRegression(
+			"Forget left the prior authorization snapshot before restart");
+	}
+	if (!RestartDomain(domain)) {
 		return FailAccountLifecycleRegression(
 			"could not return to enrollment after teardown block");
 	}
@@ -893,7 +914,7 @@ template <typename Result, typename Start>
 		domain.accounts().front().account.get());
 	if (!unenrolled->mtp().dcOptions().unenrolled()
 		|| unenrolled->local().mtpAuthorizationWriteFailed()
-		|| unenrolled->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| !HasNoAuthorizationState(unenrolled)
 		|| unenrolled->local().checkServerCacheBinding(
 			originalFingerprint,
 			4242) != Storage::ServerCacheBindingStatus::Match) {
@@ -908,7 +929,7 @@ template <typename Result, typename Start>
 		domain.accounts().front().account.get());
 	if (!unenrolled->mtp().dcOptions().unenrolled()
 		|| unenrolled->local().mtpAuthorizationWriteFailed()
-		|| unenrolled->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		|| !HasNoAuthorizationState(unenrolled)) {
 		return FailAccountLifecycleRegression(
 			"paused teardown wrote authorization data or a failure marker");
 	}
@@ -972,7 +993,7 @@ template <typename Result, typename Start>
 		domain.accounts().front().account.get());
 	if (!unenrolled->mtp().dcOptions().unenrolled()
 		|| unenrolled->local().mtpAuthorizationWriteFailed()
-		|| unenrolled->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| !HasNoAuthorizationState(unenrolled)
 		|| unenrolled->local().checkServerCacheBinding(
 			originalFingerprint,
 			4242) != Storage::ServerCacheBindingStatus::None) {
@@ -989,7 +1010,7 @@ template <typename Result, typename Start>
 		domain.accounts().front().account.get());
 	if (!blockedWithoutAuthorizationFailure->mtp().config().blocked()
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
-		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| !HasNoAuthorizationState(blockedWithoutAuthorizationFailure)
 		|| !blockedWithoutAuthorizationFailure->local().hasStoredCustomServer()
 		|| blockedWithoutAuthorizationFailure->local().customServerPinUnknown()) {
 		return FailAccountLifecycleRegression(
@@ -1006,7 +1027,7 @@ template <typename Result, typename Start>
 		|| authorizationAttempts.authorizationFailureMarker != 0
 		|| authorizationAttempts.customServerBlockMarker != 0
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
-		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		|| !HasNoAuthorizationState(blockedWithoutAuthorizationFailure)) {
 		return FailAccountLifecycleRegression(
 			"authorization snapshot observer missed an isolated write attempt");
 	}
@@ -1039,7 +1060,7 @@ template <typename Result, typename Start>
 		domain.accounts().front().account.get());
 	if (!blockedWithoutAuthorizationFailure->mtp().config().blocked()
 		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationWriteFailed()
-		|| blockedWithoutAuthorizationFailure->local().mtpAuthorizationDataExistsForRegressionTest()) {
+		|| !HasNoAuthorizationState(blockedWithoutAuthorizationFailure)) {
 		return FailAccountLifecycleRegression(
 			"blocked teardown wrote authorization data or a failure marker");
 	}
