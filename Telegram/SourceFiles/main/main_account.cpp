@@ -33,6 +33,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+#include "tests/account_lifecycle_regression.h"
+#endif
 
 namespace Main {
 namespace {
@@ -203,6 +206,13 @@ std::unique_ptr<MTP::Config> Account::prepareToStart(
 }
 
 void Account::start(std::unique_ptr<MTP::Config> config) {
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordAuthStartupStateForRegressionTest(
+		_sessionUserId.bare,
+		int(_mtpFields.keys.size()),
+		_local->hasStoredCustomServer(),
+		_local->customServerPinUnknown());
+#endif
 	_appConfig = std::make_unique<AppConfig>(this);
 
 	// An account pinned to a user-entered endpoint and RSA key must

@@ -12,6 +12,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Tests {
 
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
+struct AuthStartupStateForRegressionTest final {
+	uint64 userId = 0;
+	int authorizationKeyCount = 0;
+	bool hasStoredPin = false;
+	bool pinUnknown = false;
+	bool observed = false;
+};
+
+[[nodiscard]] bool AuthStartupRegressionSandboxIsValid();
+void RecordAuthStartupStateForRegressionTest(
+	uint64 userId,
+	int authorizationKeyCount,
+	bool hasStoredPin,
+	bool pinUnknown);
+[[nodiscard]] AuthStartupStateForRegressionTest
+GetAuthStartupStateForRegressionTest();
+void RunAuthStartupRegression(Fn<void(int)> done);
+
 enum class LifecycleWriteForRegressionTest {
 	AuthorizationSnapshot,
 	AuthorizationFailureMarker,
