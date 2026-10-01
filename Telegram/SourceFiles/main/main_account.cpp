@@ -45,6 +45,8 @@ constexpr auto kWideIdsTag = ~uint64(0);
 enum class PinFailure {
 	None,
 	AuthorizationWriteFailed, // A prior auth snapshot did not reach disk.
+	ForgetTransitionFailed,
+	CacheBindingWriteFailed,
 	ConfigUnreadable, // Marker set, config blob missing or corrupt.
 	PinMissing,       // Marker set, config parses but carries no pin.
 	MarkerUnreadable, // Prefs unreadable, so pinned-unknown.
@@ -54,6 +56,10 @@ enum class PinFailure {
 	switch (failure) {
 	case PinFailure::AuthorizationWriteFailed:
 		return "previous authorization snapshot was not durable";
+	case PinFailure::ForgetTransitionFailed:
+		return "server forget transition could not be completed";
+	case PinFailure::CacheBindingWriteFailed:
+		return "cached message identity could not be recorded";
 	case PinFailure::ConfigUnreadable: return "config could not be read";
 	case PinFailure::PinMissing: return "config carries no pin";
 	case PinFailure::MarkerUnreadable: return "prefs could not be read";
@@ -70,6 +76,12 @@ enum class PinFailure {
 	const auto cause = (failure == PinFailure::AuthorizationWriteFailed)
 		? u"The last authorization save did not complete, so this account "
 			u"stays blocked rather than risk using a stale key."_q
+		: (failure == PinFailure::ForgetTransitionFailed)
+		? u"The server reset could not be completed, so this account stays "
+			u"blocked until its local state can be cleared safely."_q
+		: (failure == PinFailure::CacheBindingWriteFailed)
+		? u"This account's cached messages could not be bound to a server "
+			u"identity, so it stays blocked until that state can be recorded."_q
 		: (failure == PinFailure::MarkerUnreadable)
 		? u"This account's local data could not be read, so there is "
 			u"no way to tell which server it belongs to."_q
@@ -88,7 +100,7 @@ enum class PinFailure {
 
 [[nodiscard]] object_ptr<Ui::GenericBox> MakePinFailureBox(
 		PinFailure failure,
-		Fn<void()> forget) {
+		Fn<bool()> forget) {
 	// Deliberately not MakeConfirmBox. That binds Enter and Return to
 	// the confirm button unconditionally, and this modal appears
 	// unbidden at startup, where Enter is the ordinary reflex for
@@ -112,7 +124,12 @@ enum class PinFailure {
 			[=] { box->closeBox(); });
 		box->addLeftButton(
 			rpl::single(u"Forget server"_q),
-			forget,
+			[=] {
+				if (!forget()) {
+					box->uiShow()->showToast(
+						u"Could not safely forget this server. The account remains blocked."_q);
+				}
+			},
 			st::attentionBoxButton);
 	});
 }
@@ -140,7 +157,11 @@ Account::~Account() {
 	// shutdown the event loop can finish before that callback runs, so take a
 	// final durable authorization snapshot while the MTP instance still owns
 	// the current key and pin.
-	if (_mtp) {
+	if (_mtp
+		&& !_mtp->dcOptions().blocked()
+		&& !_mtp->dcOptions().unenrolled()
+		&& _mtp->isServerEnrollmentNetworkAllowed()
+		&& !_serverCacheBindingMismatchPending) {
 		static_cast<void>(details::CommitTeardownMtpAuthorization(
 			_local.get(),
 			[] {},
@@ -190,13 +211,30 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 	// Telegram's own servers behind it. A config that holds the pin
 	// settles it whatever the marker says; otherwise the marker
 	// decides, and an unreadable marker counts as pinned.
-	const auto failure = [&] {
-		if (_local->mtpAuthorizationWriteFailed()) {
+	const auto originalPin = config
+		? config->customServer()
+		: MTP::CustomServer();
+	const auto forgetBinding = Storage::ServerCacheBinding{
+		.fingerprintKnown = bool(originalPin.key),
+		.fingerprint = originalPin.key
+			? originalPin.key->fingerprint()
+			: uint64(0),
+		.userIdKnown = bool(_sessionUserId),
+		.userId = _sessionUserId.bare,
+	};
+	auto failure = [&] {
+		if (_local->serverForgetBlocked()) {
+			return PinFailure::ForgetTransitionFailed;
+		} else if (_local->mtpAuthorizationWriteFailed()) {
 			return PinFailure::AuthorizationWriteFailed;
 		} else if (config && config->hasCustomServer()) {
 			return PinFailure::None;
 		} else if (_local->customServerPinUnknown()) {
 			return PinFailure::MarkerUnreadable;
+		} else if (details::ShouldBlockRestoredSessionWithoutServerPin(
+				bool(_sessionUserId),
+				config && config->hasCustomServer())) {
+			return PinFailure::PinMissing;
 		} else if (!_local->hasStoredCustomServer()) {
 			return PinFailure::None;
 		} else if (!config) {
@@ -207,10 +245,41 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 		// disk, as does a rollback to a binary that drops the block.
 		return PinFailure::PinMissing;
 	}();
+	if (failure == PinFailure::None
+		&& _sessionUserId
+		&& config
+		&& config->customServer().key
+		&& _local->checkServerCacheBinding(
+			config->customServer().key->fingerprint(),
+			_sessionUserId.bare) == Storage::ServerCacheBindingStatus::None
+		&& !_local->ensureServerCacheBinding(Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = config->customServer().key->fingerprint(),
+			.userIdKnown = true,
+			.userId = _sessionUserId.bare,
+		})) {
+		failure = PinFailure::CacheBindingWriteFailed;
+	}
+	if (failure == PinFailure::None
+		&& !_sessionUserId
+		&& (!config || !config->hasCustomServer())
+		&& (!_mtpFields.keys.empty() || !_mtpKeysToDestroy.empty())
+		&& !_local->ensureServerCacheBinding(Storage::ServerCacheBinding())) {
+		failure = PinFailure::CacheBindingWriteFailed;
+	}
 	if (failure != PinFailure::None) {
 		LOG(("MTP Error: custom server pin could not be honoured (%1), "
 			"refusing to fall back to production."
 			).arg(QString::fromUtf8(PinFailureLog(failure))));
+		// A blocked account must not construct a Session from a restored
+		// identity or carry its old keys into a later server enrollment.
+		_sessionUserId = 0;
+		_sessionUserSerialized = {};
+		_sessionUserStreamVersion = 0;
+		_storedSessionSettings.reset();
+		_mtpFields.keys.clear();
+		_mtpKeysToDestroy.clear();
+		_mtpKeysToDestroyPin.reset();
 		config = std::make_unique<MTP::Config>(MTP::Environment::Production);
 		config->dcOptions().constructBlocked();
 		// The authorization-write marker is already durable and has its own
@@ -229,8 +298,10 @@ void Account::start(std::unique_ptr<MTP::Config> config) {
 			Ui::show(MakePinFailureBox(failure, crl::guard(this, [=] {
 				LOG(("MTP Info: forgetting the custom server pin for "
 					"this account on the user's request."));
-				_local->clearCustomServerBlocked();
-				Core::Restart();
+				return details::CommitServerForget(
+					_local.get(),
+					forgetBinding,
+					[] { Core::Restart(); });
 			})));
 		});
 	} else if (!config) {
@@ -405,15 +476,44 @@ bool Account::createSession(
 	Expects(_session == nullptr);
 	Expects(_sessionValue.current() == nullptr);
 
+	const auto userId = UserId(user.c_user().vid());
+	const auto customServer = _mtp->dcOptions().customServer();
+	const auto authorizedDcId = customServer.key
+		? customServer.dcId
+		: _mtp->mainDcId();
+	const auto fingerprint = customServer.key
+		? customServer.key->fingerprint()
+		: uint64(0);
+	const auto cacheBinding = _local->checkServerCacheBinding(
+		fingerprint,
+		userId.bare);
+	if (cacheBinding == Storage::ServerCacheBindingStatus::Mismatch) {
+		if (!_mtp->dcOptions().isAuthorized(authorizedDcId)
+			&& !_mtp->dcOptions().markAuthorized(authorizedDcId)) {
+			return false;
+		}
+		_serverCacheBindingMismatchPending = true;
+		_mtp->stopForServerEnrollment();
+		_serverCacheBindingMismatch.fire({});
+		return false;
+	}
+	if (cacheBinding == Storage::ServerCacheBindingStatus::None
+		&& customServer.key
+		&& !_local->ensureServerCacheBinding(Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = fingerprint,
+			.userIdKnown = true,
+			.userId = userId.bare,
+		})) {
+		return false;
+	}
+	_serverCacheBindingMismatchPending = false;
+
 	_session = std::make_unique<Session>(this, user, std::move(settings));
 	if (!serialized.isEmpty()) {
 		local().readSelf(_session.get(), serialized, streamVersion);
 	}
 	const auto previousOptions = _mtp->dcOptions().serialize();
-	const auto customServer = _mtp->dcOptions().customServer();
-	const auto authorizedDcId = customServer.key
-		? customServer.dcId
-		: _mtp->mainDcId();
 	const auto markedAuthorized = _mtp->dcOptions().markAuthorized(
 		authorizedDcId);
 	const auto restoreOptions = [&] {
@@ -515,6 +615,10 @@ rpl::producer<MTPUpdates> Account::mtpUpdates() const {
 
 rpl::producer<> Account::mtpNewSessionCreated() const {
 	return _mtpNewSessionCreated.events();
+}
+
+rpl::producer<> Account::serverCacheBindingMismatch() const {
+	return _serverCacheBindingMismatch.events();
 }
 
 void Account::setMtpMainDcId(MTP::DcId mainDcId) {
@@ -783,16 +887,18 @@ bool Account::startMtp(
 
 	if (restoringSession) {
 		if (!createSession(
-			_sessionUserId,
-			_sessionUserSerialized,
-			_sessionUserStreamVersion,
-			(_storedSessionSettings
-				? std::move(_storedSessionSettings)
-				: std::make_unique<SessionSettings>()))) {
+				_sessionUserId,
+				_sessionUserSerialized,
+				_sessionUserStreamVersion,
+				(_storedSessionSettings
+					? std::move(_storedSessionSettings)
+					: std::make_unique<SessionSettings>()))) {
 			// The instance was held behind the enrollment gate until the
 			// authorization snapshot committed. Do not publish it, resume
 			// network traffic, or consume the stored user id after failure.
-			_mtp->dcOptions().constructBlocked();
+			if (!_serverCacheBindingMismatchPending) {
+				_mtp->dcOptions().constructBlocked();
+			}
 			LOG(("MTP Error: stored authorization could not be restored; "
 				"keeping the account blocked."));
 			return false;

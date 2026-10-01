@@ -833,29 +833,20 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 		[&](const Components &components) { return IsHomeRoot(components); },
 		true, FollowsFinalComponent(operation));
 	if (walked.status == WalkResult::Status::Refused) {
-		return Refused(
-			operation,
-			walked.protectedClass,
-			callsite,
-			refusals);
+		return Refused(operation, walked.protectedClass, callsite, refusals);
 	}
 	if (walked.status != WalkResult::Status::Allowed) {
-		return Refused(
-			operation,
-			ProtectedClass::Invalid,
-			callsite,
-			refusals);
+		return Refused(operation, ProtectedClass::Invalid, callsite, refusals);
 	}
 	return Allowed(walked.components);
 }
 
-PairResolution MacProtectedPathPolicy::ResolvePair(
-		Operation operation,
-		const QByteArray &first,
-		const QByteArray &second,
-		const QByteArray &anchor,
-		const QString &callsite,
-		RefusalLog *refusals) const {
+PairResolution MacProtectedPathPolicy::ResolvePair(Operation operation,
+												   const QByteArray &first,
+												   const QByteArray &second,
+												   const QByteArray &anchor,
+												   const QString &callsite,
+												   RefusalLog *refusals) const {
 	return {
 		Resolve(operation, first, anchor, callsite, refusals),
 		Resolve(operation, second, anchor, callsite, refusals) };

@@ -71,12 +71,15 @@ PRIVATE
     data/data_peer_id.cpp
     data/data_pts_waiter.cpp
     intro/intro_server_discovery.cpp
+    intro/intro_signup_error.cpp
     intro/intro_username_validation.cpp
     main/main_account_persistence.cpp
     storage/details/storage_file_utilities.cpp
     storage/storage_account_persistence.cpp
+    storage/storage_server_forget_startup.cpp
     storage/storage_domain.cpp
     tests/unit/data_chat_participants_tests.cpp
+    tests/unit/intro_signup_error_tests.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/mac_protected_path_policy_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp

@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/storage_account.h"
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+#include "tests/account_lifecycle_regression.h"
+#endif
+
 #include "base/const_string.h"
 #include "main/main_account.h"
 #include "mtproto/mtproto_config.h"
@@ -75,8 +79,10 @@ constexpr auto kMtpAuthorizationWriteFailedPref
 	= "mtp_authorization_write_failed"_cs;
 const auto kMtpAuthorizationWriteFailedFile
 	= u"mtp_authorization_write_failed"_q;
+const auto kServerCacheBindingFile = u"server_cache_binding"_q;
 const auto kServerReenrollmentTombstonePrefix
 	= u"server_reenrollment_"_q;
+const auto kServerForgetTombstonePrefix = u"server_forget_"_q;
 
 [[nodiscard]] QString BaseGlobalPath() {
 #ifdef TDESKTOP_UNIT_TESTS
@@ -88,6 +94,10 @@ const auto kServerReenrollmentTombstonePrefix
 
 [[nodiscard]] QString ServerReenrollmentTombstoneName(FileKey dataNameKey) {
 	return kServerReenrollmentTombstonePrefix + ToFilePart(dataNameKey);
+}
+
+[[nodiscard]] QString ServerForgetTombstoneName(FileKey dataNameKey) {
+	return kServerForgetTombstonePrefix + ToFilePart(dataNameKey);
 }
 
 [[nodiscard]] bool RemoveFileVariants(
@@ -178,6 +188,46 @@ ReadServerReenrollmentTombstone(
 	return std::make_pair(std::move(webviewBots), std::move(webviewOther));
 }
 
+[[nodiscard]] std::optional<ServerCacheBinding>
+ReadServerForgetTombstone(
+		FileKey dataNameKey,
+		const QString &basePath,
+		const MTP::AuthKeyPtr &localKey) {
+	FileReadDescriptor marker;
+	if (!ReadEncryptedFile(
+			marker,
+			ServerForgetTombstoneName(dataNameKey),
+			basePath,
+			localKey)) {
+		return std::nullopt;
+	}
+
+	quint32 version = 0;
+	quint8 fingerprintKnown = 0;
+	quint64 fingerprint = 0;
+	quint8 userIdKnown = 0;
+	quint64 userId = 0;
+	marker.stream
+		>> version
+		>> fingerprintKnown
+		>> fingerprint
+		>> userIdKnown
+		>> userId;
+	if (!CheckStreamStatus(marker.stream)
+		|| !marker.stream.atEnd()
+		|| version != 1
+		|| fingerprintKnown > 1
+		|| userIdKnown > 1) {
+		return std::nullopt;
+	}
+	return ServerCacheBinding{
+		.fingerprintKnown = bool(fingerprintKnown),
+		.fingerprint = fingerprint,
+		.userIdKnown = bool(userIdKnown),
+		.userId = userId,
+	};
+}
+
 } // namespace
 
 #ifdef TDESKTOP_UNIT_TESTS
@@ -192,7 +242,8 @@ Account::Account(
 		Fn<bool()> writeMtpAuthorizationOverride,
 		QString tempPath,
 		QString databasePath,
-		FileKey dataNameKey)
+		FileKey dataNameKey,
+		bool mtpAuthorizationWriteFailed)
 : _owner(nullptr)
 , _dataNameKey(dataNameKey)
 , _basePath(basePath.endsWith(QDir::separator())
@@ -206,6 +257,7 @@ Account::Account(
 	: std::move(databasePath))
 , _localKey(std::move(localKey))
 , _hasStoredCustomServer(hasStoredCustomServer)
+, _mtpAuthorizationWriteFailed(mtpAuthorizationWriteFailed)
 , _mtpConfig([config = std::move(config)]() -> const MTP::Config & {
 	return *config;
 })
@@ -235,6 +287,8 @@ Account::~Account() {
 
 bool Account::writeMtpAuthorization() {
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordLifecycleWriteForRegressionTest(
+		Tests::LifecycleWriteForRegressionTest::AuthorizationSnapshot);
 	if (qEnvironmentVariableIsSet(
 			"TDESKTOP_FAIL_MTP_AUTHORIZATION_WRITE")) {
 		return false;
@@ -264,6 +318,10 @@ bool Account::writeMtpAuthorization() {
 bool Account::writeMtpAuthorizationFailure() {
 	Expects(_localKey != nullptr);
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordLifecycleWriteForRegressionTest(
+		Tests::LifecycleWriteForRegressionTest::AuthorizationFailureMarker);
+#endif
 	writePref<bool>(kMtpAuthorizationWriteFailedPref, true);
 	const auto prefsWritten = writePrefs(true);
 	EncryptedDescriptor marker(sizeof(quint32));
@@ -295,6 +353,205 @@ bool Account::writeMtpData(bool sync) {
 		_localKey,
 		serialized,
 		sync);
+}
+
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+bool Account::mtpAuthorizationDataExistsForRegressionTest() const {
+	const auto base = BaseGlobalPath() + ToFilePart(_dataNameKey);
+	return QFileInfo::exists(base + 's')
+		|| QFileInfo::exists(base + '0')
+		|| QFileInfo::exists(base + '1');
+}
+#endif
+
+std::optional<ServerCacheBinding> Account::readServerCacheBinding() const {
+	const auto base = _basePath + kServerCacheBindingFile;
+	const auto exists = QFileInfo::exists(base + 's')
+		|| QFileInfo::exists(base + '0')
+		|| QFileInfo::exists(base + '1');
+	if (!exists) {
+		return std::nullopt;
+	}
+
+	FileReadDescriptor marker;
+	if (!ReadEncryptedFile(
+			marker,
+			kServerCacheBindingFile,
+			_basePath,
+			_localKey)) {
+		return ServerCacheBinding();
+	}
+
+	quint32 version = 0;
+	quint8 fingerprintKnown = 0;
+	quint64 fingerprint = 0;
+	quint8 userIdKnown = 0;
+	quint64 userId = 0;
+	marker.stream
+		>> version
+		>> fingerprintKnown
+		>> fingerprint
+		>> userIdKnown
+		>> userId;
+	if (!CheckStreamStatus(marker.stream)
+		|| !marker.stream.atEnd()
+		|| version != 1
+		|| fingerprintKnown > 1
+		|| userIdKnown > 1) {
+		return ServerCacheBinding();
+	}
+	return ServerCacheBinding{
+		.fingerprintKnown = bool(fingerprintKnown),
+		.fingerprint = fingerprint,
+		.userIdKnown = bool(userIdKnown),
+		.userId = userId,
+	};
+}
+
+bool Account::ensureServerCacheBinding(ServerCacheBinding binding) {
+	Expects(_localKey != nullptr);
+
+	if (readServerCacheBinding()) {
+		return true;
+	}
+	EncryptedDescriptor marker(
+		sizeof(quint32)
+		+ sizeof(quint8)
+		+ sizeof(quint64)
+		+ sizeof(quint8)
+		+ sizeof(quint64));
+	marker.stream
+		<< quint32(1)
+		<< quint8(binding.fingerprintKnown)
+		<< quint64(binding.fingerprint)
+		<< quint8(binding.userIdKnown)
+		<< quint64(binding.userId);
+	FileWriteDescriptor file(kServerCacheBindingFile, _basePath, true);
+	file.writeEncrypted(marker, _localKey);
+	return file.finish();
+}
+
+ServerCacheBindingStatus Account::checkServerCacheBinding(
+		uint64 fingerprint,
+		uint64 userId) const {
+	const auto binding = readServerCacheBinding();
+	if (!binding) {
+		return ServerCacheBindingStatus::None;
+	}
+	return (binding->fingerprintKnown
+		&& binding->userIdKnown
+		&& binding->fingerprint == fingerprint
+		&& binding->userId == userId)
+		? ServerCacheBindingStatus::Match
+		: ServerCacheBindingStatus::Mismatch;
+}
+
+bool Account::beginServerForget(ServerCacheBinding binding) {
+	Expects(_localKey != nullptr);
+	if (serverForgetPending()) {
+		return completeServerForget();
+	}
+
+	EncryptedDescriptor marker(
+		sizeof(quint32)
+		+ sizeof(quint8)
+		+ sizeof(quint64)
+		+ sizeof(quint8)
+		+ sizeof(quint64));
+	marker.stream
+		<< quint32(1)
+		<< quint8(binding.fingerprintKnown)
+		<< quint64(binding.fingerprint)
+		<< quint8(binding.userIdKnown)
+		<< quint64(binding.userId);
+	FileWriteDescriptor file(
+		ServerForgetTombstoneName(_dataNameKey),
+		BaseGlobalPath(),
+		true);
+	file.writeEncrypted(marker, _localKey);
+	if (!file.finish()) {
+		return false;
+	}
+#ifdef TDESKTOP_UNIT_TESTS
+	if (_serverForgetInterruptionForTest == 1) {
+		_serverForgetInterruptionForTest = 0;
+		return false;
+	}
+#endif
+	return completeServerForget();
+}
+
+bool Account::serverForgetPending() const {
+	const auto base = BaseGlobalPath()
+		+ ServerForgetTombstoneName(_dataNameKey);
+	return QFileInfo::exists(base + 's')
+		|| QFileInfo::exists(base + '0')
+		|| QFileInfo::exists(base + '1');
+}
+
+bool Account::completeServerForget() {
+	Expects(_localKey != nullptr);
+	if (!serverForgetPending()) {
+		return true;
+	}
+	const auto binding = ReadServerForgetTombstone(
+		_dataNameKey,
+		BaseGlobalPath(),
+		_localKey);
+	if (!binding) {
+		return false;
+	}
+
+#ifdef TDESKTOP_UNIT_TESTS
+	const auto interrupted = [this](int point) {
+		if (_serverForgetInterruptionForTest != point) {
+			return false;
+		}
+		_serverForgetInterruptionForTest = 0;
+		return true;
+	};
+#else
+	const auto interrupted = [](int) {
+		return false;
+	};
+#endif
+
+	if (interrupted(2) || !ensureServerCacheBinding(*binding)) {
+		return false;
+	}
+	if (interrupted(3)
+		|| !RemoveFileVariants(
+			BaseGlobalPath(),
+			ToFilePart(_dataNameKey))) {
+		return false;
+	}
+	if (interrupted(4)
+		|| !RemoveFileVariants(_basePath, u"config"_q)) {
+		return false;
+	}
+
+	clearPref(kCustomServerPinnedPref);
+	clearPref(kCustomServerPinUnknownPref);
+	clearPref(kMtpAuthorizationWriteFailedPref);
+	_hasStoredCustomServer = false;
+	_customServerPinUnknown = false;
+	_mtpAuthorizationWriteFailed = false;
+	if (interrupted(5) || !writePrefs(true)) {
+		return false;
+	}
+	if (interrupted(6)
+		|| !clearMtpAuthorizationFailureMarker()) {
+		return false;
+	}
+	details::Sync();
+	if (!RemoveFileVariants(
+			BaseGlobalPath(),
+			ServerForgetTombstoneName(_dataNameKey))) {
+		return false;
+	}
+	details::Sync();
+	_serverForgetBlocked = false;
+	return true;
 }
 
 bool Account::writeServerReenrollmentTombstone() {
@@ -519,8 +776,21 @@ std::unique_ptr<MTP::Config> Account::startServerReenrollmentForTest(
 	return startServerReenrollment();
 }
 
+bool Account::completeServerForgetForTest(MTP::AuthKeyPtr localKey) {
+	_localKey = std::move(localKey);
+	if (!completeServerForget()) {
+		_serverForgetBlocked = true;
+		return false;
+	}
+	return true;
+}
+
 void Account::setServerReenrollmentInterruptionForTest(int point) {
 	_serverReenrollmentInterruptionForTest = point;
+}
+
+void Account::setServerForgetInterruptionForTest(int point) {
+	_serverForgetInterruptionForTest = point;
 }
 
 #endif // TDESKTOP_UNIT_TESTS
@@ -868,6 +1138,40 @@ void Account::writePrefsDelayed() {
 	_writePrefsTimer.callOnce(kDelayedWriteTimeout);
 }
 
+void Account::readPrefs() {
+	FileReadDescriptor prefs;
+	if (!ReadEncryptedFile(prefs, _prefsKey, _basePath, _localKey)) {
+		_prefsReadFailed = true;
+		ClearKey(_prefsKey, _basePath);
+		_prefsKey = 0;
+		writeMapDelayed();
+		return;
+	}
+
+	auto count = quint32();
+	prefs.stream >> count;
+	if (prefs.stream.status() != QDataStream::Ok) {
+		_prefsReadFailed = true;
+		return;
+	}
+	auto map = base::flat_map<QByteArray, QByteArray>();
+	map.reserve(count);
+	for (auto i = quint32(); i != count; ++i) {
+		auto keySize = quint32(), valueSize = quint32();
+		prefs.stream >> keySize >> valueSize;
+		auto key = QByteArray(keySize, Qt::Uninitialized);
+		auto value = QByteArray(valueSize, Qt::Uninitialized);
+		prefs.stream.readRawData(key.data(), keySize);
+		prefs.stream.readRawData(value.data(), valueSize);
+		if (prefs.stream.status() != QDataStream::Ok) {
+			_prefsReadFailed = true;
+			return;
+		}
+		map.emplace(std::move(key), std::move(value));
+	}
+	_prefs = std::move(map);
+}
+
 bool Account::writePrefs(bool sync) {
 	_writePrefsTimer.cancel();
 	if (!_prefsChanged) {
@@ -936,6 +1240,20 @@ std::optional<bool> Account::readPrefImpl<bool>(std::string_view key) {
 template <>
 void Account::writePrefImpl<bool>(std::string_view key, bool value) {
 	writePrefGeneric(key, value ? "\x1"_q : QByteArray());
+}
+
+void Account::readStoredCustomServerPin() {
+	// Read before readMtpConfig() so that a corrupted or truncated
+	// config blob on a pinned account still fails closed. When the
+	// prefs themselves could not be read the marker is unknown, not
+	// absent: defaulting it to false would send a pinned account to
+	// production on one damaged tdata event.
+	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
+	_customServerPinUnknown = _prefsReadFailed
+		|| readPref<bool>(kCustomServerPinUnknownPref);
+	_mtpAuthorizationWriteFailed = readPref<bool>(
+		kMtpAuthorizationWriteFailedPref);
+	readMtpAuthorizationFailureMarker();
 }
 
 } // namespace Storage

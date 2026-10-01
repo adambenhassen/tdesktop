@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Storage {
 class Account;
+struct ServerCacheBinding;
 } // namespace Storage
 
 namespace Main::details {
@@ -27,6 +28,15 @@ enum class ServerReenrollmentPrompt {
 	ServerReenrollmentPrompt prompt,
 	bool accepted,
 	Fn<bool()> commit);
+
+[[nodiscard]] bool ShouldBlockRestoredSessionWithoutServerPin(
+	bool hasRestoredUserId,
+	bool hasReadableServerPin);
+
+[[nodiscard]] bool CommitServerForget(
+	not_null<Storage::Account*> local,
+	Storage::ServerCacheBinding binding,
+	Fn<void()> restart);
 
 // Keep the durable authorization boundary identical for the two real
 // Main::Account lifecycle callers. The storage object is the mandatory seam,
