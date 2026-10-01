@@ -425,6 +425,8 @@ RegressionServerKey() {
 		return 1;
 	}
 
+	// The failed post-auth write already persisted the block marker; leaving
+	// it in place verifies startup restores that durable block.
 	domain.local().writeAccounts();
 	domain.finish();
 	if (domain.start(QByteArray()) != Storage::StartResult::Success) {
