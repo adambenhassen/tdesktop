@@ -66,12 +66,26 @@ report_result() {
 	fi
 }
 
+fixture_unchanged() {
+	local fixture="$1"
+	local is_file="$2"
+	local expected_contents="$3"
+	if [[ "$is_file" == true ]]; then
+		[[ -f "$fixture" ]] && [[ "$(cat "$fixture")" == "$expected_contents" ]]
+	else
+		[[ -d "$fixture" ]] \
+			&& [[ -z "$(find "$fixture" -mindepth 1 -print -quit)" ]]
+	fi
+}
+
 run_spoiler_cache_symlink_case() {
 	local case_name="$1"
 	local link_name="$2"
 	local case_home="$TEST_HOME/$case_name"
 	local PROFILE="$case_home/Library/Application Support/Telegramd"
 	local fixture="$case_home/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/SyntheticSpoilerCache"
+	local fixture_is_file=false
+	local fixture_contents='synthetic protected cache bytes'
 	local START_LOG="$case_home/start.log"
 	local quit_log="$case_home/quit.log"
 	local LOCK_NAME="$LOCK_NAME"
@@ -91,13 +105,26 @@ run_spoiler_cache_symlink_case() {
 	local response
 	local refusal
 
-	mkdir -p "$PROFILE/tdata" "$fixture"
-	if [[ "$link_name" == emoji ]]; then
+	case "$link_name" in
+	emoji)
+		mkdir -p "$PROFILE/tdata" "$fixture"
 		ln -s "$fixture" "$PROFILE/tdata/emoji"
-	else
-		mkdir -p "$PROFILE/tdata/emoji"
+		;;
+	spoiler)
+		mkdir -p "$PROFILE/tdata/emoji" "$fixture"
 		ln -s "$fixture" "$PROFILE/tdata/emoji/spoiler"
-	fi
+		;;
+	text|image)
+		mkdir -p "$PROFILE/tdata/emoji/spoiler" "$(dirname "$fixture")"
+		printf '%s' "$fixture_contents" > "$fixture"
+		ln -s "$fixture" "$PROFILE/tdata/emoji/spoiler/$link_name"
+		fixture_is_file=true
+		;;
+	*)
+		echo "unsupported spoiler cache symlink: $link_name" >&2
+		return 2
+		;;
+	esac
 	socket_bytes="$(LC_ALL=C printf '%s' "$SOCKET_PATH" | wc -c | tr -d '[:space:]')"
 	if (( socket_bytes > MAC_SOCKET_PATH_LIMIT )); then
 		echo "socket path is $socket_bytes bytes; macOS sun_path limit is $MAC_SOCKET_PATH_LIMIT: $SOCKET_PATH" >&2
@@ -160,7 +187,7 @@ run_spoiler_cache_symlink_case() {
 	else
 		report_result "${case_name}_cache_refusal" false "missing protected-path refusal from emojiCacheFolder" || FAILURES=$((FAILURES + 1))
 	fi
-	if [[ -n "$(find "$fixture" -mindepth 1 -print -quit)" ]]; then
+	if ! fixture_unchanged "$fixture" "$fixture_is_file" "$fixture_contents"; then
 		report_result "${case_name}_fixture_untouched" false "fixture=$fixture" || FAILURES=$((FAILURES + 1))
 	else
 		report_result "${case_name}_fixture_untouched" true "fixture=$fixture"
@@ -200,7 +227,7 @@ run_spoiler_cache_symlink_case() {
 	FIRST_PID=""
 	report_result "${case_name}_first_instance_exit" "$([[ "$first_status" -eq 0 ]] && printf true || printf false)" \
 		"status=$first_status" || FAILURES=$((FAILURES + 1))
-	if [[ -n "$(find "$fixture" -mindepth 1 -print -quit)" ]]; then
+	if ! fixture_unchanged "$fixture" "$fixture_is_file" "$fixture_contents"; then
 		report_result "${case_name}_fixture_untouched_after_exit" false "fixture=$fixture" || FAILURES=$((FAILURES + 1))
 	else
 		report_result "${case_name}_fixture_untouched_after_exit" true "fixture=$fixture"
@@ -407,5 +434,7 @@ fi
 
 run_spoiler_cache_symlink_case emoji-cache-symlink emoji
 run_spoiler_cache_symlink_case spoiler-cache-symlink spoiler
+run_spoiler_cache_symlink_case text-cache-leaf-symlink text
+run_spoiler_cache_symlink_case image-cache-leaf-symlink image
 
 echo "profile, spoiler-cache, and non-store single-instance checks passed."

@@ -299,7 +299,22 @@ QString UiIntegration::emojiCacheFolder() {
 				path,
 				kCallsite);
 	};
-	return allowed(folder) && allowed(spoiler) ? folder : QString();
+	const auto allowedCacheFile = [&](const QString &path) {
+		return MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Read,
+				path,
+				kCallsite)
+			&& MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::Write,
+				path,
+				kCallsite);
+	};
+	return allowed(folder)
+		&& allowed(spoiler)
+		&& allowedCacheFile(spoiler + u"/text"_q)
+		&& allowedCacheFile(spoiler + u"/image"_q)
+		? folder
+		: QString();
 }
 
 QString UiIntegration::openglCheckFilePath() {
