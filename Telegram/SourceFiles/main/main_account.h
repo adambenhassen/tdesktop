@@ -109,6 +109,10 @@ public:
 	[[nodiscard]] SessionSettings *getSessionSettings();
 	[[nodiscard]] rpl::producer<> mtpNewSessionCreated() const;
 	[[nodiscard]] rpl::producer<MTPUpdates> mtpUpdates() const;
+	[[nodiscard]] rpl::producer<> serverCacheBindingMismatch() const;
+	[[nodiscard]] bool serverCacheBindingMismatchPending() const {
+		return _serverCacheBindingMismatchPending;
+	}
 
 	// Serialization.
 	[[nodiscard]] QByteArray serializeMtpAuthorization() const;
@@ -192,6 +196,7 @@ private:
 	std::unique_ptr<MTP::Instance> _mtpForKeysDestroy;
 	rpl::event_stream<MTPUpdates> _mtpUpdates;
 	rpl::event_stream<> _mtpNewSessionCreated;
+	rpl::event_stream<> _serverCacheBindingMismatch;
 
 	Owned<AppConfig> _appConfig;
 
@@ -209,6 +214,7 @@ private:
 	std::optional<MTP::CustomServer> _mtpKeysToDestroyPin;
 	std::optional<MTP::CustomServer> _mtpForKeysDestroyPin;
 	bool _loggingOut = false;
+	bool _serverCacheBindingMismatchPending = false;
 
 #ifdef TDESKTOP_UNIT_TESTS
 	int _testIndex = 0;

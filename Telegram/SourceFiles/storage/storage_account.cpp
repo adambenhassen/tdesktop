@@ -7,10 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/storage_account.h"
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+#include "tests/account_lifecycle_regression.h"
+#endif
+
 #include "storage/localstorage.h"
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
 #include "storage/storage_clear_legacy.h"
+#include "storage/storage_server_forget_startup.h"
 #include "storage/cache/storage_cache_types.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/details/storage_settings_scheme.h"
@@ -41,6 +46,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_settings.h"
 #include "webview/webview_interface.h"
 #include "window/themes/window_theme.h"
+
+#include <QtCore/QCoreApplication>
+#include <QtCore/QMetaObject>
 
 namespace Storage {
 namespace {
@@ -116,8 +124,6 @@ auto EmptyMessageDraftSources()
 
 constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
 constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
-constexpr auto kMtpAuthorizationWriteFailedPref
-	= "mtp_authorization_write_failed"_cs;
 
 [[nodiscard]] FileKey ComputeDataNameKey(const QString &dataName) {
 	// We dropped old test authorizations when migrated to multi auth.
@@ -253,10 +259,29 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	if (serverReenrollmentPending()) {
 		return startServerReenrollment();
 	}
-	readMapWith(_localKey);
-	clearLegacyFiles();
-	readStoredCustomServerPin();
-	return readMtpConfig();
+	_serverForgetBlocked = false;
+	const auto forgettingServer = serverForgetPending();
+	auto config = std::unique_ptr<MTP::Config>();
+	const auto result = details::ProcessServerForgetStartup(
+		forgettingServer,
+		[this](bool skipMtpData) {
+			static_cast<void>(readMapWith(
+				_localKey,
+				QByteArray(),
+				skipMtpData));
+		},
+		[this] { clearLegacyFiles(); },
+		[this] { return completeServerForget(); },
+		[this] { readStoredCustomServerPin(); },
+		[this, &config] { config = readMtpConfig(); });
+	if (result == details::ServerForgetStartupResult::Blocked) {
+		_serverForgetBlocked = true;
+		auto blocked = std::make_unique<MTP::Config>(
+			MTP::Environment::Production);
+		blocked->dcOptions().constructBlocked();
+		return blocked;
+	}
+	return config;
 }
 
 void Account::startAdded(MTP::AuthKeyPtr localKey) {
@@ -267,6 +292,23 @@ void Account::startAdded(MTP::AuthKeyPtr localKey) {
 }
 
 void Account::clearLegacyFiles() {
+#ifdef TDESKTOP_UNIT_TESTS
+	if (!_owner) {
+		// The storage-only unit fixture has no account lifetime to marshal
+		// through, so capture its stable allowlist and dispatch it directly.
+		auto names = collectGoodNames();
+		ClearLegacyFiles(_basePath, [names](
+				FnMut<void(base::flat_set<QString>&&)> then) {
+			QMetaObject::invokeMethod(
+				QCoreApplication::instance(),
+				[names, then = std::move(then)]() mutable {
+					then(std::move(names));
+				},
+				Qt::QueuedConnection);
+		});
+		return;
+	}
+#endif
 	const auto weak = base::make_weak(_owner);
 	ClearLegacyFiles(_basePath, [weak, this](
 			FnMut<void(base::flat_set<QString>&&)> then) {
@@ -312,6 +354,9 @@ base::flat_set<QString> Account::collectGoodNames() const {
 		"mtp_authorization_write_faileds",
 		"mtp_authorization_write_failed0",
 		"mtp_authorization_write_failed1",
+		"server_cache_bindings",
+		"server_cache_binding0",
+		"server_cache_binding1",
 	};
 	const auto push = [&](FileKey key) {
 		if (!key) {
@@ -341,7 +386,8 @@ base::flat_set<QString> Account::collectGoodNames() const {
 
 Account::ReadMapResult Account::readMapWith(
 		MTP::AuthKeyPtr localKey,
-		const QByteArray &legacyPasscode) {
+		const QByteArray &legacyPasscode,
+		bool skipMtpData) {
 	auto ms = crl::now();
 
 	FileReadDescriptor mapData;
@@ -605,7 +651,9 @@ Account::ReadMapResult Account::readMapWith(
 	}
 
 	auto stored = readSessionSettings();
-	readMtpData();
+	if (!skipMtpData) {
+		readMtpData();
+	}
 
 	DEBUG_LOG(("selfSerialized set: %1").arg(selfSerialized.size()));
 	if (_owner) {
@@ -1036,23 +1084,13 @@ void Account::readMtpData() {
 	applyReadContext(std::move(context));
 }
 
-void Account::readStoredCustomServerPin() {
-	// Read before readMtpConfig() so that a corrupted or truncated
-	// config blob on a pinned account still fails closed. When the
-	// prefs themselves could not be read the marker is unknown, not
-	// absent: defaulting it to false would send a pinned account to
-	// production on one damaged tdata event.
-	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
-	_customServerPinUnknown = _prefsReadFailed
-		|| readPref<bool>(kCustomServerPinUnknownPref);
-	_mtpAuthorizationWriteFailed = readPref<bool>(
-		kMtpAuthorizationWriteFailedPref);
-	readMtpAuthorizationFailureMarker();
-}
-
 void Account::writeCustomServerBlocked(bool pinUnknown) {
 	Expects(_localKey != nullptr);
 
+#ifdef TDESKTOP_LIFECYCLE_REGRESSION
+	Tests::RecordLifecycleWriteForRegressionTest(
+		Tests::LifecycleWriteForRegressionTest::CustomServerBlockMarker);
+#endif
 	// The block has to outlive this launch on its own. The blocked
 	// config is never written back, and readPrefs() deletes the prefs
 	// file it failed to read, so without this the next start finds no
@@ -1071,24 +1109,6 @@ void Account::writeCustomServerBlocked(bool pinUnknown) {
 		writePref<bool>(kCustomServerPinnedPref, true);
 	}
 	writePrefs();
-}
-
-void Account::clearCustomServerBlocked() {
-	Expects(_localKey != nullptr);
-
-	// The user chose to forget which server this account uses. Only the
-	// the markers go: the account, its keys and its local history stay
-	// exactly as they are, because what failed here is a settings read,
-	// not anything the data itself did wrong.
-	_hasStoredCustomServer = false;
-	_customServerPinUnknown = false;
-	clearPref(kCustomServerPinnedPref);
-	clearPref(kCustomServerPinUnknownPref);
-	clearPref(kMtpAuthorizationWriteFailedPref);
-	_mtpAuthorizationWriteFailed = false;
-	if (!writePrefs(true) || !clearMtpAuthorizationFailureMarker()) {
-		LOG(("MTP Error: could not clear the authorization failure marker."));
-	}
 }
 
 std::unique_ptr<MTP::Config> Account::readMtpConfig() {
@@ -3620,40 +3640,6 @@ Webview::StorageId TonSiteStorageId() {
 		Core::App().saveSettingsDelayed();
 	}
 	return result;
-}
-
-void Account::readPrefs() {
-	FileReadDescriptor prefs;
-	if (!ReadEncryptedFile(prefs, _prefsKey, _basePath, _localKey)) {
-		_prefsReadFailed = true;
-		ClearKey(_prefsKey, _basePath);
-		_prefsKey = 0;
-		writeMapDelayed();
-		return;
-	}
-
-	auto count = quint32();
-	prefs.stream >> count;
-	if (prefs.stream.status() != QDataStream::Ok) {
-		_prefsReadFailed = true;
-		return;
-	}
-	auto map = base::flat_map<QByteArray, QByteArray>();
-	map.reserve(count);
-	for (auto i = quint32(); i != count; ++i) {
-		auto keySize = quint32(), valueSize = quint32();
-		prefs.stream >> keySize >> valueSize;
-		auto key = QByteArray(keySize, Qt::Uninitialized);
-		auto value = QByteArray(valueSize, Qt::Uninitialized);
-		prefs.stream.readRawData(key.data(), keySize);
-		prefs.stream.readRawData(value.data(), valueSize);
-		if (prefs.stream.status() != QDataStream::Ok) {
-			_prefsReadFailed = true;
-			return;
-		}
-		map.emplace(std::move(key), std::move(value));
-	}
-	_prefs = std::move(map);
 }
 
 } // namespace Storage

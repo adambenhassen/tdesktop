@@ -20,10 +20,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/details/storage_file_utilities.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
+#include "storage/storage_server_forget_startup.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
 #include <QtCore/QSemaphore>
 #include <QtCore/QTemporaryDir>
@@ -33,8 +35,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
+
+namespace Storage {
+
+struct AccountTestPeer {
+	static void ReadPrefs(Account &account, FileKey key) {
+		account._prefsKey = key;
+		account.readPrefs();
+	}
+
+	static void ReadStoredCustomServerPin(Account &account) {
+		account.readStoredCustomServerPin();
+	}
+};
+
+} // namespace Storage
 
 namespace {
 
@@ -114,44 +132,56 @@ MakeEnrollmentServerKey() {
 		Fn<void(const QByteArray &)> restoreMtpAuthorization = nullptr,
 		Fn<bool()> writeMtpAuthorizationOverride = nullptr,
 		const QString &tempPath = {},
-		const QString &databasePath = {}) {
+		const QString &databasePath = {},
+		bool hasStoredCustomServer = false,
+		bool mtpAuthorizationWriteFailed = false) {
 	return std::make_unique<Storage::Account>(
 		basePath,
 		key,
 		MakeEnrollmentConfig(),
-		false,
+		hasStoredCustomServer,
 		std::move(serializeMtpAuthorization),
 		std::move(restoreMtpAuthorization),
 		std::move(writeMtpAuthorizationOverride),
 		tempPath,
-		databasePath);
+		databasePath,
+		0,
+		mtpAuthorizationWriteFailed);
 }
 
-[[nodiscard]] bool HasReadableEnrollmentMap(
+[[nodiscard]] std::optional<Storage::FileKey> ReadEnrollmentPrefsKey(
 		const QString &basePath,
 		const MTP::AuthKeyPtr &key) {
 	Storage::details::FileReadDescriptor file;
 	if (!Storage::details::ReadFile(file, u"map"_q, basePath)) {
-		return false;
+		return std::nullopt;
 	}
 
 	QByteArray legacySalt, legacyKey, encrypted;
 	file.stream >> legacySalt >> legacyKey >> encrypted;
 	if (!Storage::details::CheckStreamStatus(file.stream)) {
-		return false;
+		return std::nullopt;
 	}
 
 	Storage::details::EncryptedDescriptor map;
 	if (!Storage::details::DecryptLocal(map, encrypted, key)) {
-		return false;
+		return std::nullopt;
 	}
 
 	quint32 keyType = 0;
-	quint64 prefsKey = 0;
+	Storage::FileKey prefsKey = 0;
 	map.stream >> keyType >> prefsKey;
 	return Storage::details::CheckStreamStatus(map.stream)
 		&& keyType == 0x1e
-		&& prefsKey != 0;
+		&& prefsKey != 0
+		? std::optional<Storage::FileKey>(prefsKey)
+		: std::nullopt;
+}
+
+[[nodiscard]] bool HasReadableEnrollmentMap(
+		const QString &basePath,
+		const MTP::AuthKeyPtr &key) {
+	return ReadEnrollmentPrefsKey(basePath, key).has_value();
 }
 
 [[nodiscard]] std::unique_ptr<MTP::Config> ReadEnrollmentConfig(
@@ -179,6 +209,82 @@ MakeEnrollmentServerKey() {
 		const MTP::AuthKeyPtr &key) {
 	const auto restored = ReadEnrollmentConfig(basePath, key);
 	return restored != nullptr && restored->hasCustomServer();
+}
+
+TEST_CASE(ServerForgetStartupLoadsPinnedStateWithoutForgetMarker) {
+	auto events = std::vector<int>();
+	auto skippedMtpData = true;
+	const auto result = Storage::details::ProcessServerForgetStartup(
+		false,
+		[&](bool skipMtpData) {
+			events.push_back(1);
+			skippedMtpData = skipMtpData;
+		},
+		[&] { events.push_back(2); },
+		[&] {
+			events.push_back(3);
+			return true;
+		},
+		[&] { events.push_back(4); },
+		[&] { events.push_back(5); });
+
+	CHECK(result == Storage::details::ServerForgetStartupResult::Loaded);
+	CHECK(!skippedMtpData);
+	CHECK_EQ(int(events.size()), 4);
+	CHECK_EQ(events[0], 1);
+	CHECK_EQ(events[1], 2);
+	CHECK_EQ(events[2], 4);
+	CHECK_EQ(events[3], 5);
+}
+
+TEST_CASE(ServerForgetStartupCompletesTombstoneBeforeLoadingConfig) {
+	auto events = std::vector<int>();
+	auto skippedMtpData = false;
+	const auto result = Storage::details::ProcessServerForgetStartup(
+		true,
+		[&](bool skipMtpData) {
+			events.push_back(1);
+			skippedMtpData = skipMtpData;
+		},
+		[&] { events.push_back(2); },
+		[&] {
+			events.push_back(3);
+			return true;
+		},
+		[&] { events.push_back(4); },
+		[&] { events.push_back(5); });
+
+	CHECK(result == Storage::details::ServerForgetStartupResult::Forgotten);
+	CHECK(skippedMtpData);
+	CHECK_EQ(int(events.size()), 3);
+	CHECK_EQ(events[0], 1);
+	CHECK_EQ(events[1], 2);
+	CHECK_EQ(events[2], 3);
+}
+
+TEST_CASE(ServerForgetStartupBlocksWhenTombstoneCannotComplete) {
+	auto events = std::vector<int>();
+	auto skippedMtpData = false;
+	const auto result = Storage::details::ProcessServerForgetStartup(
+		true,
+		[&](bool skipMtpData) {
+			events.push_back(1);
+			skippedMtpData = skipMtpData;
+		},
+		[&] { events.push_back(2); },
+		[&] {
+			events.push_back(3);
+			return false;
+		},
+		[&] { events.push_back(4); },
+		[&] { events.push_back(5); });
+
+	CHECK(result == Storage::details::ServerForgetStartupResult::Blocked);
+	CHECK(skippedMtpData);
+	CHECK_EQ(int(events.size()), 3);
+	CHECK_EQ(events[0], 1);
+	CHECK_EQ(events[1], 2);
+	CHECK_EQ(events[2], 3);
 }
 
 TEST_CASE(ReplaceInvalidatesQueuedStopFromPreviousEnrollment) {
@@ -887,6 +993,298 @@ TEST_CASE(CleanTeardownAuthorizationCommitFailureKeepsLastState) {
 	CHECK_EQ(restored, serialized);
 }
 
+TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto databasePath = directory.path() + u"database/"_q;
+	const auto cachePath = databasePath + u"cache"_q;
+	const auto cleanupCanaryPath = basePath + u"startup-cleanup-canary"_q;
+	CHECK(QDir().mkpath(basePath));
+	CHECK(QDir().mkpath(databasePath));
+	QFile cache(cachePath);
+	CHECK(cache.open(QIODevice::WriteOnly));
+	cache.write("cached-messages");
+	cache.close();
+	QFile cleanupCanary(cleanupCanaryPath);
+	CHECK(cleanupCanary.open(QIODevice::WriteOnly));
+	cleanupCanary.write("wait-for-startup-cleanup");
+	cleanupCanary.close();
+
+	const auto key = MakeEnrollmentStorageKey();
+	const auto serialized = QByteArray("old-server-auth-key");
+	auto fingerprint = uint64(0);
+	{
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		fingerprint = config->dcOptions().customServer().key->fingerprint();
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[serialized] { return serialized; },
+			nullptr,
+			nullptr,
+			QString(),
+			databasePath);
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(account->writeMtpAuthorizationFailure());
+		CHECK(account->ensureServerCacheBinding(Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = fingerprint,
+			.userIdKnown = true,
+			.userId = 4242,
+		}));
+	}
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath);
+	auto cleanupCompleted = false;
+	auto skippedMtpData = true;
+	auto loadedConfig = std::unique_ptr<MTP::Config>();
+	const auto initialResult = Storage::details::ProcessServerForgetStartup(
+		false,
+		[&](bool skipMtpData) {
+			skippedMtpData = skipMtpData;
+			const auto prefsKey = ReadEnrollmentPrefsKey(basePath, key);
+			CHECK(prefsKey.has_value());
+			if (prefsKey) {
+				Storage::AccountTestPeer::ReadPrefs(*restarted, *prefsKey);
+			}
+			if (!skipMtpData) {
+				restarted->readMtpDataForTest();
+			}
+		},
+		[&] {
+			cleanupCompleted = QFile::remove(cleanupCanaryPath);
+		},
+		[] { return true; },
+		[&] {
+			Storage::AccountTestPeer::ReadStoredCustomServerPin(*restarted);
+		},
+		[&] { loadedConfig = ReadEnrollmentConfig(basePath, key); });
+	CHECK(initialResult
+		== Storage::details::ServerForgetStartupResult::Loaded);
+	CHECK(cleanupCompleted);
+	CHECK(!skippedMtpData);
+	CHECK(loadedConfig != nullptr);
+	CHECK(loadedConfig && loadedConfig->hasCustomServer());
+	CHECK(restarted->hasStoredCustomServer());
+	CHECK(restarted->mtpAuthorizationWriteFailed());
+	CHECK(!QFileInfo::exists(cleanupCanaryPath));
+	CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
+		== Storage::ServerCacheBindingStatus::Match);
+	CHECK_EQ(restored, serialized);
+	restarted->setServerForgetInterruptionForTest(1);
+	CHECK(!restarted->beginServerForget(Storage::ServerCacheBinding{
+		.fingerprintKnown = true,
+		.fingerprint = fingerprint,
+		.userIdKnown = true,
+		.userId = 4242,
+	}));
+	CHECK(restarted->serverForgetPending());
+	restarted.reset();
+
+	QFile nextCleanupCanary(cleanupCanaryPath);
+	CHECK(nextCleanupCanary.open(QIODevice::WriteOnly));
+	nextCleanupCanary.write("wait-for-post-forget-cleanup");
+	nextCleanupCanary.close();
+	restored.clear();
+	auto afterForget = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath,
+		true,
+		true);
+	cleanupCompleted = false;
+	skippedMtpData = false;
+	auto pinRead = false;
+	auto configRead = false;
+	const auto forgetResult = Storage::details::ProcessServerForgetStartup(
+		afterForget->serverForgetPending(),
+		[&](bool skipMtpData) {
+			skippedMtpData = skipMtpData;
+			const auto prefsKey = ReadEnrollmentPrefsKey(basePath, key);
+			CHECK(prefsKey.has_value());
+			if (prefsKey) {
+				Storage::AccountTestPeer::ReadPrefs(*afterForget, *prefsKey);
+			}
+			if (!skipMtpData) {
+				afterForget->readMtpDataForTest();
+			}
+		},
+		[&] {
+			cleanupCompleted = QFile::remove(cleanupCanaryPath);
+		},
+		[&] {
+			CHECK(cleanupCompleted);
+			return afterForget->completeServerForgetForTest(key);
+		},
+		[&] {
+			pinRead = true;
+			Storage::AccountTestPeer::ReadStoredCustomServerPin(*afterForget);
+		},
+		[&] {
+			configRead = true;
+			loadedConfig = ReadEnrollmentConfig(basePath, key);
+		});
+	CHECK(forgetResult
+		== Storage::details::ServerForgetStartupResult::Forgotten);
+	CHECK(cleanupCompleted);
+	CHECK(skippedMtpData);
+	CHECK(!pinRead);
+	CHECK(!configRead);
+	CHECK(!QFileInfo::exists(cleanupCanaryPath));
+
+	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
+	CHECK(!afterForget->hasStoredCustomServer());
+	CHECK(!afterForget->mtpAuthorizationWriteFailed());
+	CHECK(restored.isEmpty());
+	CHECK(QFile::exists(cachePath));
+	const auto authorization = directory.path()
+		+ u"/tdata/"_q
+		+ Storage::details::ToFilePart(Storage::FileKey(0));
+	CHECK(!QFileInfo::exists(authorization + 's'));
+	CHECK(!QFileInfo::exists(authorization + '0'));
+	CHECK(!QFileInfo::exists(authorization + '1'));
+	CHECK(afterForget->checkServerCacheBinding(fingerprint, 4242)
+		== Storage::ServerCacheBindingStatus::Match);
+	CHECK(afterForget->checkServerCacheBinding(fingerprint, 5252)
+		== Storage::ServerCacheBindingStatus::Mismatch);
+	CHECK(afterForget->checkServerCacheBinding(fingerprint ^ 1, 4242)
+		== Storage::ServerCacheBindingStatus::Mismatch);
+	afterForget.reset();
+
+	// A second storage restart must get its unpinned decision from the
+	// rewritten map and preferences, even when constructor defaults say pinned.
+	restored.clear();
+	auto finalRestart = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath,
+		true,
+		true);
+	loadedConfig.reset();
+	const auto finalResult = Storage::details::ProcessServerForgetStartup(
+		finalRestart->serverForgetPending(),
+		[&](bool skipMtpData) {
+			CHECK(!skipMtpData);
+			if (const auto prefsKey = ReadEnrollmentPrefsKey(basePath, key)) {
+				Storage::AccountTestPeer::ReadPrefs(*finalRestart, *prefsKey);
+			}
+			if (!skipMtpData) {
+				finalRestart->readMtpDataForTest();
+			}
+		},
+		[] {},
+		[] { return true; },
+		[&] {
+			Storage::AccountTestPeer::ReadStoredCustomServerPin(*finalRestart);
+		},
+		[&] { loadedConfig = ReadEnrollmentConfig(basePath, key); });
+	CHECK(finalResult == Storage::details::ServerForgetStartupResult::Loaded);
+	CHECK(!finalRestart->hasStoredCustomServer());
+	CHECK(!finalRestart->mtpAuthorizationWriteFailed());
+	CHECK(loadedConfig == nullptr);
+	CHECK(restored.isEmpty());
+	CHECK(finalRestart->checkServerCacheBinding(fingerprint, 4242)
+		== Storage::ServerCacheBindingStatus::Match);
+}
+
+TEST_CASE(ForgetServerTransitionReplaysAfterInterruption) {
+	for (const auto interruption : { 1, 2, 3, 4, 5, 6 }) {
+		QTemporaryDir directory;
+		CHECK(directory.isValid());
+
+		const auto previousWorkingDir = QDir::currentPath();
+		QDir::setCurrent(directory.path());
+		const auto restoreWorkingDir = gsl::finally([&] {
+			QDir::setCurrent(previousWorkingDir);
+		});
+
+		const auto basePath = directory.path() + u"account/"_q;
+		const auto databasePath = directory.path() + u"database/"_q;
+		const auto cachePath = databasePath + u"cache"_q;
+		CHECK(QDir().mkpath(databasePath));
+		QFile cache(cachePath);
+		CHECK(cache.open(QIODevice::WriteOnly));
+		cache.write("cached-messages");
+		cache.close();
+
+		const auto key = MakeEnrollmentStorageKey();
+		auto config = MakeEnrollmentConfig();
+		CHECK(config->dcOptions().markAuthorized(2));
+		const auto fingerprint
+			= config->dcOptions().customServer().key->fingerprint();
+		auto account = std::make_unique<Storage::Account>(
+			basePath,
+			key,
+			std::move(config),
+			false,
+			[] { return QByteArray("old-server-auth-key"); },
+			nullptr,
+			nullptr,
+			QString(),
+			databasePath);
+		CHECK(account->writeMtpConfig(true));
+		CHECK(account->writeMtpData(true));
+		CHECK(account->writeMtpAuthorizationFailure());
+		account->setServerForgetInterruptionForTest(interruption);
+		CHECK(!account->beginServerForget(Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = fingerprint,
+			.userIdKnown = true,
+			.userId = 4242,
+		}));
+		CHECK(account->serverForgetPending());
+		account.reset();
+
+		auto restored = QByteArray();
+		auto restarted = MakeEnrollmentStorageAccount(
+			basePath,
+			key,
+			[] { return QByteArray(); },
+			[&](const QByteArray &value) { restored = value; },
+			nullptr,
+			QString(),
+			databasePath);
+		CHECK(restarted->completeServerForgetForTest(key));
+
+		CHECK(!restarted->serverForgetBlocked());
+		CHECK(!restarted->serverForgetPending());
+		CHECK(!restarted->hasStoredCustomServer());
+		CHECK(!restarted->mtpAuthorizationWriteFailed());
+		CHECK(restored.isEmpty());
+		CHECK(QFile::exists(cachePath));
+		CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
+			== Storage::ServerCacheBindingStatus::Match);
+	}
+}
+
 TEST_CASE(EnrollmentDoesNotResumeWhenProductionMapStorageFails) {
 	QTemporaryDir directory;
 	CHECK(directory.isValid());
@@ -990,6 +1388,74 @@ TEST_CASE(EnrollmentStepConsumesSpaceOutsideConfirm) {
 	tab.ignore();
 	CHECK(!ConsumeServerEnrollmentActivationKey(tab));
 	CHECK(!tab.isAccepted());
+}
+
+TEST_CASE(RestoredSessionWithoutReadablePinMustBeBlocked) {
+	CHECK(Main::details::ShouldBlockRestoredSessionWithoutServerPin(
+		true,
+		false));
+	CHECK(!Main::details::ShouldBlockRestoredSessionWithoutServerPin(
+		true,
+		true));
+	CHECK(!Main::details::ShouldBlockRestoredSessionWithoutServerPin(
+		false,
+		false));
+}
+
+TEST_CASE(ForgetServerStorageFailureDoesNotRestartAndStaysBlocked) {
+	QTemporaryDir directory;
+	CHECK(directory.isValid());
+
+	const auto previousWorkingDir = QDir::currentPath();
+	QDir::setCurrent(directory.path());
+	const auto restoreWorkingDir = gsl::finally([&] {
+		QDir::setCurrent(previousWorkingDir);
+	});
+
+	const auto basePath = directory.path() + u"account/"_q;
+	const auto key = MakeEnrollmentStorageKey();
+	auto config = MakeEnrollmentConfig();
+	CHECK(config->dcOptions().markAuthorized(2));
+	auto account = std::make_unique<Storage::Account>(
+		basePath,
+		key,
+		config,
+		false,
+		[] { return QByteArray("old-server-auth-key"); });
+	CHECK(account->writeMtpConfig(true));
+	CHECK(account->writeMtpData(true));
+	CHECK(account->writeMtpAuthorizationFailure());
+	config->dcOptions().constructBlocked();
+
+	const auto tombstone = directory.path()
+		+ u"/tdata/server_forget_"_q
+		+ Storage::details::ToFilePart(Storage::FileKey(0));
+	CHECK(QDir().mkpath(tombstone + u"s"_q));
+	CHECK(QDir().mkpath(tombstone + u"0"_q));
+
+	auto restarts = 0;
+	CHECK(!Main::details::CommitServerForget(
+		account.get(),
+		Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = MakeEnrollmentServerKey()->fingerprint(),
+			.userIdKnown = true,
+			.userId = 4242,
+		},
+		[&] { ++restarts; }));
+	CHECK_EQ(restarts, 0);
+	CHECK(config->dcOptions().blocked());
+
+	auto restored = QByteArray();
+	auto restarted = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; });
+	CHECK(!restarted->completeServerForgetForTest(key));
+	CHECK(restarted->serverForgetBlocked());
+	CHECK(restarted->serverForgetPending());
+	CHECK(restored.isEmpty());
 }
 
 TEST_CASE(QueuedStopRunsOnlyForTheCurrentEnrollment) {

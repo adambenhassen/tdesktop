@@ -242,7 +242,9 @@ void Step::createSession(
 
 	const auto account = _account;
 	if (!account->createSession(user, std::move(settings))) {
-		showError(rpl::single(Lang::Hard::ServerError()));
+		if (!account->serverCacheBindingMismatchPending()) {
+			showError(rpl::single(Lang::Hard::ServerError()));
+		}
 		return;
 	}
 

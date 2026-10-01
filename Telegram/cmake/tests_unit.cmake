@@ -76,6 +76,7 @@ PRIVATE
     main/main_account_persistence.cpp
     storage/details/storage_file_utilities.cpp
     storage/storage_account_persistence.cpp
+    storage/storage_server_forget_startup.cpp
     storage/storage_domain.cpp
     tests/unit/data_chat_participants_tests.cpp
     tests/unit/intro_signup_error_tests.cpp

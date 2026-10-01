@@ -21,6 +21,23 @@ bool CommitServerReenrollment(
 	return commit();
 }
 
+bool ShouldBlockRestoredSessionWithoutServerPin(
+		bool hasRestoredUserId,
+		bool hasReadableServerPin) {
+	return hasRestoredUserId && !hasReadableServerPin;
+}
+
+bool CommitServerForget(
+		not_null<Storage::Account*> local,
+		Storage::ServerCacheBinding binding,
+		Fn<void()> restart) {
+	if (!local->beginServerForget(std::move(binding))) {
+		return false;
+	}
+	restart();
+	return true;
+}
+
 bool CommitPostAuthMtpAuthorization(
 		not_null<Storage::Account*> local,
 		Fn<void()> committed,

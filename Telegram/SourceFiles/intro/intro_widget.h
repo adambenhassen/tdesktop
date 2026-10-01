@@ -205,6 +205,7 @@ private:
 	void showTerms(Fn<void()> callback);
 	void showServerIdentityChange(
 		const MTP::PinnedServerFailureReport &report);
+	void showServerCacheBindingMismatch();
 
 	// FloatDelegate
 	[[nodiscard]] auto floatPlayerDelegate()
@@ -256,7 +257,7 @@ private:
 
 	bool _backAvailable = false;
 	bool _nextShown = true;
-	bool _serverIdentityDialogShown = false;
+	bool _serverReenrollmentDialogShown = false;
 	Ui::Animations::Simple _nextShownAnimation;
 
 };
