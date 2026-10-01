@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "crl/crl_on_main.h"
 #include "data/data_chat.h"
 #include "data/data_peer_id.h"
@@ -26,6 +27,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
+#include <QtCore/QEventLoop>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
+#include <QtCore/QTimer>
 
 #include <algorithm>
 #include <cstdio>
@@ -47,6 +53,170 @@ RegressionServerKey() {
 	return std::make_shared<MTP::details::RSAPublicKey>(bytes::make_span(
 		kRegressionServerKey,
 		sizeof(kRegressionServerKey) - 1));
+}
+
+struct ProtectedCacheFixtures {
+	QString root;
+	QString cacheRoot;
+	QString mediaCacheRoot;
+	QString cacheLeaf;
+	QString mediaCacheLeaf;
+	QString cleanupRoot;
+};
+
+[[nodiscard]] bool WriteFixtureFile(const QString &path,
+									const QByteArray &bytes) {
+	auto file = QFile(path);
+	return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size()
+		   && file.flush();
+}
+
+[[nodiscard]] bool FixtureContainsOnlyMarker(const QString &path) {
+	const auto entries = QDir(path).entryList(
+		QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+		QDir::NoSort);
+	if (entries != QStringList{"marker"}) {
+		return false;
+	}
+	auto marker = QFile(path + "/marker");
+	return marker.open(QIODevice::ReadOnly)
+		   && marker.readAll() == "synthetic protected fixture";
+}
+
+[[nodiscard]] bool
+PrepareProtectedCacheFixtures(ProtectedCacheFixtures *fixtures) {
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		return true;
+	}
+	const auto home = qEnvironmentVariable("TDESKTOP_MAC_PROFILE_TEST_HOME");
+	if (home.isEmpty()) {
+		return false;
+	}
+	fixtures->root = QDir(home).filePath(
+		"Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/"
+		"SyntheticStorageFixtures");
+	fixtures->cacheRoot = fixtures->root + "/cache-root";
+	fixtures->mediaCacheRoot = fixtures->root + "/media-cache-root";
+	fixtures->cacheLeaf = fixtures->root + "/cache-leaf";
+	fixtures->mediaCacheLeaf = fixtures->root + "/media-cache-leaf";
+	fixtures->cleanupRoot = fixtures->root + "/legacy-cleanup";
+	for (const auto &path : {
+			 fixtures->cacheRoot,
+			 fixtures->mediaCacheRoot,
+			 fixtures->cacheLeaf,
+			 fixtures->mediaCacheLeaf,
+			 fixtures->cleanupRoot,
+		 }) {
+		if (!QDir().mkpath(path)
+			|| !WriteFixtureFile(path + "/marker",
+								 "synthetic protected fixture")) {
+			return false;
+		}
+	}
+	return WriteFixtureFile(fixtures->cleanupRoot + "/unrecognized-legacy-file",
+							"legacy bytes");
+}
+
+[[nodiscard]] bool FixtureContainsCleanupFiles(const QString &path) {
+	const auto entries = QDir(path).entryList(
+		QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+		QDir::Name);
+	if (entries
+		!= QStringList{
+			"marker",
+			"unrecognized-legacy-file",
+		}) {
+		return false;
+	}
+	auto marker = QFile(path + "/marker");
+	auto legacy = QFile(path + "/unrecognized-legacy-file");
+	return marker.open(QIODevice::ReadOnly)
+		   && marker.readAll() == "synthetic protected fixture"
+		   && legacy.open(QIODevice::ReadOnly)
+		   && legacy.readAll() == "legacy bytes";
+}
+
+[[nodiscard]] bool
+RunLegacyCleanupSymlinkRegression(const ProtectedCacheFixtures &fixtures) {
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		return true;
+	}
+	const auto profile = Core::MacProtectedPath::ProfileRoot();
+	const auto base = profile + "tdata/cleanup_regression";
+	const auto original = base + ".original";
+	const auto probeName = u"unrecognized-legacy-file"_q;
+	const auto originalFile = original + '/' + probeName;
+	const auto initialAlias = profile + "tdata/cleanup_initial";
+	if (!QDir().mkpath(QFileInfo(initialAlias).absolutePath())
+		|| !QFile::link(fixtures.cleanupRoot, initialAlias)) {
+		return false;
+	}
+	struct InitialState {
+		bool completed = false;
+	};
+	const auto initialState = std::make_shared<InitialState>();
+	const auto initialLoop = std::make_shared<QEventLoop>();
+	const auto initialTimer = std::make_shared<QTimer>();
+	initialTimer->setSingleShot(true);
+	QObject::connect(initialTimer.get(), &QTimer::timeout, initialLoop.get(),
+					 &QEventLoop::quit);
+	Storage::ClearLegacyFilesGuarded(
+		initialAlias + '/',
+		[](FnMut<void(::base::flat_set<QString> &&)> then) { then({}); },
+		[=] {
+			initialState->completed = true;
+			initialLoop->quit();
+		});
+	if (!initialState->completed) {
+		initialTimer->start(10000);
+		initialLoop->exec();
+	}
+	initialTimer->stop();
+	const auto initialRetained
+		= initialState->completed
+		  && FixtureContainsCleanupFiles(fixtures.cleanupRoot);
+	QFile::remove(initialAlias);
+	if (!initialRetained) {
+		return false;
+	}
+
+	if (!QDir().mkpath(base)
+		|| !WriteFixtureFile(base + '/' + probeName, "legacy bytes")) {
+		return false;
+	}
+	struct State {
+		bool swapped = false;
+		bool completed = false;
+	};
+	const auto state = std::make_shared<State>();
+	const auto loop = std::make_shared<QEventLoop>();
+	const auto timer = std::make_shared<QTimer>();
+	timer->setSingleShot(true);
+	QObject::connect(timer.get(), &QTimer::timeout, loop.get(),
+					 &QEventLoop::quit);
+	Storage::ClearLegacyFilesGuarded(
+		base + '/',
+		[=](FnMut<void(::base::flat_set<QString> &&)> then) mutable {
+			state->swapped = QDir().rename(base, original)
+							 && QFile::link(fixtures.cleanupRoot, base);
+			then({});
+		},
+		[=] {
+			state->completed = true;
+			loop->quit();
+		});
+	if (!state->completed) {
+		timer->start(10000);
+		loop->exec();
+	}
+	timer->stop();
+	const auto protectedUnchanged
+		= FixtureContainsCleanupFiles(fixtures.cleanupRoot);
+	auto originalContents = QFile(originalFile);
+	const auto originalRetained = QFileInfo::exists(originalFile);
+	return state->swapped && state->completed && protectedUnchanged
+		   && originalRetained && originalContents.open(QIODevice::ReadOnly)
+		   && originalContents.readAll() == "legacy bytes";
 }
 
 [[nodiscard]] bool ConfigurePinnedServer(not_null<Main::Account*> account) {
@@ -205,9 +375,10 @@ RegressionServerKey() {
 	return 1;
 }
 
-[[nodiscard]] int StartChatParticipantsRegression(
-		Main::Domain &domain,
-		Fn<void(int)> done) {
+[[nodiscard]] int
+StartChatParticipantsRegression(Main::Domain &domain,
+								const ProtectedCacheFixtures &fixtures,
+								Fn<void(int)> done) {
 	if (domain.accounts().size() > Main::Domain::kPremiumMaxAccounts - 2) {
 		return FailChatParticipantsRegression(
 			"not enough account slots for isolated stock and pinned sessions");
@@ -217,11 +388,34 @@ RegressionServerKey() {
 	const auto stock = domain.add(MTP::Environment::Production);
 	stock->mtp().stopForServerEnrollment();
 	stock->setSessionUserId(selfId);
+	const auto stockCachePath = stock->local().cachePath();
+	const auto stockMediaCachePath = stock->local().cacheBigFilePath();
+	if (Core::MacProtectedPath::IntegrationTestActive()
+		&& (!QDir().mkpath(QFileInfo(stockCachePath).absolutePath())
+			|| !QDir().mkpath(QFileInfo(stockMediaCachePath).absolutePath())
+			|| !QFile::link(fixtures.cacheRoot, stockCachePath)
+			|| !QFile::link(fixtures.mediaCacheRoot, stockMediaCachePath))) {
+		return FailChatParticipantsRegression(
+			"could not create protected cache-root symlink fixtures");
+	}
 	if (!stock->createSession(
 			RegressionUser(selfId, true, QString()),
 			std::make_unique<Main::SessionSettings>())) {
 		return FailChatParticipantsRegression(
 			"could not create the stock test session");
+	}
+	if (Core::MacProtectedPath::IntegrationTestActive()) {
+		stock->session().data().cache().sync();
+		stock->session().data().cacheBigFile().sync();
+		if (Core::MacProtectedPath::CheckCachePath(
+				stockCachePath, "Tests::ProtectedCache::root")
+			|| Core::MacProtectedPath::CheckCachePath(
+				stockMediaCachePath, "Tests::ProtectedCache::media-root")
+			|| !FixtureContainsOnlyMarker(fixtures.cacheRoot)
+			|| !FixtureContainsOnlyMarker(fixtures.mediaCacheRoot)) {
+			return FailChatParticipantsRegression(
+				"authenticated session accessed a protected cache root");
+		}
 	}
 	const auto stockChat = stock->session().data().chat(chatId);
 	const auto stockPeer = not_null<PeerData*>(
@@ -250,11 +444,43 @@ RegressionServerKey() {
 			"could not pin the custom test server");
 	}
 	pinned->setSessionUserId(selfId);
+	const auto pinnedCachePath = pinned->local().cachePath();
+	const auto pinnedMediaCachePath = pinned->local().cacheBigFilePath();
+	if (Core::MacProtectedPath::IntegrationTestActive()
+		&& (!QDir().mkpath(pinnedCachePath)
+			|| !QDir().mkpath(pinnedMediaCachePath)
+			|| !QFile::link(fixtures.cacheLeaf, pinnedCachePath + "/0")
+			|| !QFile::link(fixtures.cacheLeaf + "/marker",
+							pinnedCachePath + "/version")
+			|| !QFile::link(fixtures.mediaCacheLeaf,
+							pinnedMediaCachePath + "/0")
+			|| !QFile::link(fixtures.mediaCacheLeaf + "/marker",
+							pinnedMediaCachePath + "/version"))) {
+		return FailChatParticipantsRegression(
+			"could not create protected cache-file symlink fixtures");
+	}
 	if (!pinned->createSession(
 			RegressionUser(selfId, true, QString()),
 			std::make_unique<Main::SessionSettings>())) {
 		return FailChatParticipantsRegression(
 			"could not create the pinned test session");
+	}
+	if (Core::MacProtectedPath::IntegrationTestActive()) {
+		pinned->session().data().cache().sync();
+		pinned->session().data().cacheBigFile().sync();
+		if (Core::MacProtectedPath::CheckCachePath(
+				pinnedCachePath, "Tests::ProtectedCache::file")
+			|| Core::MacProtectedPath::CheckCachePath(
+				pinnedMediaCachePath, "Tests::ProtectedCache::media-file")
+			|| !FixtureContainsOnlyMarker(fixtures.cacheLeaf)
+			|| !FixtureContainsOnlyMarker(fixtures.mediaCacheLeaf)) {
+			return FailChatParticipantsRegression(
+				"authenticated session accessed a protected cache-file target");
+		}
+		std::fprintf(
+			stderr,
+			"Authenticated cache regression passed: root, directory, and file "
+			"symlinks refused for cache and media_cache.\n");
 	}
 	const auto pinnedChat = pinned->session().data().chat(chatId);
 	const auto pinnedPeer = not_null<PeerData*>(
@@ -341,6 +567,22 @@ RegressionServerKey() {
 				"pinned basic-group migration was not rejected locally"));
 			return;
 		}
+		if (Core::MacProtectedPath::IntegrationTestActive()) {
+			stock->session().data().clearLocalStorage();
+			pinned->session().data().clearLocalStorage();
+			stock->session().data().cache().sync();
+			stock->session().data().cacheBigFile().sync();
+			pinned->session().data().cache().sync();
+			pinned->session().data().cacheBigFile().sync();
+			if (!FixtureContainsOnlyMarker(fixtures.cacheRoot)
+				|| !FixtureContainsOnlyMarker(fixtures.mediaCacheRoot)
+				|| !FixtureContainsOnlyMarker(fixtures.cacheLeaf)
+				|| !FixtureContainsOnlyMarker(fixtures.mediaCacheLeaf)) {
+				done(FailChatParticipantsRegression(
+					"asynchronous cache cleanup accessed a protected target"));
+				return;
+			}
+		}
 		std::fprintf(stderr, "Chat participants regression passed.\n");
 		done(0);
 	});
@@ -359,6 +601,15 @@ RegressionServerKey() {
 		return 1;
 	}
 	if (Core::App().activePrimaryWindow()) {
+		return 1;
+	}
+	auto fixtures = ProtectedCacheFixtures();
+	if (!PrepareProtectedCacheFixtures(&fixtures)
+		|| !RunLegacyCleanupSymlinkRegression(fixtures)) {
+		std::fprintf(
+			stderr,
+			"Protected storage regression failed: legacy cleanup followed "
+			"a protected account-directory symlink.\n");
 		return 1;
 	}
 
@@ -439,7 +690,7 @@ RegressionServerKey() {
 		return 1;
 	}
 	qunsetenv(failureVariable.constData());
-	return StartChatParticipantsRegression(domain, std::move(done));
+	return StartChatParticipantsRegression(domain, fixtures, std::move(done));
 }
 
 } // namespace

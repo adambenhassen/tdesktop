@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/stickers_lottie.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h" // Core::IsMimeSticker
 #include "ui/image/image_location_factory.h" // Images::FromPhotoSize
 #include "ui/text/format_values.h" // Ui::FormatPhone
@@ -268,14 +269,32 @@ Session::Session(not_null<Main::Session*> session)
 , _chatbots(std::make_unique<Chatbots>(this))
 , _businessInfo(std::make_unique<BusinessInfo>(this))
 , _shortcutMessages(std::make_unique<ShortcutMessages>(this)) {
-	_cache->open(_session->local().cacheKey());
-	_bigFileCache->open(_session->local().cacheBigFileKey());
+	_cacheAllowed = Core::MacProtectedPath::CheckCachePath(
+		_session->local().cachePath(), "Data::Session::cache");
+	_bigFileCacheAllowed = Core::MacProtectedPath::CheckCachePath(
+		_session->local().cacheBigFilePath(), "Data::Session::cacheBigFile");
+	if (_cacheAllowed) {
+		_cache->open(_session->local().cacheKey());
+	}
+	if (_bigFileCacheAllowed) {
+		_bigFileCache->open(_session->local().cacheBigFileKey());
+	}
 
 	if constexpr (Platform::IsLinux()) {
 		const auto wasVersion = _session->local().oldMapVersion();
 		if (wasVersion >= 1007011 && wasVersion < 1007015) {
-			_bigFileCache->clear();
-			_cache->clearByTag(Data::kImageCacheTag);
+			if (_bigFileCacheAllowed
+				&& Core::MacProtectedPath::CheckCachePath(
+					_session->local().cacheBigFilePath(),
+					"Data::Session::cacheBigFile.clearLegacy")) {
+				_bigFileCache->clear();
+			}
+			if (_cacheAllowed
+				&& Core::MacProtectedPath::CheckCachePath(
+					_session->local().cachePath(),
+					"Data::Session::cache.clearLegacy")) {
+				_cache->clearByTag(Data::kImageCacheTag);
+			}
 		}
 	}
 
@@ -5829,9 +5848,18 @@ rpl::producer<RecentJoinChat> Session::recentJoinChat() const {
 
 void Session::clearLocalStorage() {
 	_cache->close();
-	_cache->clear();
+	if (_cacheAllowed
+		&& Core::MacProtectedPath::CheckCachePath(
+			_session->local().cachePath(), "Data::Session::cache.clear")) {
+		_cache->clear();
+	}
 	_bigFileCache->close();
-	_bigFileCache->clear();
+	if (_bigFileCacheAllowed
+		&& Core::MacProtectedPath::CheckCachePath(
+			_session->local().cacheBigFilePath(),
+			"Data::Session::cacheBigFile.clear")) {
+		_bigFileCache->clear();
+	}
 }
 
 void Session::fillMessagePeer(FullMsgId fullId, PeerId peerId) {

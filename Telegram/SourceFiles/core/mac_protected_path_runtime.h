@@ -21,6 +21,8 @@ namespace Core::MacProtectedPath {
 [[nodiscard]] bool CheckPath(Operation operation, const QString &path,
 							 const char *callsite);
 
+[[nodiscard]] bool CheckCachePath(const QString &path, const char *callsite);
+
 [[nodiscard]] bool CheckPair(Operation operation, const QString &first,
 							 const QString &second, const char *callsite);
 #else  // Q_OS_MAC
@@ -30,6 +32,9 @@ namespace Core::MacProtectedPath {
 [[nodiscard]] inline QString NotificationSoundsDirectory() { return {}; }
 [[nodiscard]] inline QString ProfileRoot() { return {}; }
 [[nodiscard]] inline bool CheckPath(Operation, const QString &, const char *) {
+	return true;
+}
+[[nodiscard]] inline bool CheckCachePath(const QString &, const char *) {
 	return true;
 }
 [[nodiscard]] inline bool CheckPair(Operation, const QString &, const QString &,

@@ -432,4 +432,25 @@ run_spoiler_cache_symlink_case spoiler-cache-symlink spoiler
 run_spoiler_cache_symlink_case text-cache-leaf-symlink text
 run_spoiler_cache_symlink_case image-cache-leaf-symlink image
 
+AUTH_HOME="$TEST_HOME/authenticated-cache-regression"
+AUTH_LOG="$TEST_HOME/authenticated-cache-regression.log"
+mkdir -p "$AUTH_HOME"
+if ! env HOME="$AUTH_HOME" TMPDIR="$TEST_TMP_BASE" \
+	TDESKTOP_MAC_PROFILE_TEST_HOME="$AUTH_HOME" \
+	TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+	TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
+	"$APP" -noupdate -debug >"$AUTH_LOG" 2>&1; then
+	cat "$AUTH_LOG" >&2
+	echo "authenticated cache and cleanup regression failed." >&2
+	exit 1
+fi
+if ! grep -F -q \
+	"Authenticated cache regression passed: root, directory, and file symlinks refused for cache and media_cache." \
+	"$AUTH_LOG"; then
+	cat "$AUTH_LOG" >&2
+	echo "authenticated cache regression did not report coverage." >&2
+	exit 1
+fi
+printf 'authenticated_cache_regression=PASS roots=2 cache_directory_symlinks=2 cache_file_symlinks=2 cleanup_initial_symlink=1 cleanup_worker_symlink=1\n'
+
 echo "profile, spoiler-cache, and non-store single-instance checks passed."

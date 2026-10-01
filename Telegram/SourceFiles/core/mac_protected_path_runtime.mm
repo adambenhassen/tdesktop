@@ -11,14 +11,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QMutexLocker>
 
 #include <Cocoa/Cocoa.h>
 
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
 #include <memory>
 #include <pwd.h>
+#include <set>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -341,6 +346,86 @@ bool CheckPath(Operation operation, const QString &path, const char *callsite) {
 		return false;
 	}
 	return true;
+}
+
+bool CheckCachePath(const QString &path, const char *callsite) {
+	if (!IntegrationTestActive()) {
+		return true;
+	}
+	if (!CheckPath(Operation::OpenDir, path, callsite)) {
+		return false;
+	}
+	auto allowed = true;
+	auto directories = std::vector<QString>{path};
+	auto visited = std::set<QString>();
+	while (!directories.empty()) {
+		const auto directory = std::move(directories.back());
+		directories.pop_back();
+		if (!CheckPath(Operation::OpenDir, directory, callsite)) {
+			allowed = false;
+			continue;
+		}
+		const auto canonical = QFileInfo(directory).canonicalFilePath();
+		const auto identity
+			= canonical.isEmpty() ? QDir::cleanPath(directory) : canonical;
+		if (!visited.emplace(identity).second) {
+			continue;
+		}
+		const auto native = QFile::encodeName(directory);
+		const auto descriptor
+			= ::open(native.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		if (descriptor < 0) {
+			if (errno != ENOENT) {
+				allowed = false;
+			}
+			continue;
+		}
+		const auto stream = fdopendir(descriptor);
+		if (!stream) {
+			::close(descriptor);
+			allowed = false;
+			continue;
+		}
+		const auto close = gsl::finally([=] { closedir(stream); });
+		while (const auto entry = readdir(stream)) {
+			const auto local = entry->d_name;
+			if (!std::strcmp(local, ".") || !std::strcmp(local, "..")) {
+				continue;
+			}
+			const auto name = QFile::decodeName(local);
+			const auto child = QDir(directory).filePath(name);
+			if (!CheckPath(Operation::Open, child, callsite)) {
+				allowed = false;
+				continue;
+			}
+			struct stat info = {};
+			if (fstatat(dirfd(stream), local, &info, AT_SYMLINK_NOFOLLOW)
+				!= 0) {
+				allowed = false;
+				continue;
+			}
+			if (S_ISDIR(info.st_mode)) {
+				if (!CheckPath(Operation::OpenDir, child, callsite)) {
+					allowed = false;
+					continue;
+				}
+				directories.push_back(child);
+			} else if (S_ISLNK(info.st_mode)) {
+				if (!CheckPath(Operation::OpenDir, child, callsite)) {
+					allowed = false;
+					continue;
+				}
+				if (fstatat(dirfd(stream), local, &info, 0) != 0) {
+					if (errno != ENOENT) {
+						allowed = false;
+					}
+				} else if (S_ISDIR(info.st_mode)) {
+					directories.push_back(child);
+				}
+			}
+		}
+	}
+	return allowed;
 }
 
 bool CheckPair(Operation operation, const QString &first, const QString &second,

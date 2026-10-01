@@ -43,6 +43,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "webview/webview_interface.h"
 #include "window/themes/window_theme.h"
 
+#ifdef Q_OS_MAC
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif // Q_OS_MAC
+
 namespace Storage {
 namespace {
 
@@ -78,6 +86,7 @@ constexpr auto kMultiDraftTag = quint64(0xFFFF'FFFF'FFFF'FF03ULL);
 constexpr auto kMultiDraftCursorsTag = quint64(0xFFFF'FFFF'FFFF'FF04ULL);
 constexpr auto kRichDraftsTag = quint64(0xFFFF'FFFF'FFFF'FF05ULL);
 constexpr auto kDraftsTag2 = quint64(0xFFFF'FFFF'FFFF'FF06ULL);
+constexpr auto kLegacyFilesPartSize = size_type(10000);
 
 enum { // Local Storage Keys
 	lskUserMap = 0x00,
@@ -148,6 +157,141 @@ constexpr auto kMtpAuthorizationWriteFailedPref
 		+ '/';
 }
 
+#ifdef Q_OS_MAC
+[[nodiscard]] DIR *OpenGuardedLegacyDirectory(const QString &path) {
+	if (!CheckAccountPath(Operation::OpenDir, path,
+						  "Storage::Account::legacyCleanup.openDir")) {
+		return nullptr;
+	}
+	auto native = QFile::encodeName(path);
+	while (native.size() > 1 && native.endsWith('/')) {
+		native.chop(1);
+	}
+	const auto descriptor = ::open(
+		native.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+	if (descriptor < 0) {
+		return nullptr;
+	}
+	const auto result = fdopendir(descriptor);
+	if (!result) {
+		::close(descriptor);
+	}
+	return result;
+}
+
+[[nodiscard]] std::vector<QString>
+CollectGuardedLegacyFiles(const QString &base, size_type limit,
+						  ::base::flat_set<QString> &skip) {
+	auto result = std::vector<QString>();
+	if (auto directory = OpenGuardedLegacyDirectory(base)) {
+		const auto guard = gsl::finally([=] { closedir(directory); });
+		while (const auto entry = readdir(directory)) {
+			const auto local = entry->d_name;
+			if (!std::strcmp(local, ".") || !std::strcmp(local, "..")) {
+				continue;
+			}
+			auto name = QFile::decodeName(local);
+			if (skip.contains(name)) {
+				continue;
+			}
+			const auto path = base + name;
+			if (!CheckAccountPath(Operation::Open, path,
+								  "Storage::Account::legacyCleanup.collect")) {
+				skip.emplace(std::move(name));
+				continue;
+			}
+			struct stat info = {};
+			if (fstatat(dirfd(directory), local, &info, AT_SYMLINK_NOFOLLOW)
+				!= 0) {
+				skip.emplace(std::move(name));
+				continue;
+			} else if (S_ISDIR(info.st_mode) || S_ISLNK(info.st_mode)) {
+				skip.emplace(std::move(name));
+				continue;
+			}
+			result.push_back(std::move(name));
+			if (result.size() == limit) {
+				break;
+			}
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] bool RemoveGuardedLegacyFiles(const QString &base,
+											const std::vector<QString> &files,
+											::base::flat_set<QString> &skip) {
+	auto directory = OpenGuardedLegacyDirectory(base);
+	if (!directory) {
+		return false;
+	}
+	const auto guard = gsl::finally([=] { closedir(directory); });
+	for (const auto &name : files) {
+		if (skip.contains(name)) {
+			continue;
+		}
+		const auto path = base + name;
+		if (!CheckAccountPath(Operation::Unlink, path,
+							  "Storage::Account::legacyCleanup.unlink")) {
+			skip.emplace(name);
+			continue;
+		}
+		const auto native = QFile::encodeName(name);
+		if (unlinkat(dirfd(directory), native.constData(), 0) != 0) {
+			skip.emplace(name);
+		}
+	}
+	return true;
+}
+
+void FinishGuardedLegacyCleanup(Fn<void()> done) {
+	if (done) {
+		crl::on_main(std::move(done));
+	}
+}
+
+void ClearLegacyFilesGuardedPart(
+	QString base,
+	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)> collectGoodNames,
+	Fn<void()> done, ::base::flat_set<QString> skip = {}) {
+	const auto files
+		= CollectGuardedLegacyFiles(base, kLegacyFilesPartSize, skip);
+	if (files.empty()) {
+		FinishGuardedLegacyCleanup(std::move(done));
+		return;
+	}
+	crl::on_main(
+		[base = std::move(base), collectGoodNames = std::move(collectGoodNames),
+		 done = std::move(done), files, skip = std::move(skip)]() mutable {
+			collectGoodNames([base = std::move(base),
+							  collectGoodNames = std::move(collectGoodNames),
+							  done = std::move(done), files,
+							  skip = std::move(skip)](
+								 ::base::flat_set<QString> &&good) mutable {
+				for (const auto &name : good) {
+					skip.emplace(name);
+				}
+				crl::async([base = std::move(base),
+							collectGoodNames = std::move(collectGoodNames),
+							done = std::move(done), files,
+							skip = std::move(skip)]() mutable {
+					if (!RemoveGuardedLegacyFiles(base, files, skip)) {
+						FinishGuardedLegacyCleanup(std::move(done));
+						return;
+					}
+					if (files.size() == kLegacyFilesPartSize) {
+						ClearLegacyFilesGuardedPart(
+							std::move(base), std::move(collectGoodNames),
+							std::move(done), std::move(skip));
+					} else {
+						FinishGuardedLegacyCleanup(std::move(done));
+					}
+				});
+			});
+		});
+}
+#endif // Q_OS_MAC
+
 [[nodiscard]] QString LegacyTempDirectory() {
 	return cWorkingDir() + u"tdata/tdld/"_q;
 }
@@ -180,6 +324,37 @@ constexpr auto kMtpAuthorizationWriteFailedPref
 }
 
 } // namespace
+
+void ClearLegacyFilesGuarded(
+	const QString &base,
+	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)> collectGoodNames,
+	Fn<void()> done) {
+	Expects(base.endsWith('/'));
+#ifdef Q_OS_MAC
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		ClearLegacyFiles(base, std::move(collectGoodNames));
+		if (done) {
+			crl::on_main(std::move(done));
+		}
+		return;
+	}
+	if (!CheckAccountPath(Operation::OpenDir, base,
+						  "Storage::Account::legacyCleanup.start")) {
+		FinishGuardedLegacyCleanup(std::move(done));
+		return;
+	}
+	crl::async([=, collectGoodNames = std::move(collectGoodNames),
+				done = std::move(done)]() mutable {
+		ClearLegacyFilesGuardedPart(base, std::move(collectGoodNames),
+									std::move(done));
+	});
+#else  // Q_OS_MAC
+	ClearLegacyFiles(base, std::move(collectGoodNames));
+	if (done) {
+		crl::on_main(std::move(done));
+	}
+#endif // !Q_OS_MAC
+}
 
 Account::Account(not_null<Main::Account*> owner, const QString &dataName)
 : _owner(owner.get())
@@ -275,12 +450,12 @@ void Account::startAdded(MTP::AuthKeyPtr localKey) {
 
 void Account::clearLegacyFiles() {
 	const auto weak = base::make_weak(_owner);
-	ClearLegacyFiles(_basePath, [weak, this](
-			FnMut<void(base::flat_set<QString>&&)> then) {
-		crl::on_main(weak, [this, then = std::move(then)]() mutable {
-			then(collectGoodNames());
+	ClearLegacyFilesGuarded(
+		_basePath, [weak, this](FnMut<void(base::flat_set<QString> &&)> then) {
+			crl::on_main(weak, [this, then = std::move(then)]() mutable {
+				then(collectGoodNames());
+			});
 		});
-	});
 }
 
 base::flat_set<QString> Account::collectGoodNames() const {

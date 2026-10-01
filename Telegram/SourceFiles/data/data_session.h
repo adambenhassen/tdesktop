@@ -1177,6 +1177,8 @@ private:
 
 	Storage::DatabasePointer _cache;
 	Storage::DatabasePointer _bigFileCache;
+	bool _cacheAllowed = false;
+	bool _bigFileCacheAllowed = false;
 
 	TimeId _exportAvailableAt = 0;
 	base::weak_qptr<Ui::BoxContent> _exportSuggestion;
