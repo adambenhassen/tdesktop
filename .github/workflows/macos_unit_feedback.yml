@@ -8,6 +8,11 @@ on:
         required: true
         default: dev
         type: string
+      repeat_count:
+        description: Number of full unit-suite runs (1-500).
+        required: true
+        default: "1"
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +28,26 @@ jobs:
       PREPARE_PATH: Telegram/build/prepare/prepare.py
 
     steps:
+      - name: Validate repeat count.
+        id: repeat-count
+        env:
+          REPEAT_COUNT: ${{ inputs.repeat_count }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$REPEAT_COUNT" =~ ^[1-9][0-9]{0,2}$ ]]; then
+            echo "::error::repeat_count must be an integer from 1 through 500."
+            exit 1
+          fi
+
+          repeat_count=$((10#$REPEAT_COUNT))
+          if (( repeat_count > 500 )); then
+            echo "::error::repeat_count must be an integer from 1 through 500."
+            exit 1
+          fi
+
+          echo "repeat_count=$repeat_count" >> "$GITHUB_OUTPUT"
+
       - name: Get repository name.
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_ENV"
 
@@ -99,48 +124,121 @@ jobs:
           cmake --build ../out --config Debug --target test_unit --parallel
 
       - name: Unit tests.
+        id: stress
+        env:
+          REQUESTED_REPEAT_COUNT: ${{ steps.repeat-count.outputs.repeat_count }}
         run: |
-          set -o pipefail
-          log="$RUNNER_TEMP/test_unit.log"
+          set -euo pipefail
+          log="$RUNNER_TEMP/test_unit_stress.log"
+          iteration_log="$RUNNER_TEMP/test_unit_iteration.log"
+          iterations="$RUNNER_TEMP/test_unit_iterations.txt"
+          : > "$log"
+          : > "$iterations"
 
-          set +e
-          "$REPO_NAME/out/Debug/test_unit" 2>&1 | tee "$log"
-          test_status=${PIPESTATUS[0]}
-          set -e
+          completed=0
+          first_failure=""
+          for ((iteration = 1; iteration <= REQUESTED_REPEAT_COUNT; iteration++)); do
+            printf '=== iteration %s/%s: start ===\n' \
+              "$iteration" "$REQUESTED_REPEAT_COUNT" | tee -a "$log"
+            : > "$iteration_log"
 
-          summary="$(sed -nE \
-            's/^([0-9]+) case\(s\), ([0-9]+) failed, ([0-9]+) failed check\(s\)\.$/\1 \2 \3/p' \
-            "$log" | tail -n 1)"
-          if [ -z "$summary" ]; then
-            echo "::error::test_unit did not report a case summary."
-            {
-              echo "## macOS unit feedback"
-              echo
-              echo "- Revision: \`$TESTED_SHA\`"
-              echo "- Result: no case summary (failure)"
-            } >> "$GITHUB_STEP_SUMMARY"
+            set +e
+            "$REPO_NAME/out/Debug/test_unit" > "$iteration_log" 2>&1
+            test_status=$?
+            set -e
+            cat "$iteration_log" | tee -a "$log"
+            completed=$((completed + 1))
+
+            summary="$(sed -nE \
+              's/^([0-9]+) case\(s\), ([0-9]+) failed, ([0-9]+) failed check\(s\)\.$/\1 \2 \3/p' \
+              "$iteration_log" | tail -n 1)"
+            failure_reason=""
+            iteration_result="iteration=$iteration exit=$test_status"
+            if [[ -z "$summary" ]]; then
+              failure_reason="missing case summary"
+              iteration_result="$iteration_result summary=missing"
+            else
+              read -r cases failed failed_checks <<< "$summary"
+              iteration_result="$iteration_result cases=$cases failed=$failed failed_checks=$failed_checks"
+              if (( 10#$cases == 0 )); then
+                failure_reason="zero cases"
+              elif (( 10#$failed != 0 )); then
+                failure_reason="failed cases"
+              elif (( 10#$failed_checks != 0 )); then
+                failure_reason="failed checks"
+              fi
+            fi
+
+            if (( test_status != 0 )); then
+              if [[ -n "$failure_reason" ]]; then
+                failure_reason="$failure_reason; test_unit exited $test_status"
+              else
+                failure_reason="test_unit exited $test_status"
+              fi
+            fi
+            if ! grep -Eq '^run[[:space:]]+LocalDiscoveryFailsOverToLaterResolvedAddress$' "$iteration_log"; then
+              if [[ -n "$failure_reason" ]]; then
+                failure_reason="$failure_reason; discovery case did not start"
+              else
+                failure_reason="discovery case did not start"
+              fi
+            elif ! grep -Eq '^ok[[:space:]]+LocalDiscoveryFailsOverToLaterResolvedAddress$' "$iteration_log"; then
+              if [[ -n "$failure_reason" ]]; then
+                failure_reason="$failure_reason; discovery case did not pass"
+              else
+                failure_reason="discovery case did not pass"
+              fi
+            fi
+
+            if [[ -n "$failure_reason" ]]; then
+              first_failure=$iteration
+              iteration_result="$iteration_result result=failed reason=$failure_reason"
+            else
+              iteration_result="$iteration_result result=passed"
+            fi
+            printf '%s\n' "$iteration_result" | tee -a "$iterations" "$log"
+            printf '=== iteration %s/%s: end ===\n' \
+              "$iteration" "$REQUESTED_REPEAT_COUNT" | tee -a "$log"
+
+            if [[ -n "$first_failure" ]]; then
+              break
+            fi
+          done
+
+          {
+            echo "## macOS unit stress feedback"
+            echo
+            echo "- Revision: \`$TESTED_SHA\`"
+            echo "- Requested repeats: $REQUESTED_REPEAT_COUNT"
+            echo "- Completed repeats: $completed"
+            echo "- First failing iteration: ${first_failure:-none}"
+            if [[ -n "$first_failure" ]]; then
+              echo "- Result: failed"
+            else
+              echo "- Result: passed"
+            fi
+            echo
+            echo "Iteration results:"
+            echo '```text'
+            cat "$iterations"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "completed_repeat_count=$completed"
+            echo "first_failure_iteration=$first_failure"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ -n "$first_failure" ]]; then
             exit 1
           fi
 
-          read -r cases failed failed_checks <<< "$summary"
-          {
-            echo "## macOS unit feedback"
-            echo
-            echo "- Revision: \`$TESTED_SHA\`"
-            echo "- Cases: $cases"
-            echo "- Failed cases: $failed"
-            echo "- Failed checks: $failed_checks"
-            if [ "$failed" -gt 0 ]; then
-              echo
-              echo "Failed case names:"
-              sed -n 's/^FAIL /- /p' "$log"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$test_status" -eq 0 ] \
-            && [ "$cases" -gt 0 ] \
-            && [ "$failed" -eq 0 ] \
-            && [ "$failed_checks" -eq 0 ]; then
-            exit 0
-          fi
-          exit 1
+      - name: Upload unit stress logs.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-unit-stress-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/test_unit_stress.log
+            ${{ runner.temp }}/test_unit_iterations.txt
+          if-no-files-found: warn
+          retention-days: 14
