@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
+#include "storage/storage_encryption.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
