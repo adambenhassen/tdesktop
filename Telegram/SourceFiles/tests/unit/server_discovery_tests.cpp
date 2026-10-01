@@ -885,6 +885,9 @@ TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 	QEventLoop earlyResponsePollLoop;
 	auto earlyResponsePollRanBeforePeerClose = false;
 	auto responsePoll = [&] {
+		if (!firstPeerClosed) {
+			return;
+		}
 		if (responsePeer == -1) {
 			responsePeer = AcceptNativeTestSocket(server.socketDescriptor());
 			if (responsePeer == -1) {
@@ -975,6 +978,8 @@ TEST_CASE(ServerWidgetDiscoveryFailsOverAfterPeerClosesBeforeSend) {
 				QTimer::singleShot(0, &earlyResponsePollLoop, [&] {
 					earlyResponsePollRanBeforePeerClose = !firstPeerClosed;
 					responsePoll();
+					CHECK(responsePeer == -1);
+					CHECK_EQ(peersAccepted, 0);
 					earlyResponsePollRan = true;
 					earlyResponsePollLoop.quit();
 				});
