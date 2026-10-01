@@ -85,8 +85,13 @@ def run_phase(
     fail_prepare=False,
     forbidden_outbound=False,
     hang=None,
+    work_override=None,
+    regression_request=None,
+    require_workdir_selection=True,
 ):
-    work = root / "cases" / case_name / "work"
+    work = pathlib.Path(work_override) if work_override else (
+        root / "cases" / case_name / "work"
+    )
     work.mkdir(parents=True, exist_ok=True)
     log_dir = root / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -97,7 +102,9 @@ def run_phase(
         environment.pop(name, None)
     environment["HOME"] = str(root / "home")
     environment["TDESKTOP_AUTH_STARTUP_REGRESSION_ROOT"] = str(root)
-    environment["TDESKTOP_AUTH_STARTUP_REGRESSION"] = phase + ":" + case_name
+    environment["TDESKTOP_AUTH_STARTUP_REGRESSION"] = (
+        regression_request or (phase + ":" + case_name)
+    )
     if fail_prepare:
         environment["TDESKTOP_AUTH_STARTUP_REGRESSION_FAIL_PREPARE"] = case_name
     if forbidden_outbound:
@@ -136,11 +143,24 @@ def run_phase(
         output = "could not launch app: " + str(error) + "\n"
 
     elapsed = time.monotonic() - started
+    expected_workdir = str(work.resolve())
+    selected_workdir = (
+        "Auth startup regression selected workdir: " + expected_workdir
+    ) in output
+    if require_workdir_selection and not selected_workdir:
+        status = 125
+        output += (
+            "Auth startup regression did not select the explicit workdir: "
+            + expected_workdir
+            + "\n"
+        )
     record = (
         "TESTED_SHA=" + tested_sha + "\n"
         + "STARTED_UTC=" + launch_time + "\n"
         + "PHASE=" + phase + " CASE=" + case_name + "\n"
         + "COMMAND=" + shlex.join(command) + "\n"
+        + "EXPECTED_WORKDIR=" + expected_workdir + "\n"
+        + "WORKDIR_SELECTED=" + str(selected_workdir).lower() + "\n"
         + "STATUS=" + str(status) + " TIMED_OUT=" + str(timed_out).lower()
         + " ELAPSED_SECONDS=" + format(elapsed, ".3f")
         + " CLEANUP=" + cleanup + "\n"
@@ -151,6 +171,91 @@ def run_phase(
     print(record, end="" if record.endswith("\n") else "\n", flush=True)
     print("LOG_PATH=" + str(log_path), flush=True)
     return Result(status, timed_out, record, log_path)
+
+
+def assert_rejected_invocation(
+    args,
+    log_tag,
+    root,
+    case_name,
+    phase,
+    regression_request,
+    work_override=None,
+    marker_content=MARKER_CONTENT,
+):
+    (root / ROOT_MARKER).write_text(marker_content, encoding="utf-8")
+    work = pathlib.Path(work_override) if work_override else (
+        root / "cases" / case_name / "work"
+    )
+    work.mkdir(parents=True, exist_ok=True)
+    home = root / "home"
+    result = run_phase(
+        args.app,
+        args.tested_sha,
+        root,
+        case_name,
+        phase,
+        args.timeout_seconds,
+        args.cleanup_seconds,
+        log_tag,
+        work_override=work,
+        regression_request=regression_request,
+        require_workdir_selection=False,
+    )
+    if (
+        result.status == 0
+        or "Auth startup regression refused:" not in result.log
+        or any(home.iterdir())
+        or any(work.iterdir())
+    ):
+        raise RuntimeError(
+            log_tag + " did not refuse safely before profile mutation"
+        )
+    print(
+        "INPUT_REJECTION_OK=" + log_tag
+        + " STATUS=" + str(result.status)
+        + " PROFILE_MUTATION=false",
+        flush=True,
+    )
+
+
+def run_input_validation_sensitivities(args):
+    root = create_fixture_root()
+    assert_rejected_invocation(
+        args,
+        "invalid-marker-root",
+        root,
+        CASES[0],
+        "prepare",
+        "prepare:missing-pin",
+        marker_content="invalid-marker",
+    )
+
+    root = create_fixture_root()
+    outside_work = root.parent / (root.name + "-outside-work")
+    assert_rejected_invocation(
+        args,
+        "outside-workdir",
+        root,
+        CASES[0],
+        "prepare",
+        "prepare:missing-pin",
+        work_override=outside_work,
+    )
+
+    for name, phase, request in (
+        ("invalid-phase", "prepare", "invalid:missing-pin"),
+        ("invalid-case", "prepare", "prepare:unknown-case"),
+    ):
+        root = create_fixture_root()
+        assert_rejected_invocation(
+            args,
+            name,
+            root,
+            CASES[0],
+            phase,
+            request,
+        )
 
 
 def run_matrix(args, log_tag, inject_first_prepare_failure=False):
@@ -204,6 +309,8 @@ def run_matrix(args, log_tag, inject_first_prepare_failure=False):
 
 
 def run_sensitivities(args):
+    run_input_validation_sensitivities(args)
+
     _, failure_results, failure_status = run_matrix(
         args,
         "sensitivity-prepare-failure",

@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/basic_types.h"
 
+#include <QtCore/QString>
+
 namespace Tests {
 
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
@@ -23,6 +25,8 @@ struct AuthStartupStateForRegressionTest final {
 };
 
 [[nodiscard]] bool AuthStartupRegressionSandboxIsValid();
+[[nodiscard]] bool AuthStartupRegressionSandboxIsValid(
+	const QString &requestedWorkingDir);
 void RecordAuthStartupStateForRegressionTest(
 	uint64 userId,
 	int authorizationKeyCount,

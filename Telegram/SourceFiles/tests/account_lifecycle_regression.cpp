@@ -457,11 +457,32 @@ bool AuthStartupRegressionSandboxIsValid() {
 			"Auth startup regression refused: provide a valid phase, case, and explicit -workdir.\n");
 		return false;
 	}
+	const auto work = cWorkingDir();
+	if (!AuthStartupRegressionSandboxIsValid(work)) {
+		return false;
+	}
+	const auto selected = QFileInfo(work).canonicalFilePath();
+	std::fprintf(
+		stderr,
+		"Auth startup regression selected workdir: %s\n",
+		selected.toUtf8().constData());
+	return true;
+}
+
+bool AuthStartupRegressionSandboxIsValid(
+		const QString &requestedWorkingDir) {
+	const auto request = ParseAuthStartupRegressionRequest();
+	if (!request || requestedWorkingDir.isEmpty()) {
+		std::fprintf(
+			stderr,
+			"Auth startup regression refused: provide a valid phase, case, and explicit -workdir.\n");
+		return false;
+	}
 	const auto temp = QFileInfo(QDir::tempPath()).canonicalFilePath();
 	const auto root = QFileInfo(qEnvironmentVariable(
 		kAuthStartupRegressionRootVariable)).canonicalFilePath();
 	const auto home = QFileInfo(qEnvironmentVariable("HOME")).canonicalFilePath();
-	const auto work = QFileInfo(cWorkingDir()).canonicalFilePath();
+	const auto work = QFileInfo(requestedWorkingDir).canonicalFilePath();
 	const auto expectedWork = QFileInfo(
 		root + u"/cases/"_q + request->name + u"/work"_q
 	).canonicalFilePath();

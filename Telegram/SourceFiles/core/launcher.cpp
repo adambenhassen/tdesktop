@@ -19,6 +19,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/version.h"
 #include "base/concurrent_timer.h"
 #include "base/options.h"
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+#include "tests/account_lifecycle_regression.h"
+#endif
 
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QStandardPaths>
@@ -334,6 +337,11 @@ Launcher::~Launcher() {
 
 void Launcher::init() {
 	prepareSettings();
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	if (_authStartupRegressionInvocationRejected) {
+		return;
+	}
+#endif
 	initQtMessageLogging();
 
 #ifdef TDESKTOP_TELEGRAMD
@@ -382,6 +390,11 @@ void Launcher::initHighDpi() {
 
 int Launcher::exec() {
 	init();
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	if (_authStartupRegressionInvocationRejected) {
+		return 1;
+	}
+#endif
 
 	if (cLaunchMode() == LaunchModeFixPrevious) {
 		return psFixPrevious();
@@ -616,11 +629,26 @@ void Launcher::processArguments() {
 	gQuit = parseResult.contains("-quit");
 	_customWorkingDir = parseResult.value("-workdir", {}).join(QString());
 #ifdef TDESKTOP_TELEGRAMD
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	if (!qEnvironmentVariableIsSet(
+			"TDESKTOP_AUTH_STARTUP_REGRESSION")) {
+		_customWorkingDir.clear();
+	}
+#else // TDESKTOP_LIFECYCLE_REGRESSION
 	_customWorkingDir.clear();
+#endif // TDESKTOP_LIFECYCLE_REGRESSION
 #endif // TDESKTOP_TELEGRAMD
 	if (!_customWorkingDir.isEmpty()) {
 		_customWorkingDir = QDir(_customWorkingDir).absolutePath() + '/';
 	}
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	if (qEnvironmentVariableIsSet(
+			"TDESKTOP_AUTH_STARTUP_REGRESSION")) {
+		_authStartupRegressionInvocationRejected
+			= !Tests::AuthStartupRegressionSandboxIsValid(
+				_customWorkingDir);
+	}
+#endif // TDESKTOP_LIFECYCLE_REGRESSION
 
 	const auto startUrls = parseResult.value("--", {});
 	gStartUrls = startUrls | ranges::views::transform([&](const QString &url) {

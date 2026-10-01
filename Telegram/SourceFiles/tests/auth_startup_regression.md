@@ -7,6 +7,13 @@ boundary. It is compiled into the Debug app when
 macOS app artifact and record the exact source revision used to build that
 artifact.
 
+The macOS `Telegramd` launcher normally ignores a supplied `-workdir`. It
+honors that option for this regression only when the compiled lifecycle test
+capability is active and the phase, case, isolated `HOME`, marked disposable
+root, and exact per-case workdir validate before normal launcher setup. An
+invalid marker, workdir, phase, or case exits before logs or profile storage
+start. Ordinary launches keep the existing `Telegramd` profile selection.
+
 Each prepare phase synchronously flushes prefs and the per-account map, then
 reads both back from disk. It confirms the map points to the expected prefs
 file and that the file contains the expected pin marker before removing config
@@ -39,15 +46,18 @@ python3 Telegram/SourceFiles/tests/auth_startup_regression.py \
 
 The runner creates a fresh temporary root with isolated `HOME` and one
 workdir per case. It retains a log for each invocation under that root and
-prints the revision, exact app command, status, elapsed time, timeout cleanup,
-and app output. Preserve the `FIXTURE_ROOT` and `LOG_PATH` output with the
-hosted run record. Do not reuse a root.
+prints the revision, exact app command, expected and selected workdir, status,
+elapsed time, timeout cleanup, and app output. A phase fails if startup does
+not confirm the exact requested workdir. Preserve the `FIXTURE_ROOT` and
+`LOG_PATH` output with the hosted run record. Do not reuse a root.
 
 `--self-test` first injects a reported failure in the first prepare while
 allowing `forget-6` verification to pass, and requires the ten-case invocation
 to remain nonzero. It then checks delayed outbound detection and injected
 startup, synchronous storage, and teardown hangs against the external
-deadline. The final ten-case matrix runs without injections and must pass.
+deadline. It also verifies that invalid marker/workdir and phase/case inputs
+are rejected without creating profile data under `HOME` or the requested
+workdir. The final ten-case matrix runs without injections and must pass.
 Every prepare and verify status contributes to the matrix result; a later
 passing case cannot erase an earlier failure.
 
