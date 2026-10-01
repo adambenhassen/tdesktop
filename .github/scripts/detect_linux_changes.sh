@@ -6,13 +6,15 @@ if [[ "${EVENT_NAME}" != "pull_request" ]]; then
   exit 0
 fi
 
-if [[ "$(git rev-parse HEAD^1)" != "${BASE_SHA}" ]]; then
-  echo "::error::The checked-out pull request merge commit does not have the expected base as its first parent."
+if ! merge_base_sha="$(git rev-parse --verify HEAD^1 2>/dev/null)" ||
+  ! git rev-parse --verify HEAD^2 >/dev/null 2>&1; then
+  echo "::error::The checked-out pull request ref is not a merge commit with two parents."
   exit 1
 fi
 
 required=false
-if ! changed_paths="$(git diff --name-only --no-renames "${BASE_SHA}" "${GITHUB_SHA}")"; then
+echo "::notice::Diffing changed paths from ${merge_base_sha} to HEAD."
+if ! changed_paths="$(git diff --name-only --no-renames "${merge_base_sha}" HEAD)"; then
   echo "::error::Unable to determine changed files for the pull request."
   exit 1
 fi
