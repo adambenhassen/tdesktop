@@ -67,6 +67,18 @@ struct AuthStartupRegressionRequest final {
 	int forgetPoint = 0;
 };
 
+[[nodiscard]] std::shared_ptr<MTP::details::RSAPublicKey>
+RegressionServerKey();
+[[nodiscard]] MTP::AuthKeyPtr RegressionAuthKey(int byte);
+[[nodiscard]] bool ConfigurePinnedServer(
+		not_null<Main::Account*> account,
+		std::shared_ptr<MTP::details::RSAPublicKey> key);
+[[nodiscard]] bool HasAuthKey(
+		not_null<Main::Account*> account,
+		MTP::AuthKey::KeyId keyId);
+[[nodiscard]] bool HasNoAuthorizationState(
+		not_null<Main::Account*> account);
+
 auto gLifecycleWriteCounts = LifecycleWriteCountsForRegressionTest();
 auto gAuthStartupState = AuthStartupStateForRegressionTest();
 
@@ -109,7 +121,7 @@ ParseAuthStartupRegressionRequest() {
 	return path.startsWith(parent + QDir::separator());
 }
 
-[[nodiscard]] int FailAuthStartupRegression(
+void FailAuthStartupRegression(
 		const QString &name,
 		const char *reason) {
 	std::fprintf(
@@ -117,7 +129,6 @@ ParseAuthStartupRegressionRequest() {
 		"Auth startup regression failed: case=%s: %s\n",
 		name.toUtf8().constData(),
 		reason);
-	return 1;
 }
 
 [[nodiscard]] QString AuthStartupConfigPath() {
