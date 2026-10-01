@@ -107,18 +107,22 @@ RegressionServerKey() {
 [[nodiscard]] MTPmessages_ChatFull RegressionChatFullReply(
 		ChatId chatId,
 		int version,
-		QString selfPhone) {
+		QString selfPhone,
+		UserId creatorId) {
+	const auto memberId = (creatorId == UserId(1))
+		? UserId(2)
+		: UserId(1);
 	const auto participants = MTP_chatParticipants(
 		MTP_long(chatId.bare),
 		MTP_vector<MTPChatParticipant>({
 			MTP_chatParticipantCreator(
 				MTP_flags(MTPDchatParticipantCreator::Flags()),
-				MTP_long(UserId(2).bare),
+				MTP_long(creatorId.bare),
 				MTP_string(QString())),
 			MTP_chatParticipant(
 				MTP_flags(MTPDchatParticipant::Flags()),
-				MTP_long(UserId(1).bare),
-				MTP_long(UserId(2).bare),
+				MTP_long(memberId.bare),
+				MTP_long(creatorId.bare),
 				MTP_int(0),
 				MTP_string(QString())),
 			MTP_chatParticipant(
@@ -182,9 +186,11 @@ RegressionServerKey() {
 		});
 }
 
-[[nodiscard]] bool HasExpectedParticipants(not_null<ChatData*> chat) {
+[[nodiscard]] bool HasExpectedParticipants(
+		not_null<ChatData*> chat,
+		UserId creatorId) {
 	return (chat->participants.size() == 3)
-		&& (chat->creator == UserId(2))
+		&& (chat->creator == creatorId)
 		&& HasParticipant(chat, UserId(1))
 		&& HasParticipant(chat, UserId(2))
 		&& HasParticipant(chat, UserId(9));
@@ -219,7 +225,7 @@ RegressionServerKey() {
 		static_cast<PeerData*>(&*stockChat));
 	stock->session().api().processFullPeer(
 		stockPeer,
-		RegressionChatFullReply(chatId, 1, QString()));
+		RegressionChatFullReply(chatId, 1, QString(), UserId(2)));
 	if (stock->session().user()->isLoaded()
 		|| !stockChat->participants.empty()) {
 		return FailChatParticipantsRegression(
@@ -227,9 +233,9 @@ RegressionServerKey() {
 	}
 	stock->session().api().processFullPeer(
 		stockPeer,
-		RegressionChatFullReply(chatId, 2, u"+10000000001"_q));
+		RegressionChatFullReply(chatId, 2, u"+10000000001"_q, UserId(2)));
 	if (!stock->session().user()->isLoaded()
-		|| !HasExpectedParticipants(stockChat)) {
+		|| !HasExpectedParticipants(stockChat, UserId(2))) {
 		return FailChatParticipantsRegression(
 			"stock session with phone did not load creator and members");
 	}
@@ -252,11 +258,64 @@ RegressionServerKey() {
 		static_cast<PeerData*>(&*pinnedChat));
 	pinned->session().api().processFullPeer(
 		pinnedPeer,
-		RegressionChatFullReply(chatId, 1, QString()));
+		RegressionChatFullReply(chatId, 1, QString(), UserId(2)));
 	if (!pinned->session().user()->isLoaded()
-		|| !HasExpectedParticipants(pinnedChat)) {
+		|| !HasExpectedParticipants(pinnedChat, UserId(2))) {
 		return FailChatParticipantsRegression(
 			"pinned phone-free self did not retain creator and members");
+	}
+
+	const auto actionChatId = ChatId(1052);
+	const auto stockActionChat = stock->session().data().chat(actionChatId);
+	const auto stockActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*stockActionChat));
+	stock->session().api().processFullPeer(
+		stockActionPeer,
+		RegressionChatFullReply(
+			actionChatId,
+			1,
+			u"+10000000001"_q,
+			selfId));
+	stockActionChat->setFlags(ChatDataFlag::Creator);
+	if (!HasExpectedParticipants(stockActionChat, selfId)
+		|| !stockActionChat->canEditInformation()
+		|| !stockActionChat->canAddMembers()
+		|| !stockActionChat->canAddAdmins()
+		|| !stockActionChat->canBanMembers()) {
+		return FailChatParticipantsRegression(
+			"stock creator lost a supported basic-group action");
+	}
+
+	const auto pinnedActionChat = pinned->session().data().chat(actionChatId);
+	const auto pinnedActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*pinnedActionChat));
+	pinned->session().api().processFullPeer(
+		pinnedActionPeer,
+		RegressionChatFullReply(actionChatId, 1, QString(), selfId));
+	pinnedActionChat->setFlags(ChatDataFlag::Creator);
+	if (!HasExpectedParticipants(pinnedActionChat, selfId)
+		|| !pinnedActionChat->canEditInformation()
+		|| !pinnedActionChat->canAddMembers()
+		|| pinnedActionChat->canAddAdmins()
+		|| !pinnedActionChat->canBanMembers()) {
+		return FailChatParticipantsRegression(
+			"pinned creator lost a supported action or retained admin grants");
+	}
+
+	const auto migrationDone = std::make_shared<bool>(false);
+	const auto migrationError = std::make_shared<QString>();
+	pinned->session().api().migrateChat(
+		pinnedActionChat,
+		[migrationDone](not_null<ChannelData*>) {
+			*migrationDone = true;
+		},
+		[migrationError](const QString &error) {
+			*migrationError = error;
+		});
+	QCoreApplication::processEvents();
+	if (*migrationDone || *migrationError != u"BAD_MIGRATION"_q) {
+		return FailChatParticipantsRegression(
+			"pinned basic-group migration was not rejected locally");
 	}
 	std::fprintf(stderr, "Chat participants regression passed.\n");
 	return 0;
