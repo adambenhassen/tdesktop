@@ -3,6 +3,15 @@ name: MacOS.
 on:
   # Fork policy: per-push CI is Linux only. macOS builds on demand or for a release tag.
   workflow_dispatch:
+    inputs:
+      auth_regression_sha:
+        description: Candidate PR head SHA to exercise using its existing successful arm64 app artifact.
+        required: false
+        type: string
+      auth_regression_build_run_id:
+        description: Successful MacOS workflow run ID that built auth_regression_sha.
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -13,8 +22,41 @@ concurrency:
 
 jobs:
 
+  validate-auth-regression-inputs:
+    name: Validate macOS regression inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a matching candidate SHA and app run.
+        env:
+          CANDIDATE_SHA: ${{ inputs.auth_regression_sha }}
+          BUILD_RUN_ID: ${{ inputs.auth_regression_build_run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            test -z "$CANDIDATE_SHA"
+            test -z "$BUILD_RUN_ID"
+            exit 0
+          fi
+
+          if [[ -n "$CANDIDATE_SHA" ]] && [[ -n "$BUILD_RUN_ID" ]]; then
+            [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::auth_regression_sha must be a full 40-character commit SHA."
+              exit 1
+            }
+            [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+              echo "::error::auth_regression_build_run_id must be a positive run ID."
+              exit 1
+            }
+          elif [[ -n "$CANDIDATE_SHA" ]] || [[ -n "$BUILD_RUN_ID" ]]; then
+            echo "::error::Provide both auth_regression_sha and auth_regression_build_run_id."
+            exit 1
+          fi
+
   macos:
     name: MacOS
+    needs: validate-auth-regression-inputs
+    if: ${{ needs.validate-auth-regression-inputs.result == 'success' && (github.event_name != 'workflow_dispatch' || (!inputs.auth_regression_sha && !inputs.auth_regression_build_run_id)) }}
     permissions:
       contents: write
     # This fork cannot schedule a depot label, and a build that queues forever
@@ -292,3 +334,141 @@ jobs:
             --title "$RELEASE_TAG" \
             --notes "$notes" \
             --draft
+
+  auth-startup-regression:
+    name: macOS auth lifecycle and persisted-startup socket regression
+    needs: validate-auth-regression-inputs
+    if: ${{ needs.validate-auth-regression-inputs.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.auth_regression_sha != '' && inputs.auth_regression_build_run_id != '' }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    env:
+      CANDIDATE_SHA: ${{ inputs.auth_regression_sha }}
+      BUILD_RUN_ID: ${{ inputs.auth_regression_build_run_id }}
+
+    steps:
+      - name: Initialize evidence.
+        run: |
+          set -euo pipefail
+          EVIDENCE_DIR="$RUNNER_TEMP/main-1066-auth-startup-evidence"
+          mkdir -p "$EVIDENCE_DIR"
+          echo "EVIDENCE_DIR=$EVIDENCE_DIR" >> "$GITHUB_ENV"
+
+      - name: Report runner architecture.
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "cpu: $(sysctl -n machdep.cpu.brand_string)"
+          test "$(uname -m)" = "arm64" || {
+            echo "::error::Regression evidence requires the Apple Silicon runner."
+            exit 1
+          }
+
+      - name: Checkout verification workflow source.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-source
+          persist-credentials: false
+
+      - name: Checkout exact candidate source.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.auth_regression_sha }}
+          path: candidate-source
+          persist-credentials: false
+
+      - name: Verify live candidate and successful app artifact run.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          live_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/74" --jq .head.sha)"
+          live_state="$(gh api "repos/$GITHUB_REPOSITORY/pulls/74" --jq .state)"
+          live_base="$(gh api "repos/$GITHUB_REPOSITORY/pulls/74" --jq .base.ref)"
+          run_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq .head_sha)"
+          run_status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq .status)"
+          run_conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq .conclusion)"
+          run_path="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq .path)"
+
+          test "$live_head" = "$CANDIDATE_SHA" || {
+            echo "::error::PR 74 moved: expected $CANDIDATE_SHA, live head is $live_head."
+            exit 1
+          }
+          test "$live_state" = "open"
+          test "$live_base" = "dev"
+          test "$run_sha" = "$CANDIDATE_SHA"
+          test "$run_status" = "completed"
+          test "$run_conclusion" = "success"
+          test "$run_path" = ".github/workflows/mac.yml"
+
+          candidate_checkout="$(git -C candidate-source rev-parse HEAD)"
+          test "$candidate_checkout" = "$CANDIDATE_SHA"
+          contract="candidate-source/Telegram/SourceFiles/tests/auth_startup_regression.md"
+          test -f "$contract"
+
+          {
+            echo "tested_sha=$CANDIDATE_SHA"
+            echo "candidate_pr=74"
+            echo "candidate_build_run_id=$BUILD_RUN_ID"
+            echo "candidate_build_run_sha=$run_sha"
+            echo "candidate_build_run_conclusion=$run_conclusion"
+            echo "candidate_checkout_sha=$candidate_checkout"
+            echo "fixture_contract_sha256=$(shasum -a 256 "$contract" | awk '{print $1}')"
+          } | tee "$EVIDENCE_DIR/candidate.txt"
+
+      - name: Download exact-head arm64 app artifact.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$BUILD_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name Telegramd-macOS-arm64 \
+            --dir "$RUNNER_TEMP/candidate-artifact"
+          app="$(find "$RUNNER_TEMP/candidate-artifact" \
+            -type f -path '*/Contents/MacOS/Telegramd' -print -quit)"
+          test -n "$app"
+          test -x "$app"
+          archs="$(lipo -archs "$app")"
+          test "$archs" = "arm64"
+          echo "app_path=$app" | tee -a "$EVIDENCE_DIR/candidate.txt"
+          echo "app_archs=$archs" | tee -a "$EVIDENCE_DIR/candidate.txt"
+          echo "APP_PATH=$app" >> "$GITHUB_ENV"
+
+      - name: Run lifecycle and persisted-startup regressions under socket observation.
+        run: |
+          set -euo pipefail
+          python3 workflow-source/.github/scripts/run_mac_auth_startup_regression.py \
+            "$APP_PATH" "$CANDIDATE_SHA" "$EVIDENCE_DIR"
+
+      - name: Reconfirm live candidate head after runtime checks.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          live_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/74" --jq .head.sha)"
+          live_state="$(gh api "repos/$GITHUB_REPOSITORY/pulls/74" --jq .state)"
+          live_base="$(gh api "repos/$GITHUB_REPOSITORY/pulls/74" --jq .base.ref)"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "final_live_head=$live_head"
+            echo "final_state=$live_state"
+            echo "final_base=$live_base"
+          } | tee "$EVIDENCE_DIR/candidate-head-final.txt"
+          test "$live_head" = "$CANDIDATE_SHA"
+          test "$live_state" = "open"
+          test "$live_base" = "dev"
+
+      - name: Upload lifecycle and socket evidence.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macOS-auth-startup-socket-evidence
+          path: ${{ runner.temp }}/main-1066-auth-startup-evidence/
+          if-no-files-found: warn
+          retention-days: 30
