@@ -28,6 +28,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QEventLoop>
+#include <QtCore/QFileInfo>
+#include <QtCore/QMetaObject>
+#include <QtCore/QTimer>
 
 #include <algorithm>
 #include <cstdio>
@@ -161,6 +165,30 @@ RegressionOtherServerKey() {
 	return account->local().checkServerCacheBinding(
 		retainedFingerprint,
 		retainedUserId) == Storage::ServerCacheBindingStatus::Match;
+}
+
+[[nodiscard]] bool CachePayloadMatches(
+		Storage::Cache::Database &cache,
+		const Storage::Cache::Key &key,
+		const QByteArray &expected) {
+	auto completed = false;
+	auto payload = QByteArray();
+	auto loop = QEventLoop();
+	auto timeout = QTimer();
+	timeout.setSingleShot(true);
+	QObject::connect(
+		&timeout,
+		&QTimer::timeout,
+		&loop,
+		&QEventLoop::quit);
+	cache.get(key, [&](QByteArray &&value) {
+		payload = std::move(value);
+		completed = true;
+		QMetaObject::invokeMethod(&loop, "quit", Qt::QueuedConnection);
+	});
+	timeout.start(5000);
+	loop.exec();
+	return completed && (payload == expected);
 }
 
 [[nodiscard]] Main::Account *FindAuthorizationBlockedAccount(
@@ -476,6 +504,24 @@ RegressionOtherServerKey() {
 	// unpublished when the synchronous authorization write is refused.
 	const auto account = not_null<Main::Account*>(
 		domain.accounts().front().account.get());
+	const auto cacheKey = Storage::Cache::Key{
+		0x4d41494e31303632ULL,
+		0x4341434845504159ULL,
+	};
+	const auto cachePayload = QByteArray(
+		"main-1062-cache-regression-payload");
+	const auto cachePath = account->local().cachePath();
+	{
+		auto cacheDatabase = Core::App().databases().get(
+			cachePath,
+			account->local().cacheSettings());
+		cacheDatabase->put(cacheKey, QByteArray(cachePayload));
+		if (!CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)
+			|| !QFileInfo::exists(cachePath)) {
+			return FailAccountLifecycleRegression(
+				"could not seed the cache payload");
+		}
+	}
 	if (!account->sessionExists()
 		&& !account->mtp().dcOptions().hasCustomServer()
 		&& (!account->mtp().dcOptions().unenrolled()
@@ -587,7 +633,12 @@ RegressionOtherServerKey() {
 	}
 	const auto forgotten = not_null<Main::Account*>(
 		domain.accounts().front().account.get());
-	if (!forgotten->mtp().dcOptions().unenrolled()
+	auto cacheDatabase = Core::App().databases().get(
+		cachePath,
+		forgotten->local().cacheSettings());
+	if (!QFileInfo::exists(cachePath)
+		|| !CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)
+		|| !forgotten->mtp().dcOptions().unenrolled()
 		|| forgotten->mtp().dcOptions().blocked()
 		|| forgotten->local().hasStoredCustomServer()
 		|| forgotten->local().mtpAuthorizationWriteFailed()
@@ -631,9 +682,13 @@ RegressionOtherServerKey() {
 		|| forgotten->serverCacheBindingMismatchPending()
 		|| forgotten->local().checkServerCacheBinding(
 			originalFingerprint,
-			4242) != Storage::ServerCacheBindingStatus::Match) {
+			4242) != Storage::ServerCacheBindingStatus::Match
+		|| !CachePayloadMatches(
+			forgotten->session().data().cache(),
+			cacheKey,
+			cachePayload)) {
 		return FailAccountLifecycleRegression(
-			"matching server and user identity did not reuse the retained cache");
+			"matching server and user identity did not reuse the retained cache payload");
 	}
 	forgotten->mtp().resume();
 	const auto finalKey = RegressionAuthKey(0x22);
@@ -724,6 +779,11 @@ RegressionOtherServerKey() {
 		return FailAccountLifecycleRegression(
 			"changed server fingerprint bypassed cache confirmation");
 	}
+	if (!QFileInfo::exists(cachePath)
+		|| !CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)) {
+		return FailAccountLifecycleRegression(
+			"declined fingerprint change damaged the cached payload");
+	}
 	if (!Main::details::CommitServerForget(
 			&unenrolled->local(),
 			Storage::ServerCacheBinding{
@@ -747,6 +807,11 @@ RegressionOtherServerKey() {
 			4242)) {
 		return FailAccountLifecycleRegression(
 			"changed user id bypassed cache confirmation");
+	}
+	if (!QFileInfo::exists(cachePath)
+		|| !CachePayloadMatches(*cacheDatabase, cacheKey, cachePayload)) {
+		return FailAccountLifecycleRegression(
+			"declined user-id change damaged the cached payload");
 	}
 	if (!unenrolled->beginServerReenrollment(
 			Main::details::ServerReenrollmentPrompt::DestructiveConfirmation,
