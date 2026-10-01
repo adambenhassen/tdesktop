@@ -484,6 +484,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_signup_closed"          = "This server isn't accepting new accounts. Ask whoever runs it for one.";
 "lng_intro_signup_taken"           = "{username} was taken while you were signing up. Go back and choose another.";
 "lng_intro_signup_expired"         = "That took too long. Go back and enter your username again.";
+"lng_intro_signup_invite_unusable" = "This invitation can't be used. Ask for a usable invitation, then try again.";
+"lng_intro_signup_session_invalid" = "This session can't continue registration. Go back and start again.";
 "lng_intro_signup_flood"           = "Too many accounts have been created from this network. Try again in {duration}.";
 "lng_intro_signup_pwd_unsaved"     = "Your account was created but the password wasn't saved. Try again: it can't be used without one.";
 
