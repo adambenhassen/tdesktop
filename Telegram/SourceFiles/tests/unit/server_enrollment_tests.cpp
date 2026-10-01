@@ -20,24 +20,39 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/details/storage_file_utilities.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
+#include "storage/storage_server_forget_startup.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
-#include <QtCore/QEventLoop>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
 #include <QtCore/QSemaphore>
 #include <QtCore/QTemporaryDir>
-#include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <QtCore/Qt>
 #include <QtGui/QKeyEvent>
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
+
+namespace Storage {
+
+struct AccountTestPeer {
+	static void ReadPrefs(Account &account, FileKey key) {
+		account._prefsKey = key;
+		account.readPrefs();
+	}
+
+	static void ReadStoredCustomServerPin(Account &account) {
+		account.readStoredCustomServerPin();
+	}
+};
+
+} // namespace Storage
 
 namespace {
 
@@ -134,54 +149,39 @@ MakeEnrollmentServerKey() {
 		mtpAuthorizationWriteFailed);
 }
 
-[[nodiscard]] bool WaitForStartupCleanup(const QString &canaryPath) {
-	if (!QFileInfo::exists(canaryPath)) {
-		return true;
-	}
-	auto result = false;
-	QEventLoop loop;
-	QTimer polling;
-	QTimer timeout;
-	polling.setInterval(10);
-	timeout.setSingleShot(true);
-	QObject::connect(&polling, &QTimer::timeout, &loop, [&] {
-		if (!QFileInfo::exists(canaryPath)) {
-			result = true;
-			loop.quit();
-		}
-	});
-	QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
-	polling.start();
-	timeout.start(5000);
-	loop.exec();
-	return result;
-}
-
-[[nodiscard]] bool HasReadableEnrollmentMap(
+[[nodiscard]] std::optional<Storage::FileKey> ReadEnrollmentPrefsKey(
 		const QString &basePath,
 		const MTP::AuthKeyPtr &key) {
 	Storage::details::FileReadDescriptor file;
 	if (!Storage::details::ReadFile(file, u"map"_q, basePath)) {
-		return false;
+		return std::nullopt;
 	}
 
 	QByteArray legacySalt, legacyKey, encrypted;
 	file.stream >> legacySalt >> legacyKey >> encrypted;
 	if (!Storage::details::CheckStreamStatus(file.stream)) {
-		return false;
+		return std::nullopt;
 	}
 
 	Storage::details::EncryptedDescriptor map;
 	if (!Storage::details::DecryptLocal(map, encrypted, key)) {
-		return false;
+		return std::nullopt;
 	}
 
 	quint32 keyType = 0;
-	quint64 prefsKey = 0;
+	Storage::FileKey prefsKey = 0;
 	map.stream >> keyType >> prefsKey;
 	return Storage::details::CheckStreamStatus(map.stream)
 		&& keyType == 0x1e
-		&& prefsKey != 0;
+		&& prefsKey != 0
+		? std::optional<Storage::FileKey>(prefsKey)
+		: std::nullopt;
+}
+
+[[nodiscard]] bool HasReadableEnrollmentMap(
+		const QString &basePath,
+		const MTP::AuthKeyPtr &key) {
+	return ReadEnrollmentPrefsKey(basePath, key).has_value();
 }
 
 [[nodiscard]] std::unique_ptr<MTP::Config> ReadEnrollmentConfig(
@@ -209,6 +209,82 @@ MakeEnrollmentServerKey() {
 		const MTP::AuthKeyPtr &key) {
 	const auto restored = ReadEnrollmentConfig(basePath, key);
 	return restored != nullptr && restored->hasCustomServer();
+}
+
+TEST_CASE(ServerForgetStartupLoadsPinnedStateWithoutForgetMarker) {
+	auto events = std::vector<int>();
+	auto skippedMtpData = true;
+	const auto result = Storage::details::ProcessServerForgetStartup(
+		false,
+		[&](bool skipMtpData) {
+			events.push_back(1);
+			skippedMtpData = skipMtpData;
+		},
+		[&] { events.push_back(2); },
+		[&] {
+			events.push_back(3);
+			return true;
+		},
+		[&] { events.push_back(4); },
+		[&] { events.push_back(5); });
+
+	CHECK(result == Storage::details::ServerForgetStartupResult::Loaded);
+	CHECK(!skippedMtpData);
+	CHECK_EQ(int(events.size()), 4);
+	CHECK_EQ(events[0], 1);
+	CHECK_EQ(events[1], 2);
+	CHECK_EQ(events[2], 4);
+	CHECK_EQ(events[3], 5);
+}
+
+TEST_CASE(ServerForgetStartupCompletesTombstoneBeforeLoadingConfig) {
+	auto events = std::vector<int>();
+	auto skippedMtpData = false;
+	const auto result = Storage::details::ProcessServerForgetStartup(
+		true,
+		[&](bool skipMtpData) {
+			events.push_back(1);
+			skippedMtpData = skipMtpData;
+		},
+		[&] { events.push_back(2); },
+		[&] {
+			events.push_back(3);
+			return true;
+		},
+		[&] { events.push_back(4); },
+		[&] { events.push_back(5); });
+
+	CHECK(result == Storage::details::ServerForgetStartupResult::Forgotten);
+	CHECK(skippedMtpData);
+	CHECK_EQ(int(events.size()), 3);
+	CHECK_EQ(events[0], 1);
+	CHECK_EQ(events[1], 2);
+	CHECK_EQ(events[2], 3);
+}
+
+TEST_CASE(ServerForgetStartupBlocksWhenTombstoneCannotComplete) {
+	auto events = std::vector<int>();
+	auto skippedMtpData = false;
+	const auto result = Storage::details::ProcessServerForgetStartup(
+		true,
+		[&](bool skipMtpData) {
+			events.push_back(1);
+			skippedMtpData = skipMtpData;
+		},
+		[&] { events.push_back(2); },
+		[&] {
+			events.push_back(3);
+			return false;
+		},
+		[&] { events.push_back(4); },
+		[&] { events.push_back(5); });
+
+	CHECK(result == Storage::details::ServerForgetStartupResult::Blocked);
+	CHECK(skippedMtpData);
+	CHECK_EQ(int(events.size()), 3);
+	CHECK_EQ(events[0], 1);
+	CHECK_EQ(events[1], 2);
+	CHECK_EQ(events[2], 3);
 }
 
 TEST_CASE(ReplaceInvalidatesQueuedStopFromPreviousEnrollment) {
@@ -979,22 +1055,50 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		nullptr,
 		QString(),
 		databasePath);
-	const auto config = restarted->start(key);
-	CHECK(config != nullptr);
-	CHECK(config && config->hasCustomServer());
+	auto cleanupCompleted = false;
+	auto skippedMtpData = true;
+	auto loadedConfig = std::unique_ptr<MTP::Config>();
+	const auto initialResult = Storage::details::ProcessServerForgetStartup(
+		false,
+		[&](bool skipMtpData) {
+			skippedMtpData = skipMtpData;
+			const auto prefsKey = ReadEnrollmentPrefsKey(basePath, key);
+			CHECK(prefsKey.has_value());
+			if (prefsKey) {
+				Storage::AccountTestPeer::ReadPrefs(*restarted, *prefsKey);
+			}
+			if (!skipMtpData) {
+				restarted->readMtpDataForTest();
+			}
+		},
+		[&] {
+			cleanupCompleted = QFile::remove(cleanupCanaryPath);
+		},
+		[] { return true; },
+		[&] {
+			Storage::AccountTestPeer::ReadStoredCustomServerPin(*restarted);
+		},
+		[&] { loadedConfig = ReadEnrollmentConfig(basePath, key); });
+	CHECK(initialResult
+		== Storage::details::ServerForgetStartupResult::Loaded);
+	CHECK(cleanupCompleted);
+	CHECK(!skippedMtpData);
+	CHECK(loadedConfig != nullptr);
+	CHECK(loadedConfig && loadedConfig->hasCustomServer());
 	CHECK(restarted->hasStoredCustomServer());
 	CHECK(restarted->mtpAuthorizationWriteFailed());
-	CHECK(WaitForStartupCleanup(cleanupCanaryPath));
+	CHECK(!QFileInfo::exists(cleanupCanaryPath));
 	CHECK(restarted->checkServerCacheBinding(fingerprint, 4242)
 		== Storage::ServerCacheBindingStatus::Match);
 	CHECK_EQ(restored, serialized);
-	CHECK(restarted->beginServerForget(Storage::ServerCacheBinding{
+	restarted->setServerForgetInterruptionForTest(1);
+	CHECK(!restarted->beginServerForget(Storage::ServerCacheBinding{
 		.fingerprintKnown = true,
 		.fingerprint = fingerprint,
 		.userIdKnown = true,
 		.userId = 4242,
 	}));
-	CHECK(!restarted->serverForgetPending());
+	CHECK(restarted->serverForgetPending());
 	restarted.reset();
 
 	QFile nextCleanupCanary(cleanupCanaryPath);
@@ -1012,9 +1116,45 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		databasePath,
 		true,
 		true);
-	const auto afterForgetConfig = afterForget->start(key);
-	CHECK(afterForgetConfig == nullptr);
-	CHECK(WaitForStartupCleanup(cleanupCanaryPath));
+	cleanupCompleted = false;
+	skippedMtpData = false;
+	auto pinRead = false;
+	auto configRead = false;
+	const auto forgetResult = Storage::details::ProcessServerForgetStartup(
+		afterForget->serverForgetPending(),
+		[&](bool skipMtpData) {
+			skippedMtpData = skipMtpData;
+			const auto prefsKey = ReadEnrollmentPrefsKey(basePath, key);
+			CHECK(prefsKey.has_value());
+			if (prefsKey) {
+				Storage::AccountTestPeer::ReadPrefs(*afterForget, *prefsKey);
+			}
+			if (!skipMtpData) {
+				afterForget->readMtpDataForTest();
+			}
+		},
+		[&] {
+			cleanupCompleted = QFile::remove(cleanupCanaryPath);
+		},
+		[&] {
+			CHECK(cleanupCompleted);
+			return afterForget->completeServerForgetForTest(key);
+		},
+		[&] {
+			pinRead = true;
+			Storage::AccountTestPeer::ReadStoredCustomServerPin(*afterForget);
+		},
+		[&] {
+			configRead = true;
+			loadedConfig = ReadEnrollmentConfig(basePath, key);
+		});
+	CHECK(forgetResult
+		== Storage::details::ServerForgetStartupResult::Forgotten);
+	CHECK(cleanupCompleted);
+	CHECK(skippedMtpData);
+	CHECK(!pinRead);
+	CHECK(!configRead);
+	CHECK(!QFileInfo::exists(cleanupCanaryPath));
 
 	CHECK(ReadEnrollmentConfig(basePath, key) == nullptr);
 	CHECK(!afterForget->hasStoredCustomServer());
@@ -1033,6 +1173,46 @@ TEST_CASE(ForgetServerDropsSavedIdentityAndAuthorizationButKeepsCache) {
 		== Storage::ServerCacheBindingStatus::Mismatch);
 	CHECK(afterForget->checkServerCacheBinding(fingerprint ^ 1, 4242)
 		== Storage::ServerCacheBindingStatus::Mismatch);
+	afterForget.reset();
+
+	// A second storage restart must get its unpinned decision from the
+	// rewritten map and preferences, even when constructor defaults say pinned.
+	restored.clear();
+	auto finalRestart = MakeEnrollmentStorageAccount(
+		basePath,
+		key,
+		[] { return QByteArray(); },
+		[&](const QByteArray &value) { restored = value; },
+		nullptr,
+		QString(),
+		databasePath,
+		true,
+		true);
+	loadedConfig.reset();
+	const auto finalResult = Storage::details::ProcessServerForgetStartup(
+		finalRestart->serverForgetPending(),
+		[&](bool skipMtpData) {
+			CHECK(!skipMtpData);
+			if (const auto prefsKey = ReadEnrollmentPrefsKey(basePath, key)) {
+				Storage::AccountTestPeer::ReadPrefs(*finalRestart, *prefsKey);
+			}
+			if (!skipMtpData) {
+				finalRestart->readMtpDataForTest();
+			}
+		},
+		[] {},
+		[] { return true; },
+		[&] {
+			Storage::AccountTestPeer::ReadStoredCustomServerPin(*finalRestart);
+		},
+		[&] { loadedConfig = ReadEnrollmentConfig(basePath, key); });
+	CHECK(finalResult == Storage::details::ServerForgetStartupResult::Loaded);
+	CHECK(!finalRestart->hasStoredCustomServer());
+	CHECK(!finalRestart->mtpAuthorizationWriteFailed());
+	CHECK(loadedConfig == nullptr);
+	CHECK(restored.isEmpty());
+	CHECK(finalRestart->checkServerCacheBinding(fingerprint, 4242)
+		== Storage::ServerCacheBindingStatus::Match);
 }
 
 TEST_CASE(ForgetServerTransitionReplaysAfterInterruption) {

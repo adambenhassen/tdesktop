@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
 #include "storage/storage_clear_legacy.h"
+#include "storage/storage_server_forget_startup.h"
 #include "storage/cache/storage_cache_types.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/details/storage_settings_scheme.h"
@@ -119,8 +120,6 @@ auto EmptyMessageDraftSources()
 
 constexpr auto kCustomServerPinnedPref = "mtp_custom_server_pinned"_cs;
 constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
-constexpr auto kMtpAuthorizationWriteFailedPref
-	= "mtp_authorization_write_failed"_cs;
 
 [[nodiscard]] FileKey ComputeDataNameKey(const QString &dataName) {
 	// We dropped old test authorizations when migrated to multi auth.
@@ -258,20 +257,27 @@ std::unique_ptr<MTP::Config> Account::start(MTP::AuthKeyPtr localKey) {
 	}
 	_serverForgetBlocked = false;
 	const auto forgettingServer = serverForgetPending();
-	readMapWith(_localKey, QByteArray(), forgettingServer);
-	clearLegacyFiles();
-	if (forgettingServer) {
-		if (!completeServerForget()) {
-			_serverForgetBlocked = true;
-			auto blocked = std::make_unique<MTP::Config>(
-				MTP::Environment::Production);
-			blocked->dcOptions().constructBlocked();
-			return blocked;
-		}
-		return nullptr;
+	auto config = std::unique_ptr<MTP::Config>();
+	const auto result = details::ProcessServerForgetStartup(
+		forgettingServer,
+		[this](bool skipMtpData) {
+			static_cast<void>(readMapWith(
+				_localKey,
+				QByteArray(),
+				skipMtpData));
+		},
+		[this] { clearLegacyFiles(); },
+		[this] { return completeServerForget(); },
+		[this] { readStoredCustomServerPin(); },
+		[this, &config] { config = readMtpConfig(); });
+	if (result == details::ServerForgetStartupResult::Blocked) {
+		_serverForgetBlocked = true;
+		auto blocked = std::make_unique<MTP::Config>(
+			MTP::Environment::Production);
+		blocked->dcOptions().constructBlocked();
+		return blocked;
 	}
-	readStoredCustomServerPin();
-	return readMtpConfig();
+	return config;
 }
 
 void Account::startAdded(MTP::AuthKeyPtr localKey) {
@@ -1072,20 +1078,6 @@ void Account::readMtpData() {
 		}
 	}
 	applyReadContext(std::move(context));
-}
-
-void Account::readStoredCustomServerPin() {
-	// Read before readMtpConfig() so that a corrupted or truncated
-	// config blob on a pinned account still fails closed. When the
-	// prefs themselves could not be read the marker is unknown, not
-	// absent: defaulting it to false would send a pinned account to
-	// production on one damaged tdata event.
-	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
-	_customServerPinUnknown = _prefsReadFailed
-		|| readPref<bool>(kCustomServerPinUnknownPref);
-	_mtpAuthorizationWriteFailed = readPref<bool>(
-		kMtpAuthorizationWriteFailedPref);
-	readMtpAuthorizationFailureMarker();
 }
 
 void Account::writeCustomServerBlocked(bool pinUnknown) {
@@ -3640,40 +3632,6 @@ Webview::StorageId TonSiteStorageId() {
 		Core::App().saveSettingsDelayed();
 	}
 	return result;
-}
-
-void Account::readPrefs() {
-	FileReadDescriptor prefs;
-	if (!ReadEncryptedFile(prefs, _prefsKey, _basePath, _localKey)) {
-		_prefsReadFailed = true;
-		ClearKey(_prefsKey, _basePath);
-		_prefsKey = 0;
-		writeMapDelayed();
-		return;
-	}
-
-	auto count = quint32();
-	prefs.stream >> count;
-	if (prefs.stream.status() != QDataStream::Ok) {
-		_prefsReadFailed = true;
-		return;
-	}
-	auto map = base::flat_map<QByteArray, QByteArray>();
-	map.reserve(count);
-	for (auto i = quint32(); i != count; ++i) {
-		auto keySize = quint32(), valueSize = quint32();
-		prefs.stream >> keySize >> valueSize;
-		auto key = QByteArray(keySize, Qt::Uninitialized);
-		auto value = QByteArray(valueSize, Qt::Uninitialized);
-		prefs.stream.readRawData(key.data(), keySize);
-		prefs.stream.readRawData(value.data(), valueSize);
-		if (prefs.stream.status() != QDataStream::Ok) {
-			_prefsReadFailed = true;
-			return;
-		}
-		map.emplace(std::move(key), std::move(value));
-	}
-	_prefs = std::move(map);
 }
 
 } // namespace Storage

@@ -1077,6 +1077,40 @@ void Account::writePrefsDelayed() {
 	_writePrefsTimer.callOnce(kDelayedWriteTimeout);
 }
 
+void Account::readPrefs() {
+	FileReadDescriptor prefs;
+	if (!ReadEncryptedFile(prefs, _prefsKey, _basePath, _localKey)) {
+		_prefsReadFailed = true;
+		ClearKey(_prefsKey, _basePath);
+		_prefsKey = 0;
+		writeMapDelayed();
+		return;
+	}
+
+	auto count = quint32();
+	prefs.stream >> count;
+	if (prefs.stream.status() != QDataStream::Ok) {
+		_prefsReadFailed = true;
+		return;
+	}
+	auto map = base::flat_map<QByteArray, QByteArray>();
+	map.reserve(count);
+	for (auto i = quint32(); i != count; ++i) {
+		auto keySize = quint32(), valueSize = quint32();
+		prefs.stream >> keySize >> valueSize;
+		auto key = QByteArray(keySize, Qt::Uninitialized);
+		auto value = QByteArray(valueSize, Qt::Uninitialized);
+		prefs.stream.readRawData(key.data(), keySize);
+		prefs.stream.readRawData(value.data(), valueSize);
+		if (prefs.stream.status() != QDataStream::Ok) {
+			_prefsReadFailed = true;
+			return;
+		}
+		map.emplace(std::move(key), std::move(value));
+	}
+	_prefs = std::move(map);
+}
+
 bool Account::writePrefs(bool sync) {
 	_writePrefsTimer.cancel();
 	if (!_prefsChanged) {
@@ -1145,6 +1179,20 @@ std::optional<bool> Account::readPrefImpl<bool>(std::string_view key) {
 template <>
 void Account::writePrefImpl<bool>(std::string_view key, bool value) {
 	writePrefGeneric(key, value ? "\x1"_q : QByteArray());
+}
+
+void Account::readStoredCustomServerPin() {
+	// Read before readMtpConfig() so that a corrupted or truncated
+	// config blob on a pinned account still fails closed. When the
+	// prefs themselves could not be read the marker is unknown, not
+	// absent: defaulting it to false would send a pinned account to
+	// production on one damaged tdata event.
+	_hasStoredCustomServer = readPref<bool>(kCustomServerPinnedPref);
+	_customServerPinUnknown = _prefsReadFailed
+		|| readPref<bool>(kCustomServerPinUnknownPref);
+	_mtpAuthorizationWriteFailed = readPref<bool>(
+		kMtpAuthorizationWriteFailedPref);
+	readMtpAuthorizationFailureMarker();
 }
 
 } // namespace Storage

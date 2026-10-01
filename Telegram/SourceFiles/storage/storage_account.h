@@ -301,6 +301,9 @@ public:
 	void reset();
 
 private:
+#ifdef TDESKTOP_UNIT_TESTS
+	friend struct AccountTestPeer;
+#endif
 	enum class ReadMapResult {
 		Success,
 		IncorrectPasscode,
