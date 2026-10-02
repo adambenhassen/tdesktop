@@ -111,6 +111,8 @@ struct ProtectedCacheFixtures {
 	QString mediaCacheRoot;
 	QString cacheLeaf;
 	QString mediaCacheLeaf;
+	QString openedCache;
+	QString openedMediaCache;
 	QString cleanupRoot;
 };
 
@@ -149,12 +151,16 @@ PrepareProtectedCacheFixtures(ProtectedCacheFixtures *fixtures) {
 	fixtures->mediaCacheRoot = fixtures->root + "/media-cache-root";
 	fixtures->cacheLeaf = fixtures->root + "/cache-leaf";
 	fixtures->mediaCacheLeaf = fixtures->root + "/media-cache-leaf";
+	fixtures->openedCache = fixtures->root + "/opened-cache";
+	fixtures->openedMediaCache = fixtures->root + "/opened-media-cache";
 	fixtures->cleanupRoot = fixtures->root + "/legacy-cleanup";
 	for (const auto &path : {
 			 fixtures->cacheRoot,
 			 fixtures->mediaCacheRoot,
 			 fixtures->cacheLeaf,
 			 fixtures->mediaCacheLeaf,
+			 fixtures->openedCache,
+			 fixtures->openedMediaCache,
 			 fixtures->cleanupRoot,
 		 }) {
 		if (!QDir().mkpath(path)
@@ -493,6 +499,108 @@ template <typename Result, typename Start>
 		&& CachePayloadMatches(*cache, key, expected);
 }
 
+using CacheGetter = Fn<Storage::Cache::Database &()>;
+using CacheClearer = Fn<void()>;
+
+[[nodiscard]] QString ActiveCacheVersionPath(const QString &path) {
+	const auto directories
+		= QDir(path).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+	for (const auto &directory : directories) {
+		const auto version = QDir(path).filePath(directory);
+		if (QFileInfo(version + "/binlog").isFile()) {
+			return version;
+		}
+	}
+	return {};
+}
+
+[[nodiscard]] bool CopyCacheVersionFiles(const QString &source,
+										 const QString &destination) {
+	const auto files = QDir(source).entryList(
+		QDir::Files | QDir::Hidden | QDir::System, QDir::Name);
+	for (const auto &file : files) {
+		if (file != "marker"
+			&& !QFile::copy(QDir(source).filePath(file),
+							QDir(destination).filePath(file))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+[[nodiscard]] bool FixtureMarkerIsIntact(const QString &path) {
+	auto marker = QFile(path + "/marker");
+	return marker.open(QIODevice::ReadOnly)
+		   && marker.readAll() == "synthetic protected fixture";
+}
+
+[[nodiscard]] bool RunPostOpenCacheSymlinkRegression(const QString &path,
+													 const QString &fixture,
+													 CacheGetter cache,
+													 CacheClearer clearCaches) {
+	const auto seedKey = Storage::Cache::Key{
+		0x4d41494e39353731ULL,
+		0x4341434845534545ULL,
+	};
+	const auto writeKey = Storage::Cache::Key{
+		0x4d41494e39353732ULL,
+		0x4341434845575249ULL,
+	};
+	const auto payload = QByteArray("post-open cache guard seed");
+	if (!CacheOperationSucceeded(
+			AwaitCacheCallback<Storage::Cache::Error>([&](auto done) {
+				cache().put(seedKey, QByteArray(payload), std::move(done));
+			}))) {
+		return false;
+	}
+	cache().sync();
+
+	const auto active = ActiveCacheVersionPath(path);
+	const auto saved = active + ".guard-test-original";
+	if (active.isEmpty() || QFileInfo::exists(saved)
+		|| !FixtureMarkerIsIntact(fixture)
+		|| !CopyCacheVersionFiles(active, fixture)
+		|| !QDir().rename(active, saved)) {
+		return false;
+	}
+	auto restored = false;
+	const auto restore = gsl::finally([&] {
+		if (!restored) {
+			QFile::remove(active);
+			QDir().rename(saved, active);
+		}
+	});
+	if (!QFile::link(fixture, active)) {
+		return false;
+	}
+	const auto fixtureEntries = QDir(fixture).entryList(
+		QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+		QDir::Name);
+	const auto read = AwaitCacheCallback<QByteArray>(
+		[&](auto done) { cache().get(seedKey, std::move(done)); });
+	const auto readRefused = read && read->isEmpty();
+	const auto write = AwaitCacheCallback<Storage::Cache::Error>(
+		[&](auto done) {
+			cache().put(writeKey, QByteArray("must not reach protected cache"),
+						std::move(done));
+		});
+	clearCaches();
+	cache().sync();
+	const auto unchanged
+		= (fixtureEntries
+		   == QDir(fixture).entryList(QDir::AllEntries | QDir::Hidden
+										  | QDir::System | QDir::NoDotAndDotDot,
+									  QDir::Name))
+		  && FixtureMarkerIsIntact(fixture);
+	const auto writeRefused
+		= write && (write->type != Storage::Cache::Error::Type::None);
+	const auto aliasRemoved = QFile::remove(active);
+	const auto originalRestored = QDir().rename(saved, active);
+	restored = aliasRemoved && originalRestored;
+	cache().sync();
+	return readRefused && writeRefused && unchanged && restored;
+}
+
 [[nodiscard]] Main::Account *FindAuthorizationBlockedAccount(
 		const Main::Domain &domain) {
 	for (const auto &[index, account] : domain.accounts()) {
@@ -642,9 +750,12 @@ template <typename Result, typename Start>
 StartChatParticipantsRegression(Main::Domain &domain,
 								const ProtectedCacheFixtures &fixtures,
 								Fn<void(int)> done) {
-	if (domain.accounts().size() > Main::Domain::kPremiumMaxAccounts - 2) {
+	const auto requiredAccounts
+		= Core::MacProtectedPath::IntegrationTestActive() ? 3 : 2;
+	if (domain.accounts().size()
+		> Main::Domain::kPremiumMaxAccounts - requiredAccounts) {
 		return FailChatParticipantsRegression(
-			"not enough account slots for isolated stock and pinned sessions");
+			"not enough account slots for isolated cache regression sessions");
 	}
 	const auto selfId = UserId(1);
 	const auto chatId = ChatId(1051);
@@ -743,6 +854,44 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		std::fprintf(
 			stderr,
 			"Authenticated cache regression passed: root, directory, and file "
+			"symlinks refused for cache and media_cache.\n");
+	}
+	if (Core::MacProtectedPath::IntegrationTestActive()) {
+		const auto guarded = domain.add(MTP::Environment::Production);
+		guarded->mtp().stopForServerEnrollment();
+		guarded->setSessionUserId(selfId);
+		if (!guarded->createSession(
+				RegressionUser(selfId, true, QString()),
+				std::make_unique<Main::SessionSettings>())) {
+			return FailChatParticipantsRegression(
+				"could not create the post-open cache test session");
+		}
+		const auto cacheGetter = [guarded]() -> Storage::Cache::Database & {
+			return guarded->session().data().cache();
+		};
+		const auto mediaCacheGetter
+			= [guarded]() -> Storage::Cache::Database & {
+			return guarded->session().data().cacheBigFile();
+		};
+		const auto clearCaches = [guarded] {
+			auto &data = guarded->session().data();
+			data.clearLocalStorage();
+			data.cache().sync();
+			data.cacheBigFile().sync();
+		};
+		if (!RunPostOpenCacheSymlinkRegression(guarded->local().cachePath(),
+											   fixtures.openedCache,
+											   cacheGetter, clearCaches)
+			|| !RunPostOpenCacheSymlinkRegression(
+				guarded->local().cacheBigFilePath(), fixtures.openedMediaCache,
+				mediaCacheGetter, clearCaches)) {
+			return FailChatParticipantsRegression(
+				"post-open cache get or put accessed a protected alias");
+		}
+		std::fprintf(
+			stderr,
+			"Authenticated cache post-open regression passed: get, put, and "
+			"clear "
 			"symlinks refused for cache and media_cache.\n");
 	}
 	const auto pinnedChat = pinned->session().data().chat(chatId);

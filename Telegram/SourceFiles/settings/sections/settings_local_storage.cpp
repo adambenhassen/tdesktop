@@ -1596,14 +1596,14 @@ QString LocalStorage::Row::sizeText(
 		: tr::lng_local_storage_empty(tr::now);
 }
 
-LocalStorage::LocalStorage(
-	QWidget *parent,
-	not_null<Window::SessionController*> controller)
-: Section(parent, controller)
-, _session(&controller->session())
-, _db(&_session->data().cache())
-, _dbBig(&_session->data().cacheBigFile())
-, _bottomSkipRounding(st::boxRadius, st::windowBgOver) {
+LocalStorage::LocalStorage(QWidget *parent,
+						   not_null<Window::SessionController *> controller)
+	: Section(parent, controller), _session(&controller->session()),
+	  _db([session = _session] { return session->data().cacheIfAllowed(); }),
+	  _dbBig([session = _session] {
+		  return session->data().cacheBigFileIfAllowed();
+	  }),
+	  _bottomSkipRounding(st::boxRadius, st::windowBgOver) {
 	const auto &settings = _session->local().cacheSettings();
 	const auto &settingsBig = _session->local().cacheBigFileSettings();
 	_totalSizeLimit = settings.totalSizeLimit + settingsBig.totalSizeLimit;
@@ -1890,8 +1890,12 @@ void LocalStorage::clearSelected() {
 
 void LocalStorage::startClearing() {
 	if (_allSelected.current()) {
-		_db->clear();
-		_dbBig->clear();
+		if (const auto cache = _db()) {
+			cache->clear();
+		}
+		if (const auto cache = _dbBig()) {
+			cache->clear();
+		}
 		Ui::Emoji::ClearIrrelevantCache();
 		return;
 	}
@@ -1901,9 +1905,13 @@ void LocalStorage::startClearing() {
 		}
 		const auto tag = kChartTags[i];
 		if (tag == kFakeMediaCacheTag) {
-			_dbBig->clear();
+			if (const auto cache = _dbBig()) {
+				cache->clear();
+			}
 		} else {
-			_db->clearByTag(uint8(tag));
+			if (const auto cache = _db()) {
+				cache->clearByTag(uint8(tag));
+			}
 		}
 	}
 }
@@ -1949,14 +1957,13 @@ void LocalStorage::setupContent() {
 
 	setupControls(content);
 
-	rpl::combine(
-		_db->statsOnMain(),
-		_dbBig->statsOnMain()
-	) | rpl::on_next([=](
-			Database::Stats &&stats,
-			Database::Stats &&statsBig) {
-		update(std::move(stats), std::move(statsBig));
-	}, content->lifetime());
+	rpl::combine(_session->data().cache().statsOnMain(),
+				 _session->data().cacheBigFile().statsOnMain())
+		| rpl::on_next(
+			[=](Database::Stats &&stats, Database::Stats &&statsBig) {
+				update(std::move(stats), std::move(statsBig));
+			},
+			content->lifetime());
 
 	Ui::ResizeFitChild(this, content);
 }
@@ -2236,7 +2243,9 @@ void LocalStorage::applyLimits() {
 	updateBig.totalSizeLimit = _mediaSizeLimit;
 	updateBig.totalTimeLimit = _timeLimit;
 	_session->local().updateCacheSettings(update, updateBig);
-	_session->data().cache().updateSettings(update);
+	if (const auto cache = _db()) {
+		cache->updateSettings(update);
+	}
 }
 
 Type LocalStorageId() {

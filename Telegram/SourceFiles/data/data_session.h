@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_location_manager.h"
 #include "base/timer.h"
 
+#include <QtCore/QMutex>
+
 class Image;
 class HistoryItem;
 struct WebPageCollage;
@@ -266,6 +268,8 @@ public:
 
 	[[nodiscard]] Storage::Cache::Database &cache();
 	[[nodiscard]] Storage::Cache::Database &cacheBigFile();
+	[[nodiscard]] Storage::Cache::Database *cacheIfAllowed();
+	[[nodiscard]] Storage::Cache::Database *cacheBigFileIfAllowed();
 
 	[[nodiscard]] not_null<PeerData*> peer(PeerId id);
 	[[nodiscard]] not_null<PeerData*> peer(UserId id) = delete;
@@ -1175,8 +1179,11 @@ private:
 
 	const not_null<Main::Session*> _session;
 
+	const QString _cachePath;
+	const QString _bigFileCachePath;
 	Storage::DatabasePointer _cache;
 	Storage::DatabasePointer _bigFileCache;
+	QMutex _cacheMutex;
 	bool _cacheAllowed = false;
 	bool _bigFileCacheAllowed = false;
 

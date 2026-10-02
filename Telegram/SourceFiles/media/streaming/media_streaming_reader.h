@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "media/streaming/media_streaming_common.h"
 #include "media/streaming/media_streaming_loader.h"
+#include "base/basic_types.h"
 #include "base/bytes.h"
 #include "base/weak_ptr.h"
 #include "base/thread_safe_wrap.h"
@@ -41,9 +42,8 @@ public:
 	};
 
 	// Main thread.
-	explicit Reader(
-		std::unique_ptr<Loader> loader,
-		Storage::Cache::Database *cache = nullptr);
+	explicit Reader(std::unique_ptr<Loader> loader,
+					Fn<Storage::Cache::Database *()> cache = nullptr);
 
 	void setLoaderPriority(int priority);
 
@@ -240,7 +240,7 @@ private:
 		Storage::Cache::Key baseKey);
 
 	const std::unique_ptr<Loader> _loader;
-	Storage::Cache::Database * const _cache = nullptr;
+	const Fn<Storage::Cache::Database *()> _cache;
 
 	// shared_ptr is used to be able to have weak_ptr.
 	const std::shared_ptr<CacheHelper> _cacheHelper;
