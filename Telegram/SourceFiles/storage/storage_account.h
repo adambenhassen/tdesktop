@@ -163,10 +163,15 @@ public:
 	[[nodiscard]] bool completeServerForgetForTest(
 		MTP::AuthKeyPtr localKey);
 	void setServerReenrollmentInterruptionForTest(int point);
+#endif
+#if defined(TDESKTOP_UNIT_TESTS) || defined(TDESKTOP_LIFECYCLE_REGRESSION)
 	void setServerForgetInterruptionForTest(int point);
 #endif
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
 	[[nodiscard]] bool mtpAuthorizationDataExistsForRegressionTest() const;
+	[[nodiscard]] bool removePrefsForRegressionTest();
+	[[nodiscard]] bool flushAndVerifyPinPrefsForRegressionTest(
+		bool expectedPinned);
 #endif
 
 	void registerDraftSource(
@@ -439,6 +444,8 @@ private:
 #ifdef TDESKTOP_UNIT_TESTS
 	Fn<bool()> _writeMtpAuthorizationOverride;
 	int _serverReenrollmentInterruptionForTest = 0;
+#endif
+#if defined(TDESKTOP_UNIT_TESTS) || defined(TDESKTOP_LIFECYCLE_REGRESSION)
 	int _serverForgetInterruptionForTest = 0;
 #endif
 	Fn<QByteArray()> _serializeSelf;

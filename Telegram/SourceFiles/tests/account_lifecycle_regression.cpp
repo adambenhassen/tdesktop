@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "core/application.h"
+#include "core/launcher.h"
 #include "crl/crl_on_main.h"
 #include "data/data_chat.h"
 #include "data/data_peer_id.h"
@@ -27,15 +28,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
+#include "settings.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
 #include <QtCore/QEventLoop>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
+#include <QtCore/QStringList>
 #include <QtCore/QTimer>
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QTcpSocket>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <optional>
@@ -45,9 +54,537 @@ namespace Tests {
 #ifdef TDESKTOP_LIFECYCLE_REGRESSION
 namespace {
 
+constexpr auto kAuthStartupRegressionVariable =
+	"TDESKTOP_AUTH_STARTUP_REGRESSION";
+constexpr auto kAuthStartupRegressionRootVariable =
+	"TDESKTOP_AUTH_STARTUP_REGRESSION_ROOT";
+constexpr auto kAuthStartupFailPrepareVariable =
+	"TDESKTOP_AUTH_STARTUP_REGRESSION_FAIL_PREPARE";
+constexpr auto kAuthStartupForbiddenOutboundVariable =
+	"TDESKTOP_AUTH_STARTUP_REGRESSION_FORBIDDEN_OUTBOUND";
+constexpr auto kAuthStartupRegressionMarker =
+	"tdesktop-auth-startup-regression-v1";
+constexpr auto kAuthStartupObservationWindowMs = 1500;
+constexpr auto kAuthStartupForbiddenOutboundDelayMs = 250;
+constexpr auto kAuthStartupOldUserId = UserId(4242);
+constexpr auto kAuthStartupNewUserId = UserId(5252);
+
+struct AuthStartupRegressionRequest final {
+	bool prepare = false;
+	QString name;
+	int forgetPoint = 0;
+};
+
+[[nodiscard]] std::shared_ptr<MTP::details::RSAPublicKey>
+RegressionServerKey();
+[[nodiscard]] MTP::AuthKeyPtr RegressionAuthKey(int byte);
+[[nodiscard]] bool ConfigurePinnedServer(
+		not_null<Main::Account*> account,
+		std::shared_ptr<MTP::details::RSAPublicKey> key);
+[[nodiscard]] bool HasAuthKey(
+		not_null<Main::Account*> account,
+		MTP::AuthKey::KeyId keyId);
+[[nodiscard]] bool HasNoAuthorizationState(
+		not_null<Main::Account*> account);
+
 auto gLifecycleWriteCounts = LifecycleWriteCountsForRegressionTest();
+auto gAuthStartupState = AuthStartupStateForRegressionTest();
+auto gAuthStartupForbiddenOutboundAttempt = false;
+std::unique_ptr<QTcpSocket> gAuthStartupForbiddenSocket;
+
+[[nodiscard]] std::optional<AuthStartupRegressionRequest>
+ParseAuthStartupRegressionRequest() {
+	const auto parts = qEnvironmentVariable(
+		kAuthStartupRegressionVariable).split(':');
+	if ((parts.size() != 2)
+		|| ((parts.front() != u"prepare"_q)
+			&& (parts.front() != u"verify"_q))) {
+		return std::nullopt;
+	}
+	const auto name = parts.back();
+	if ((name == u"missing-pin"_q)
+		|| (name == u"incomplete-pin"_q)
+		|| (name == u"unreadable-config"_q)
+		|| (name == u"unreadable-pin"_q)) {
+		return AuthStartupRegressionRequest{
+			.prepare = (parts.front() == u"prepare"_q),
+			.name = name,
+		};
+	}
+	if (name.startsWith(u"forget-"_q)) {
+		bool ok = false;
+		const auto point = name.mid(7).toInt(&ok);
+		if (ok && (point >= 1) && (point <= 6)) {
+			return AuthStartupRegressionRequest{
+				.prepare = (parts.front() == u"prepare"_q),
+				.name = name,
+				.forgetPoint = point,
+			};
+		}
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]] bool IsUnderPath(
+		const QString &path,
+		const QString &parent) {
+	return path.startsWith(parent + QDir::separator());
+}
+
+void FailAuthStartupRegression(
+		const QString &name,
+		const char *reason) {
+	std::fprintf(
+		stderr,
+		"Auth startup regression failed: case=%s: %s\n",
+		name.toUtf8().constData(),
+		reason);
+}
+
+[[nodiscard]] QString AuthStartupConfigPath() {
+	const auto root = QDir(cWorkingDir() + u"tdata"_q);
+	const auto names = QStringList{
+		u"config"_q,
+		u"configs"_q,
+		u"config0"_q,
+		u"config1"_q,
+	};
+	auto result = QString();
+	for (const auto &directory : root.entryList(
+			QDir::Dirs | QDir::NoDotAndDotDot)) {
+		const auto path = root.filePath(directory);
+		const auto hasConfig = std::any_of(
+			names.begin(),
+			names.end(),
+			[&](const QString &name) {
+				return QFileInfo::exists(
+					path + QDir::separator() + name);
+			});
+		if (hasConfig) {
+			if (!result.isEmpty()) {
+				return QString();
+			}
+			result = path + QDir::separator() + u"config"_q;
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] bool RemoveAuthStartupConfig() {
+	const auto path = AuthStartupConfigPath();
+	if (path.isEmpty()) {
+		return false;
+	}
+	auto removed = false;
+	for (const auto &suffix : {
+			QString(),
+			u"s"_q,
+			u"0"_q,
+			u"1"_q,
+		}) {
+		const auto file = path + suffix;
+		if (QFileInfo::exists(file)) {
+			if (!QFile::remove(file)) {
+				return false;
+			}
+			removed = true;
+		}
+	}
+	return removed;
+}
+
+[[nodiscard]] bool PrepareAuthStartupRegression(
+		const AuthStartupRegressionRequest &request) {
+	auto &domain = Core::App().domain();
+	if (!domain.started() || (domain.accounts().size() != 1)) {
+		FailAuthStartupRegression(
+			request.name,
+			"fixture preparation needs one fresh account");
+		return false;
+	}
+	const auto account = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	if (account->sessionExists()
+		|| !HasNoAuthorizationState(account)
+		|| account->local().hasStoredCustomServer()
+		|| account->local().customServerPinUnknown()
+		|| account->local().mtpAuthorizationWriteFailed()
+		|| account->local().serverForgetPending()
+		|| account->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| !account->mtp().dcOptions().unenrolled()) {
+		FailAuthStartupRegression(
+			request.name,
+			"fixture workdir is not fresh; create a new disposable root");
+		return false;
+	}
+	account->mtp().stopForServerEnrollment();
+	const auto oldKey = RegressionAuthKey(0x51);
+	const auto oldKeyId = oldKey->keyId();
+	if (!oldKeyId) {
+		FailAuthStartupRegression(
+			request.name,
+			"synthetic authorization key has an invalid id");
+		return false;
+	}
+	if (request.forgetPoint) {
+		if (!ConfigurePinnedServer(account, RegressionServerKey())) {
+			FailAuthStartupRegression(
+				request.name,
+				"could not store the synthetic server pin");
+			return false;
+		}
+	}
+	account->setSessionUserId(kAuthStartupOldUserId);
+	account->mtp().dcPersistentKeyChanged(2, oldKey);
+	if (!HasAuthKey(account, oldKeyId)) {
+		FailAuthStartupRegression(
+			request.name,
+			"could not seed the stale synthetic authorization key");
+		return false;
+	}
+	if (!account->local().writeMtpAuthorization()
+		|| !account->local().mtpAuthorizationDataExistsForRegressionTest()
+		|| !HasAuthKey(account, oldKeyId)) {
+		FailAuthStartupRegression(
+			request.name,
+			"could not persist the stale synthetic authorization");
+		return false;
+	}
+	domain.local().writeAccounts();
+	if (request.name == u"incomplete-pin"_q) {
+		account->local().writeCustomServerBlocked(false);
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
+	} else if (request.name == u"unreadable-config"_q) {
+		account->local().writeCustomServerBlocked(false);
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
+		if (!RemoveAuthStartupConfig()) {
+			FailAuthStartupRegression(
+				request.name,
+				"could not remove the disposable config variants");
+			return false;
+		}
+	} else if (request.name == u"unreadable-pin"_q) {
+		account->local().writeCustomServerBlocked(false);
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
+		if (!account->local().removePrefsForRegressionTest()) {
+			FailAuthStartupRegression(
+				request.name,
+				"could not remove the disposable pin preferences");
+			return false;
+		}
+	} else if (request.forgetPoint) {
+		const auto binding = Storage::ServerCacheBinding{
+			.fingerprintKnown = true,
+			.fingerprint = RegressionServerKey()->fingerprint(),
+			.userIdKnown = true,
+			.userId = kAuthStartupOldUserId.bare,
+		};
+		if (!account->local()
+			.flushAndVerifyPinPrefsForRegressionTest(true)) {
+			FailAuthStartupRegression(
+				request.name,
+				"the persisted account map did not reload its pinned prefs linkage");
+			return false;
+		}
+		account->local().setServerForgetInterruptionForTest(
+			request.forgetPoint);
+		if (account->local().beginServerForget(binding)
+			|| !account->local().serverForgetPending()) {
+			FailAuthStartupRegression(
+				request.name,
+				"Forget did not stop at the requested durable boundary");
+			return false;
+		}
+	} else if (request.name != u"missing-pin"_q) {
+		FailAuthStartupRegression(
+			request.name,
+			"unsupported fixture case");
+		return false;
+	} else if (!account->local()
+		.flushAndVerifyPinPrefsForRegressionTest(false)) {
+		FailAuthStartupRegression(
+			request.name,
+			"the persisted account map did not reload the expected absent pin prefs");
+		return false;
+	}
+	Storage::details::Sync();
+	if (qEnvironmentVariable(kAuthStartupFailPrepareVariable)
+		== request.name) {
+		FailAuthStartupRegression(
+			request.name,
+			"sensitivity injection: prepare failed after the fixture was verified");
+		return false;
+	}
+	return true;
+}
+
+[[nodiscard]] bool VerifyAuthStartupRegression(
+		const AuthStartupRegressionRequest &request) {
+	auto &domain = Core::App().domain();
+	if (!domain.started() || (domain.accounts().size() != 1)) {
+		FailAuthStartupRegression(
+			request.name,
+			"normal startup did not restore the synthetic account");
+		return false;
+	}
+	const auto account = not_null<Main::Account*>(
+		domain.accounts().front().account.get());
+	const auto startup = GetAuthStartupStateForRegressionTest();
+	if (!startup.observed) {
+		FailAuthStartupRegression(
+			request.name,
+			"normal account startup was not observed");
+		return false;
+	}
+	if (!request.forgetPoint
+		&& ((startup.userId != kAuthStartupOldUserId.bare)
+			|| (startup.authorizationKeyCount <= 0))) {
+		FailAuthStartupRegression(
+			request.name,
+			"normal startup did not load the stale user id and authorization key");
+		return false;
+	}
+	if ((request.name == u"missing-pin"_q)
+		&& (startup.hasStoredPin
+			|| startup.pinUnknown
+			|| !startup.configReadable
+			|| startup.configHasCustomServer)) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup did not reload the distinct missing-pin fixture state");
+		return false;
+	}
+	if ((request.name == u"incomplete-pin"_q)
+		&& (!startup.hasStoredPin
+			|| startup.pinUnknown
+			|| !startup.configReadable
+			|| startup.configHasCustomServer)) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup did not reload a readable marker with an incomplete config");
+		return false;
+	}
+	if ((request.name == u"unreadable-config"_q)
+		&& (!startup.hasStoredPin
+			|| startup.pinUnknown
+			|| startup.configReadable)) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup did not reload the stored marker with an unreadable config");
+		return false;
+	}
+	if ((request.name == u"unreadable-pin"_q)
+		&& (!startup.pinUnknown || !startup.configReadable)) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup did not reload unreadable prefs beside a readable config");
+		return false;
+	}
+	const auto blockedOrPaused = account->mtp().config().blocked()
+		|| account->mtp().dcOptions().unenrolled()
+		|| account->local().serverForgetBlocked();
+	if (!blockedOrPaused) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup resumed an account without a readable complete endpoint and pin");
+		return false;
+	}
+	if (account->mtp().isServerEnrollmentNetworkAllowed()) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup allowed account networking before enrollment");
+		return false;
+	}
+	if (!HasNoAuthorizationState(account)) {
+		FailAuthStartupRegression(
+			request.name,
+			"startup retained the old identity or authorization key");
+		return false;
+	}
+	if (request.forgetPoint) {
+		const auto fingerprint = RegressionServerKey()->fingerprint();
+		if (account->local().checkServerCacheBinding(
+				fingerprint,
+				kAuthStartupOldUserId.bare)
+			!= Storage::ServerCacheBindingStatus::Match) {
+			FailAuthStartupRegression(
+				request.name,
+				"startup did not retain the prior cache identity binding");
+			return false;
+		}
+	}
+	account->setSessionUserId(kAuthStartupNewUserId);
+	if (!account->mtp().getKeysForWrite().empty()) {
+		FailAuthStartupRegression(
+			request.name,
+			"a newly entered identity inherited authorization keys");
+		return false;
+	}
+	if (gAuthStartupForbiddenOutboundAttempt) {
+		FailAuthStartupRegression(
+			request.name,
+			"deferred synthetic forbidden outbound attempt was observed");
+		return false;
+	}
+	return true;
+}
 
 } // namespace
+
+bool AuthStartupRegressionSandboxIsValid() {
+	const auto request = ParseAuthStartupRegressionRequest();
+	if (!request || !Core::Launcher::Instance().customWorkingDir()) {
+		std::fprintf(
+			stderr,
+			"Auth startup regression refused: provide a valid phase, case, and explicit -workdir.\n");
+		return false;
+	}
+	const auto work = cWorkingDir();
+	if (!AuthStartupRegressionSandboxIsValid(work)) {
+		return false;
+	}
+	const auto selected = QFileInfo(work).canonicalFilePath();
+	std::fprintf(
+		stderr,
+		"Auth startup regression selected workdir: %s\n",
+		selected.toUtf8().constData());
+	return true;
+}
+
+bool AuthStartupRegressionSandboxIsValid(
+		const QString &requestedWorkingDir) {
+	const auto request = ParseAuthStartupRegressionRequest();
+	if (!request || requestedWorkingDir.isEmpty()) {
+		std::fprintf(
+			stderr,
+			"Auth startup regression refused: provide a valid phase, case, and explicit -workdir.\n");
+		return false;
+	}
+	const auto temp = QFileInfo(QDir::tempPath()).canonicalFilePath();
+	const auto root = QFileInfo(qEnvironmentVariable(
+		kAuthStartupRegressionRootVariable)).canonicalFilePath();
+	const auto home = QFileInfo(qEnvironmentVariable("HOME")).canonicalFilePath();
+	const auto work = QFileInfo(requestedWorkingDir).canonicalFilePath();
+	const auto expectedWork = QFileInfo(
+		root + u"/cases/"_q + request->name + u"/work"_q
+	).canonicalFilePath();
+	const auto markerPath = root + u"/.tdesktop-auth-startup-regression"_q;
+	if (temp.isEmpty()
+		|| root.isEmpty()
+		|| (root == temp)
+		|| !IsUnderPath(root, temp)
+		|| (home != root + u"/home"_q)
+		|| work.isEmpty()
+		|| (work != expectedWork)
+		|| !IsUnderPath(work, root)
+		|| QFileInfo(markerPath).isSymLink()) {
+		std::fprintf(
+			stderr,
+			"Auth startup regression refused: HOME, -workdir, and marker must be inside a fresh temporary root.\n");
+		return false;
+	}
+	auto marker = QFile(markerPath);
+	if (!marker.open(QIODevice::ReadOnly)
+		|| marker.readAll() != kAuthStartupRegressionMarker) {
+		std::fprintf(
+			stderr,
+			"Auth startup regression refused: disposable-root marker is missing or invalid.\n");
+		return false;
+	}
+	return true;
+}
+
+void RunAuthStartupRegression(Fn<void(int)> done) {
+	const auto request = ParseAuthStartupRegressionRequest();
+	if (!request) {
+		done(1);
+		return;
+	}
+	const auto success = request->prepare
+		? PrepareAuthStartupRegression(*request)
+		: false;
+	if (success) {
+		std::fprintf(
+			stderr,
+			"Auth startup regression prepared: case=%s\n",
+			request->name.toUtf8().constData());
+	}
+	if (request->prepare) {
+		std::fflush(nullptr);
+		std::_Exit(success ? 0 : 1);
+	}
+	if (qEnvironmentVariableIsSet(kAuthStartupForbiddenOutboundVariable)) {
+		QTimer::singleShot(
+			kAuthStartupForbiddenOutboundDelayMs,
+			QCoreApplication::instance(),
+			[] {
+				gAuthStartupForbiddenOutboundAttempt = true;
+				std::fprintf(
+					stderr,
+					"Auth startup regression synthetic forbidden outbound attempt: 127.0.0.1:9\n");
+				gAuthStartupForbiddenSocket = std::make_unique<QTcpSocket>();
+				gAuthStartupForbiddenSocket->connectToHost(
+					QHostAddress::LocalHost,
+					9);
+			});
+	}
+	QTimer::singleShot(
+		kAuthStartupObservationWindowMs,
+		QCoreApplication::instance(),
+		[request = *request, done = std::move(done)]() mutable {
+			const auto passed = VerifyAuthStartupRegression(request);
+			if (passed) {
+				std::fprintf(
+					stderr,
+					"Auth startup regression passed after %dms observation: case=%s\n",
+					kAuthStartupObservationWindowMs,
+					request.name.toUtf8().constData());
+			}
+			done(passed ? 0 : 1);
+		});
+}
+
+void RecordAuthStartupStateForRegressionTest(
+		uint64 userId,
+		int authorizationKeyCount,
+		bool hasStoredPin,
+		bool pinUnknown,
+		bool configReadable,
+		bool configHasCustomServer) {
+	if (!gAuthStartupState.observed) {
+		gAuthStartupState = {
+			.userId = userId,
+			.authorizationKeyCount = authorizationKeyCount,
+			.hasStoredPin = hasStoredPin,
+			.pinUnknown = pinUnknown,
+			.configReadable = configReadable,
+			.configHasCustomServer = configHasCustomServer,
+			.observed = true,
+		};
+	}
+}
+
+AuthStartupStateForRegressionTest GetAuthStartupStateForRegressionTest() {
+	return gAuthStartupState;
+}
 
 void RecordLifecycleWriteForRegressionTest(
 		LifecycleWriteForRegressionTest operation) {

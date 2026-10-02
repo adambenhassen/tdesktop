@@ -89,6 +89,9 @@ private:
 
 	QString _initialWorkingDir;
 	QString _customWorkingDir;
+#if defined(TDESKTOP_LIFECYCLE_REGRESSION)
+	bool _authStartupRegressionInvocationRejected = false;
+#endif
 
 };
 

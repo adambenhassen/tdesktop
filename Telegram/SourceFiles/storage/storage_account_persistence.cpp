@@ -342,6 +342,11 @@ bool Account::mtpAuthorizationDataExistsForRegressionTest() const {
 		|| QFileInfo::exists(base + '0')
 		|| QFileInfo::exists(base + '1');
 }
+
+bool Account::removePrefsForRegressionTest() {
+	return _prefsKey
+		&& RemoveFileVariants(_basePath, ToFilePart(_prefsKey));
+}
 #endif
 
 std::optional<ServerCacheBinding> Account::readServerCacheBinding() const {
@@ -452,7 +457,7 @@ bool Account::beginServerForget(ServerCacheBinding binding) {
 	if (!file.finish()) {
 		return false;
 	}
-#ifdef TDESKTOP_UNIT_TESTS
+#if defined(TDESKTOP_UNIT_TESTS) || defined(TDESKTOP_LIFECYCLE_REGRESSION)
 	if (_serverForgetInterruptionForTest == 1) {
 		_serverForgetInterruptionForTest = 0;
 		return false;
@@ -482,7 +487,7 @@ bool Account::completeServerForget() {
 		return false;
 	}
 
-#ifdef TDESKTOP_UNIT_TESTS
+#if defined(TDESKTOP_UNIT_TESTS) || defined(TDESKTOP_LIFECYCLE_REGRESSION)
 	const auto interrupted = [this](int point) {
 		if (_serverForgetInterruptionForTest != point) {
 			return false;
@@ -764,11 +769,13 @@ void Account::setServerReenrollmentInterruptionForTest(int point) {
 	_serverReenrollmentInterruptionForTest = point;
 }
 
+#endif // TDESKTOP_UNIT_TESTS
+
+#if defined(TDESKTOP_UNIT_TESTS) || defined(TDESKTOP_LIFECYCLE_REGRESSION)
 void Account::setServerForgetInterruptionForTest(int point) {
 	_serverForgetInterruptionForTest = point;
 }
-
-#endif // TDESKTOP_UNIT_TESTS
+#endif
 
 #ifdef TDESKTOP_UNIT_TESTS
 
