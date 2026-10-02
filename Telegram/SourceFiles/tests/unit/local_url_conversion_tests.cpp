@@ -37,10 +37,11 @@ TEST_CASE(PinnedServerUsernameLinkResolvesUsername) {
 		u"tg://resolve?domain=example"_q);
 }
 
-TEST_CASE(PinnedServerLinkCannotSelectAnotherLoggedInAccount) {
+TEST_CASE(PinnedServerLinksStripAccountIndexParameters) {
 	const auto links = QStringList{
 		u"https://telegram-server.tailaa4918.ts.net/example?acc=2"_q,
 		u"https://telegram-server.tailaa4918.ts.net/example?ACC=2"_q,
+		u"https://telegram-server.tailaa4918.ts.net/example?acc=%32"_q,
 		u"https://telegram-server.tailaa4918.ts.net/example?%61cc=2"_q,
 	};
 	for (const auto &link : links) {
@@ -54,6 +55,37 @@ TEST_CASE(PinnedServerLinkCannotSelectAnotherLoggedInAccount) {
 			kServerPrefix,
 			true),
 		u"tg://resolve?domain=example&start=token"_q);
+}
+
+TEST_CASE(PinnedServerFragmentsCannotAddResolveParameters) {
+	CHECK_EQ(
+		Core::TryConvertUrlToLocal(
+			u"https://telegram-server.tailaa4918.ts.net/example?start=x#&acc=2"_q,
+			kServerPrefix,
+			true),
+		u"tg://resolve?domain=example&start=x"_q);
+}
+
+TEST_CASE(OfficialTelegramOriginsKeepLegacyAccountSelection) {
+	const auto links = std::vector<std::pair<QString, QString>>{
+		{
+			u"https://t.me/"_q,
+			u"https://t.me/example?acc=2"_q,
+		},
+		{
+			u"https://telegram.me/"_q,
+			u"https://telegram.me/example?acc=2"_q,
+		},
+		{
+			u"https://telegram.dog/"_q,
+			u"https://telegram.dog/example?acc=2"_q,
+		},
+	};
+	for (const auto &[prefix, link] : links) {
+		CHECK_EQ(
+			Core::TryConvertUrlToLocal(link, prefix, true),
+			u"tg://resolve?domain=example&acc=2"_q);
+	}
 }
 
 TEST_CASE(PinnedServerPublicMessageLinkOpensMessage) {

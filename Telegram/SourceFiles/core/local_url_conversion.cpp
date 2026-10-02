@@ -25,6 +25,15 @@ struct HttpsOrigin {
 	qsizetype authorityEnd = 0;
 };
 
+[[nodiscard]] bool IsOfficialTelegramHost(const QString &host) {
+	const auto normalized = host.startsWith(u"www."_q, Qt::CaseInsensitive)
+		? host.mid(4)
+		: host;
+	return (normalized.compare(u"t.me"_q, Qt::CaseInsensitive) == 0)
+		|| (normalized.compare(u"telegram.me"_q, Qt::CaseInsensitive) == 0)
+		|| (normalized.compare(u"telegram.dog"_q, Qt::CaseInsensitive) == 0);
+}
+
 [[nodiscard]] bool IsAsciiHostname(const QString &host) {
 	if (host.isEmpty() || host.size() > 253 || host.endsWith('.')) {
 		return false;
@@ -134,12 +143,17 @@ struct HttpsOrigin {
 	const auto source = ParseHttpsOrigin(url, false);
 	if (!configured
 		|| !source
+		|| IsOfficialTelegramHost(configured->host)
 		|| configured->host.compare(source->host, Qt::CaseInsensitive) != 0) {
 		return std::nullopt;
 	}
-	const auto suffix = url.mid(source->authorityEnd);
+	auto suffix = url.mid(source->authorityEnd);
 	if (!suffix.startsWith('/')) {
 		return std::nullopt;
+	}
+	const auto fragmentStart = suffix.indexOf(QChar(u'#'));
+	if (fragmentStart >= 0) {
+		suffix = suffix.left(fragmentStart);
 	}
 	return u"https://t.me"_q + suffix;
 }
