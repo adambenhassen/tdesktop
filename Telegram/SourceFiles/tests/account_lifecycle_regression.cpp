@@ -586,22 +586,18 @@ RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
 	QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
 	auto streaming = std::thread([=, &entered, &loop] {
 		auto buffer = QByteArray(1, Qt::Uninitialized);
-		auto state = reader->fill(
-			0,
-			bytes::make_detached_span(buffer),
-			notify.get());
+		auto state
+			= reader->fill(0, bytes::make_detached_span(buffer), notify.get());
 		entered.release();
 		while ((state != Media::Streaming::Reader::FillState::Failed)
-			&& !rawLoader->loaded(0)
-			&& !result->cancelled.load(std::memory_order_acquire)) {
+			   && !rawLoader->loaded(0)
+			   && !result->cancelled.load(std::memory_order_acquire)) {
 			notify->acquire();
 			if (result->cancelled.load(std::memory_order_acquire)) {
 				break;
 			}
-			state = reader->fill(
-				0,
-				bytes::make_detached_span(buffer),
-				notify.get());
+			state = reader->fill(0, bytes::make_detached_span(buffer),
+								 notify.get());
 		}
 		result->state = state;
 		result->completed.store(true, std::memory_order_release);
@@ -754,10 +750,13 @@ RunPostOpenCacheSymlinkRegression(const QString &path, const QString &fixture,
 		0x4341434845575249ULL,
 	};
 	const auto payload = QByteArray("post-open cache guard seed");
-	if (!CacheOperationSucceeded(
-			AwaitCacheCallback<Storage::Cache::Error>([&](auto done) {
-				cache().put(seedKey, QByteArray(payload), std::move(done));
-			}))) {
+	const auto seed = AwaitCacheCallback<Storage::Cache::Error>([&](auto done) {
+		cache().put(seedKey, QByteArray(payload), std::move(done));
+	});
+	if (!CacheOperationSucceeded(seed)) {
+		std::fprintf(stderr,
+					 "Post-open cache setup failed: seed error=%d path=%s.\n",
+					 seed ? int(seed->type) : -1, qPrintable(path));
 		return false;
 	}
 	cache().sync();
@@ -1080,41 +1079,39 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			"symlinks refused for cache and media_cache.\n");
 	}
 	if (Core::MacProtectedPath::IntegrationTestActive()) {
-		const auto guarded = domain.add(MTP::Environment::Production);
-		guarded->mtp().stopForServerEnrollment();
-		guarded->setSessionUserId(selfId);
-		if (!guarded->createSession(
-				RegressionUser(selfId, true, QString()),
-				std::make_unique<Main::SessionSettings>())) {
-			return FailChatParticipantsRegression(
-				"could not create the post-open cache test session");
-		}
-		const auto cacheGetter = [guarded]() -> Storage::Cache::Database & {
-			return guarded->session().data().cache();
-		};
-		const auto mediaCacheGetter
-			= [guarded]() -> Storage::Cache::Database & {
-			return guarded->session().data().cacheBigFile();
-		};
-		const auto clearCaches = [guarded] {
-			auto &data = guarded->session().data();
-			data.clearLocalStorage();
-			data.cache().sync();
-			data.cacheBigFile().sync();
-		};
-		if (!RunPostOpenCacheSymlinkRegression(
-				guarded->local().cachePath(), fixtures.openedCache, cacheGetter,
-				clearCaches,
-				[guarded] {
-					return RunRefusedCacheReaderRegressions(guarded, false);
-				})
-			|| !RunPostOpenCacheSymlinkRegression(
-				guarded->local().cacheBigFilePath(), fixtures.openedMediaCache,
-				mediaCacheGetter, clearCaches, [guarded] {
-					return RunRefusedCacheReaderRegressions(guarded, true);
-				})) {
-			return FailChatParticipantsRegression(
-				"post-open cache get or put accessed a protected alias");
+		for (const auto mediaCache : {false, true}) {
+			const auto guarded = domain.add(MTP::Environment::Production);
+			guarded->mtp().stopForServerEnrollment();
+			guarded->setSessionUserId(selfId);
+			if (!guarded->createSession(
+					RegressionUser(selfId, true, QString()),
+					std::make_unique<Main::SessionSettings>())) {
+				return FailChatParticipantsRegression(
+					"could not create the post-open cache test session");
+			}
+			const auto cacheGetter
+				= [guarded, mediaCache]() -> Storage::Cache::Database & {
+				auto &data = guarded->session().data();
+				return mediaCache ? data.cacheBigFile() : data.cache();
+			};
+			const auto clearCaches = [guarded] {
+				auto &data = guarded->session().data();
+				data.clearLocalStorage();
+				data.cache().sync();
+				data.cacheBigFile().sync();
+			};
+			if (!RunPostOpenCacheSymlinkRegression(
+					mediaCache ? guarded->local().cacheBigFilePath()
+							   : guarded->local().cachePath(),
+					mediaCache ? fixtures.openedMediaCache
+							   : fixtures.openedCache,
+					cacheGetter, clearCaches, [guarded, mediaCache] {
+						return RunRefusedCacheReaderRegressions(guarded,
+																mediaCache);
+					})) {
+				return FailChatParticipantsRegression(
+					"post-open cache get or put accessed a protected alias");
+			}
 		}
 		std::fprintf(
 			stderr,
