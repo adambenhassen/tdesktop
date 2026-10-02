@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/qthelp_regex.h"
 #include "base/qthelp_url.h"
 
+#include <QtCore/QStringList>
 #include <QtCore/QUrl>
 
 #include <algorithm>
@@ -141,6 +142,32 @@ struct HttpsOrigin {
 		return std::nullopt;
 	}
 	return u"https://t.me"_q + suffix;
+}
+
+[[nodiscard]] QString WithoutAccountIndex(QString url) {
+	const auto queryStart = url.indexOf(QChar(u'?'));
+	if (queryStart < 0) {
+		return url;
+	}
+	const auto fragmentStart = url.indexOf(QChar(u'#'), queryStart + 1);
+	const auto queryEnd = (fragmentStart < 0) ? url.size() : fragmentStart;
+	const auto query = url.mid(queryStart + 1, queryEnd - queryStart - 1);
+	const auto parameters = query.split(QChar(u'&'), Qt::KeepEmptyParts);
+	auto retained = QStringList();
+	for (const auto &parameter : parameters) {
+		const auto equals = parameter.indexOf(QChar(u'='));
+		const auto name = (equals < 0) ? parameter : parameter.left(equals);
+		const auto decodedName = QUrl::fromPercentEncoding(name.toUtf8());
+		if (decodedName.compare(u"acc"_q, Qt::CaseInsensitive) != 0) {
+			retained.push_back(parameter);
+		}
+	}
+	if (retained.size() == parameters.size()) {
+		return url;
+	}
+	return url.left(queryStart + 1)
+		+ retained.join(u"&"_q)
+		+ url.mid(queryEnd);
 }
 
 [[nodiscard]] QString ConvertLegacyUrlToLocal(QString url) {
@@ -328,7 +355,7 @@ QString TryConvertUrlToLocal(
 				internalLinksDomain)) {
 			const auto local = ConvertLegacyUrlToLocal(*remapped);
 			return local.startsWith(u"tg://"_q, Qt::CaseInsensitive)
-				? local
+				? WithoutAccountIndex(local)
 				: std::move(url);
 		}
 	}

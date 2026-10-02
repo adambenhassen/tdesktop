@@ -37,6 +37,25 @@ TEST_CASE(PinnedServerUsernameLinkResolvesUsername) {
 		u"tg://resolve?domain=example"_q);
 }
 
+TEST_CASE(PinnedServerLinkCannotSelectAnotherLoggedInAccount) {
+	const auto links = QStringList{
+		u"https://telegram-server.tailaa4918.ts.net/example?acc=2"_q,
+		u"https://telegram-server.tailaa4918.ts.net/example?ACC=2"_q,
+		u"https://telegram-server.tailaa4918.ts.net/example?%61cc=2"_q,
+	};
+	for (const auto &link : links) {
+		CHECK_EQ(
+			Core::TryConvertUrlToLocal(link, kServerPrefix, true),
+			u"tg://resolve?domain=example"_q);
+	}
+	CHECK_EQ(
+		Core::TryConvertUrlToLocal(
+			u"https://telegram-server.tailaa4918.ts.net/example?start=token&acc=2"_q,
+			kServerPrefix,
+			true),
+		u"tg://resolve?domain=example&start=token"_q);
+}
+
 TEST_CASE(PinnedServerPublicMessageLinkOpensMessage) {
 	CHECK_EQ(
 		Core::TryConvertUrlToLocal(
@@ -156,6 +175,10 @@ TEST_CASE(LegacyTelegramLinksKeepInAppConversions) {
 		{
 			u"https://t.me/example/123"_q,
 			u"tg://resolve?domain=example&post=123"_q,
+		},
+		{
+			u"https://t.me/example?acc=2"_q,
+			u"tg://resolve?domain=example&acc=2"_q,
 		},
 		{
 			u"https://t.me/c/123/456"_q,
