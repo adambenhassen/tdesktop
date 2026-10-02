@@ -23,10 +23,12 @@ assert_rejected() {
   fi
 }
 
-assert_count $'cache_hit\t5\ncache_miss\t17\n' 17
+assert_count $'cache_hit\t5\ncache_miss_direct\t4\ncache_miss_preprocessed\t13\ncache_miss\t17\n' 17
 assert_count $'cache_miss\t0\n' 0
 assert_rejected $'cache_hit\t5\n'
 assert_rejected $'cache_miss\tbad\n'
+assert_rejected $'cache_miss 17\n'
 assert_rejected $'cache_miss\t1\ncache_miss\t2\n'
+assert_rejected $'cache_miss\t1\ncache_miss\tbad\n'
 
 printf 'ccache miss count tests passed.\n'
