@@ -438,7 +438,6 @@ jobs:
           always()
             && !cancelled()
             && steps.ccache-stats.outcome == 'success'
-            && github.ref_name == github.event.repository.default_branch
             && fromJSON(steps.ccache-stats.outputs.misses) > 300
         uses: actions/cache/save@v6
         with:
