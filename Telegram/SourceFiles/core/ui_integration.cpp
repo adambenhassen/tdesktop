@@ -406,7 +406,11 @@ std::shared_ptr<ClickHandler> UiIntegration::createLinkHandler(
 bool UiIntegration::handleUrlClick(
 		const QString &url,
 		const QVariant &context) {
-	const auto local = Core::TryConvertUrlToLocal(url);
+	const auto originController = context.value<ClickHandlerContext>()
+		.sessionWindow.get();
+	const auto local = Core::TryConvertUrlToLocal(
+		url,
+		originController ? &originController->session() : nullptr);
 	if (Core::InternalPassportOrOAuthLink(local)) {
 		return true;
 	}

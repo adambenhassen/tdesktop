@@ -266,11 +266,15 @@ QString HiddenUrlClickHandler::dragText() const {
 }
 
 void HiddenUrlClickHandler::Open(QString url, QVariant context) {
+	auto my = context.value<ClickHandlerContext>();
 	if (const auto external = UrlClickHandler::ExternalUrlFromInternalUrl(url);
 			!external.isEmpty()) {
 		url = external;
 	}
-	url = Core::TryConvertUrlToLocal(url);
+	const auto originController = my.sessionWindow.get();
+	url = Core::TryConvertUrlToLocal(
+		url,
+		originController ? &originController->session() : nullptr);
 	if (Core::InternalPassportOrOAuthLink(url)) {
 		return;
 	}
@@ -286,7 +290,6 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 		const auto parsedUrl = url.startsWith(u"tonsite://"_q)
 			? QUrl(url)
 			: QUrl::fromUserInput(url);
-		auto my = context.value<ClickHandlerContext>();
 		auto openContext = context;
 		const auto forceConfirmation = my.forceExternalUrlConfirmation
 			&& my.ignoreIv;
@@ -387,16 +390,18 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 }
 
 void BotGameUrlClickHandler::onClick(ClickContext context) const {
-	const auto url = Core::TryConvertUrlToLocal(this->url());
+	const auto my = context.other.value<ClickHandlerContext>();
+	const auto weakController = my.sessionWindow;
+	const auto controller = weakController.get();
+	const auto url = Core::TryConvertUrlToLocal(
+		this->url(),
+		controller ? &controller->session() : nullptr);
 	if (Core::InternalPassportOrOAuthLink(url)) {
 		return;
 	}
 	const auto openLink = [=] {
 		UrlClickHandler::Open(url, context.other);
 	};
-	const auto my = context.other.value<ClickHandlerContext>();
-	const auto weakController = my.sessionWindow;
-	const auto controller = weakController.get();
 	const auto item = controller
 		? controller->session().data().message(my.itemId)
 		: nullptr;

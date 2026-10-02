@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "core/local_url_conversion.h"
+
 namespace qthelp {
 class RegularExpressionMatch;
 } // namespace qthelp
@@ -14,6 +16,10 @@ class RegularExpressionMatch;
 namespace ChatHelpers {
 class Show;
 } // namespace ChatHelpers
+
+namespace Main {
+class Session;
+} // namespace Main
 
 namespace Settings {
 struct CreditsEntryBoxStyleOverrides;
@@ -37,10 +43,12 @@ struct LocalUrlHandler {
 	Window::SessionController *controller,
 	const QString &command);
 
+[[nodiscard]] QString TryConvertUrlToLocal(
+	QString url,
+	const Main::Session *session);
+
 [[nodiscard]] const std::vector<LocalUrlHandler> &LocalUrlHandlers();
 [[nodiscard]] const std::vector<LocalUrlHandler> &InternalUrlHandlers();
-
-[[nodiscard]] QString TryConvertUrlToLocal(QString url);
 
 [[nodiscard]] bool IsMiniAppUrl(const QString &url);
 
