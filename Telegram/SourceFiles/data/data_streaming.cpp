@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
+#include "main/main_session.h"
 #include "media/streaming/media_streaming_loader.h"
 #include "media/streaming/media_streaming_reader.h"
 #include "media/streaming/media_streaming_document.h"
@@ -105,9 +106,11 @@ template <typename Data>
 	if (!loader) {
 		return nullptr;
 	}
-	auto result = std::make_shared<Reader>(
-		std::move(loader),
-		&_owner->cacheBigFile());
+	const auto session = base::make_weak(&_owner->session());
+	auto result = std::make_shared<Reader>(std::move(loader), [session] {
+		const auto strong = session.get();
+		return strong ? strong->data().cacheBigFileIfAllowed() : nullptr;
+	});
 	if (!PruneDestroyedAndSet(readers, data, result)) {
 		readers.emplace_or_assign(data, result);
 	}

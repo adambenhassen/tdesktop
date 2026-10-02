@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/crash_reports.h"
 
 #include "core/version.h"
+#include "core/mac_protected_path_runtime.h"
 #include "platform/platform_specific.h"
 #include "base/platform/base_platform_info.h"
 #include "core/launcher.h"
@@ -332,7 +333,13 @@ void StartCatching() {
 	ProcessAnnotations["UserTag"] = QString::number(Core::Launcher::Instance().installationTag(), 16).toUtf8().constData();
 
 	QString dumpspath = cWorkingDir() + u"tdata/dumps"_q;
-	QDir().mkpath(dumpspath);
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::OpenDir, dumpspath, Q_FUNC_INFO)
+		|| !Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Mkdir, dumpspath, Q_FUNC_INFO)
+		|| !QDir().mkpath(dumpspath)) {
+		return;
+	}
 
 #ifdef Q_OS_WIN
 	BreakpadExceptionHandler = new google_breakpad::ExceptionHandler(
@@ -401,6 +408,10 @@ void FinishCatching() {
 StartResult Start() {
 #ifndef TDESKTOP_DISABLE_CRASH_REPORTS
 	ReportPath = cWorkingDir() + u"tdata/working"_q;
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Read, ReportPath, Q_FUNC_INFO)) {
+		return CantOpen;
+	}
 
 #ifdef Q_OS_WIN
 	FILE *f = nullptr;
@@ -433,6 +444,11 @@ Status Restart() {
 #ifndef TDESKTOP_DISABLE_CRASH_REPORTS
 	if (ReportFile) {
 		return Started;
+	}
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Write, ReportPath,
+			Q_FUNC_INFO)) {
+		return CantOpen;
 	}
 
 #ifdef Q_OS_WIN
@@ -491,7 +507,11 @@ void Finish() {
 #ifdef Q_OS_WIN
 		_wunlink(ReportPath.toStdWString().c_str());
 #else // Q_OS_WIN
-		unlink(ReportPath.toUtf8().constData());
+		if (Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Unlink, ReportPath,
+				Q_FUNC_INFO)) {
+			unlink(ReportPath.toUtf8().constData());
+		}
 #endif // else for Q_OS_WIN
 	}
 #endif // !TDESKTOP_DISABLE_CRASH_REPORTS

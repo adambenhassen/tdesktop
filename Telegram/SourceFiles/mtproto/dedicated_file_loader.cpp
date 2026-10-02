@@ -11,10 +11,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h" // Account::sessionChanges.
 #include "main/main_session.h" // Session::account.
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "base/call_delayed.h"
 
 namespace MTP {
 namespace {
+
+[[nodiscard]] bool CheckLoaderPath(Core::MacProtectedPath::Operation operation,
+								   const QString &path, const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 
 std::optional<MTPInputChannel> ExtractChannel(
 		const MTPcontacts_ResolvedPeer &result) {
@@ -166,8 +172,14 @@ AbstractDedicatedLoader::AbstractDedicatedLoader(
 void AbstractDedicatedLoader::start() {
 	if (!_filepath.isEmpty()) {
 		if (!validateOutput()
-			|| (!_output.isOpen() && !_output.open(QIODevice::Append))) {
-			QFile(_filepath).remove();
+			|| (!_output.isOpen()
+				&& (!CheckLoaderPath(Core::MacProtectedPath::Operation::Write,
+									 _filepath, Q_FUNC_INFO)
+					|| !_output.open(QIODevice::Append)))) {
+			if (CheckLoaderPath(Core::MacProtectedPath::Operation::Unlink,
+								_filepath, Q_FUNC_INFO)) {
+				QFile(_filepath).remove();
+			}
 			threadSafeFailed();
 			return;
 		}
@@ -211,10 +223,19 @@ void AbstractDedicatedLoader::wipeFolder() {
 	}
 	QFileInfo info(_filepath);
 	const auto dir = info.dir();
+	if (!CheckLoaderPath(Core::MacProtectedPath::Operation::OpenDir,
+						 dir.absolutePath(), Q_FUNC_INFO)
+		|| !CheckLoaderPath(Core::MacProtectedPath::Operation::Stat,
+							dir.absolutePath(), Q_FUNC_INFO)) {
+		return;
+	}
 	const auto all = dir.entryInfoList(QDir::Files);
 	for (auto i = all.begin(), e = all.end(); i != e; ++i) {
 		if (i->absoluteFilePath() != info.absoluteFilePath()) {
-			QFile::remove(i->absoluteFilePath());
+			if (CheckLoaderPath(Core::MacProtectedPath::Operation::Unlink,
+								i->absoluteFilePath(), Q_FUNC_INFO)) {
+				QFile::remove(i->absoluteFilePath());
+			}
 		}
 	}
 }
@@ -226,22 +247,44 @@ bool AbstractDedicatedLoader::validateOutput() {
 
 	QFileInfo info(_filepath);
 	const auto dir = info.dir();
+	if (!CheckLoaderPath(Core::MacProtectedPath::Operation::OpenDir,
+						 dir.absolutePath(), Q_FUNC_INFO)
+		|| !CheckLoaderPath(Core::MacProtectedPath::Operation::Stat,
+							dir.absolutePath(), Q_FUNC_INFO)) {
+		return false;
+	}
 	if (!dir.exists()) {
-		dir.mkdir(dir.absolutePath());
+		if (!CheckLoaderPath(Core::MacProtectedPath::Operation::Mkdir,
+							 dir.absolutePath(), Q_FUNC_INFO)
+			|| !dir.mkdir(dir.absolutePath())) {
+			return false;
+		}
 	}
 	_output.setFileName(_filepath);
 
+	if (!CheckLoaderPath(Core::MacProtectedPath::Operation::Stat, _filepath,
+						 Q_FUNC_INFO)) {
+		return false;
+	}
 	if (!info.exists()) {
 		return true;
 	}
+	if (!CheckLoaderPath(Core::MacProtectedPath::Operation::Stat, _filepath,
+						 Q_FUNC_INFO)) {
+		return false;
+	}
 	const auto fullSize = info.size();
 	if (fullSize < _chunkSize || fullSize > kMaxFileSize) {
-		return _output.remove();
+		return CheckLoaderPath(Core::MacProtectedPath::Operation::Unlink,
+							   _filepath, Q_FUNC_INFO)
+			   && _output.remove();
 	}
 	const auto goodSize = int64((fullSize % _chunkSize)
 		? (fullSize - (fullSize % _chunkSize))
 		: fullSize);
-	if (_output.resize(goodSize)) {
+	if (CheckLoaderPath(Core::MacProtectedPath::Operation::Write, _filepath,
+						Q_FUNC_INFO)
+		&& _output.resize(goodSize)) {
 		_alreadySize = goodSize;
 		return true;
 	}

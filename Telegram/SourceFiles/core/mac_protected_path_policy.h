@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <QtCore/QByteArray>
+#include <QtCore/QMutex>
 #include <QtCore/QString>
 
 #include <functional>
@@ -82,6 +83,9 @@ struct HomeRoots {
 	QByteArray foundation;
 };
 
+[[nodiscard]] QByteArray TelegramdProfileRoot(const HomeRoots &homes,
+											  bool appSandboxed);
+
 struct RefusalRecord {
 	Operation operation = Operation::Open;
 	ProtectedClass protectedClass = ProtectedClass::Invalid;
@@ -92,15 +96,15 @@ class RefusalLog final {
 public:
 	explicit RefusalLog(std::function<qint64()> clock = {});
 
-	void record(const RefusalRecord &refusal);
+	[[nodiscard]] bool record(const RefusalRecord &refusal);
 
 	[[nodiscard]] const std::vector<RefusalRecord> &records() const;
 
 private:
-	std::function<qint64()> _clock;
-	std::map<std::pair<int, int>, qint64> _last;
-	std::vector<RefusalRecord> _records;
-
+  QMutex _mutex;
+  std::function<qint64()> _clock;
+  std::map<std::pair<int, int>, qint64> _last;
+  std::vector<RefusalRecord> _records;
 };
 
 enum class ResolutionStatus {
@@ -127,9 +131,9 @@ class MacProtectedPathPolicy final {
 public:
 	using Components = std::vector<QString>;
 
-	[[nodiscard]] static MacProtectedPathPolicy Build(
-		const HomeRoots &homes,
-		const FileSystem &filesystem);
+	[[nodiscard]] static MacProtectedPathPolicy
+	Build(const HomeRoots &homes, const FileSystem &filesystem,
+		  RefusalRecord *failure = nullptr);
 
 	[[nodiscard]] bool valid() const;
 

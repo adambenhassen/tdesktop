@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/stickers_lottie.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h" // Core::IsMimeSticker
 #include "ui/image/image_location_factory.h" // Images::FromPhotoSize
 #include "ui/text/format_values.h" // Ui::FormatPhone
@@ -91,6 +92,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/call_delayed.h"
 #include "base/random.h"
 #include "spellcheck/spellcheck_highlight_syntax.h"
+
+#include <QtCore/QMutexLocker>
 
 namespace Data {
 namespace {
@@ -225,57 +228,71 @@ void CheckForSwitchInlineButton(not_null<HistoryItem*> item) {
 
 } // namespace
 
-Session::Session(not_null<Main::Session*> session)
-: _session(session)
-, _cache(Core::App().databases().get(
-	_session->local().cachePath(),
-	_session->local().cacheSettings()))
-, _bigFileCache(Core::App().databases().get(
-	_session->local().cacheBigFilePath(),
-	_session->local().cacheBigFileSettings()))
-, _groupFreeTranscribeLevel(session->appConfig().value(
-) | rpl::map([limits = Data::LevelLimits(session)] {
-	return limits.groupTranscribeLevelMin();
-}))
-, _chatsList(
-	session,
-	FilterId(),
-	maxPinnedChatsLimitValue(nullptr))
-, _contactsList(Dialogs::SortMode::Name)
-, _contactsNoChatsList(Dialogs::SortMode::Name)
-, _ttlCheckTimer([=] { checkTTLs(); })
-, _formattedDateTimer([=] { checkFormattedDateUpdates(); })
-, _selfDestructTimer([=] { checkSelfDestructItems(); })
-, _pollsClosingTimer([=] { checkPollsClosings(); })
-, _watchForOfflineTimer([=] { checkLocalUsersWentOffline(); })
-, _groups(this)
-, _aiComposeTones(std::make_unique<AiComposeTones>(session))
-, _chatsFilters(std::make_unique<ChatFilters>(this))
-, _cloudThemes(std::make_unique<CloudThemes>(session))
-, _sendActionManager(std::make_unique<SendActionManager>())
-, _streaming(std::make_unique<Streaming>(this))
-, _mediaRotation(std::make_unique<MediaRotation>())
-, _histories(std::make_unique<Histories>(this))
-, _stickers(std::make_unique<Stickers>(this))
-, _reactions(std::make_unique<Reactions>(this))
-, _emojiStatuses(std::make_unique<EmojiStatuses>(this))
-, _forumIcons(std::make_unique<ForumIcons>(this))
-, _notifySettings(std::make_unique<NotifySettings>(this))
-, _customEmojiManager(std::make_unique<CustomEmojiManager>(this))
-, _stories(std::make_unique<Stories>(this))
-, _savedMusic(std::make_unique<SavedMusic>(this))
-, _savedMessages(std::make_unique<SavedMessages>(this))
-, _chatbots(std::make_unique<Chatbots>(this))
-, _businessInfo(std::make_unique<BusinessInfo>(this))
-, _shortcutMessages(std::make_unique<ShortcutMessages>(this)) {
-	_cache->open(_session->local().cacheKey());
-	_bigFileCache->open(_session->local().cacheBigFileKey());
+Session::Session(not_null<Main::Session *> session)
+	: _session(session), _cachePath(_session->local().cachePath()),
+	  _bigFileCachePath(_session->local().cacheBigFilePath()),
+	  _cache(Core::App().databases().get(_cachePath,
+										 _session->local().cacheSettings())),
+	  _bigFileCache(Core::App().databases().get(
+		  _bigFileCachePath, _session->local().cacheBigFileSettings())),
+	  _groupFreeTranscribeLevel(
+		  session->appConfig().value()
+		  | rpl::map([limits = Data::LevelLimits(session)] {
+				return limits.groupTranscribeLevelMin();
+			})),
+	  _chatsList(session, FilterId(), maxPinnedChatsLimitValue(nullptr)),
+	  _contactsList(Dialogs::SortMode::Name),
+	  _contactsNoChatsList(Dialogs::SortMode::Name),
+	  _ttlCheckTimer([=] { checkTTLs(); }),
+	  _formattedDateTimer([=] { checkFormattedDateUpdates(); }),
+	  _selfDestructTimer([=] { checkSelfDestructItems(); }),
+	  _pollsClosingTimer([=] { checkPollsClosings(); }),
+	  _watchForOfflineTimer([=] { checkLocalUsersWentOffline(); }),
+	  _groups(this), _aiComposeTones(std::make_unique<AiComposeTones>(session)),
+	  _chatsFilters(std::make_unique<ChatFilters>(this)),
+	  _cloudThemes(std::make_unique<CloudThemes>(session)),
+	  _sendActionManager(std::make_unique<SendActionManager>()),
+	  _streaming(std::make_unique<Streaming>(this)),
+	  _mediaRotation(std::make_unique<MediaRotation>()),
+	  _histories(std::make_unique<Histories>(this)),
+	  _stickers(std::make_unique<Stickers>(this)),
+	  _reactions(std::make_unique<Reactions>(this)),
+	  _emojiStatuses(std::make_unique<EmojiStatuses>(this)),
+	  _forumIcons(std::make_unique<ForumIcons>(this)),
+	  _notifySettings(std::make_unique<NotifySettings>(this)),
+	  _customEmojiManager(std::make_unique<CustomEmojiManager>(this)),
+	  _stories(std::make_unique<Stories>(this)),
+	  _savedMusic(std::make_unique<SavedMusic>(this)),
+	  _savedMessages(std::make_unique<SavedMessages>(this)),
+	  _chatbots(std::make_unique<Chatbots>(this)),
+	  _businessInfo(std::make_unique<BusinessInfo>(this)),
+	  _shortcutMessages(std::make_unique<ShortcutMessages>(this)) {
+	_cacheAllowed = Core::MacProtectedPath::CheckCachePath(
+		_cachePath, "Data::Session::cache");
+	_bigFileCacheAllowed = Core::MacProtectedPath::CheckCachePath(
+		_bigFileCachePath, "Data::Session::cacheBigFile");
+	if (_cacheAllowed) {
+		_cache->open(_session->local().cacheKey());
+	}
+	if (_bigFileCacheAllowed) {
+		_bigFileCache->open(_session->local().cacheBigFileKey());
+	}
 
 	if constexpr (Platform::IsLinux()) {
 		const auto wasVersion = _session->local().oldMapVersion();
 		if (wasVersion >= 1007011 && wasVersion < 1007015) {
-			_bigFileCache->clear();
-			_cache->clearByTag(Data::kImageCacheTag);
+			if (_bigFileCacheAllowed
+				&& Core::MacProtectedPath::CheckCachePath(
+					_session->local().cacheBigFilePath(),
+					"Data::Session::cacheBigFile.clearLegacy")) {
+				_bigFileCache->clear();
+			}
+			if (_cacheAllowed
+				&& Core::MacProtectedPath::CheckCachePath(
+					_session->local().cachePath(),
+					"Data::Session::cache.clearLegacy")) {
+				_cache->clearByTag(Data::kImageCacheTag);
+			}
 		}
 	}
 
@@ -1679,11 +1696,45 @@ rpl::producer<not_null<PeerData*>> Session::botCommandsChanges() const {
 }
 
 Storage::Cache::Database &Session::cache() {
+	if (const auto cache = cacheIfAllowed()) {
+		return *cache;
+	}
 	return *_cache;
 }
 
 Storage::Cache::Database &Session::cacheBigFile() {
+	if (const auto cache = cacheBigFileIfAllowed()) {
+		return *cache;
+	}
 	return *_bigFileCache;
+}
+
+Storage::Cache::Database *Session::cacheIfAllowed() {
+	QMutexLocker lock(&_cacheMutex);
+	if (!_cacheAllowed) {
+		return nullptr;
+	}
+	if (!Core::MacProtectedPath::CheckCachePath(
+			_cachePath, "Data::Session::cache.operation")) {
+		_cacheAllowed = false;
+		_cache->close();
+		return nullptr;
+	}
+	return _cache.get();
+}
+
+Storage::Cache::Database *Session::cacheBigFileIfAllowed() {
+	QMutexLocker lock(&_cacheMutex);
+	if (!_bigFileCacheAllowed) {
+		return nullptr;
+	}
+	if (!Core::MacProtectedPath::CheckCachePath(
+			_bigFileCachePath, "Data::Session::cacheBigFile.operation")) {
+		_bigFileCacheAllowed = false;
+		_bigFileCache->close();
+		return nullptr;
+	}
+	return _bigFileCache.get();
 }
 
 void Session::suggestStartExport(TimeId availableAt) {
@@ -5828,10 +5879,18 @@ rpl::producer<RecentJoinChat> Session::recentJoinChat() const {
 }
 
 void Session::clearLocalStorage() {
-	_cache->close();
-	_cache->clear();
-	_bigFileCache->close();
-	_bigFileCache->clear();
+	if (const auto cache = cacheIfAllowed()) {
+		cache->close();
+		if (const auto stillAllowed = cacheIfAllowed()) {
+			stillAllowed->clear();
+		}
+	}
+	if (const auto cache = cacheBigFileIfAllowed()) {
+		cache->close();
+		if (const auto stillAllowed = cacheBigFileIfAllowed()) {
+			stillAllowed->clear();
+		}
+	}
 }
 
 void Session::fillMessagePeer(FullMsgId fullId, PeerId peerId) {

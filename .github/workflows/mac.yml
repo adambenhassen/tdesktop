@@ -23,11 +23,12 @@ jobs:
     timeout-minutes: 180
 
     strategy:
+      fail-fast: false
       matrix:
-        defines:
-          - ""
+        variant: ["non-store"]
     env:
-      UPLOAD_ARTIFACT: "true"
+      BUILD_VARIANT: ${{ matrix.variant }}
+      UPLOAD_ARTIFACT: ${{ matrix.variant == 'non-store' && 'true' || 'false' }}
       ONLY_CACHE: "false"
       PREPARE_PATH: "Telegram/build/prepare/prepare.py"
 
@@ -48,7 +49,16 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+          fetch-depth: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
           path: ${{ env.REPO_NAME }}
+
+      - name: Initialize workflow evidence.
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          mkdir -p "$evidence"
+          printf 'tested_sha=%s\nvariant=%s\n' "$GITHUB_SHA" "$BUILD_VARIANT" > "$evidence/run.txt"
 
       - name: Verify Telegramd identity contract.
         run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME" identity
@@ -60,6 +70,9 @@ jobs:
           brew update
           brew upgrade || true
           brew install automake libtool meson nasm ninja pkg-config
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            brew install clang-format
+          fi
 
           # Disable spotlight.
           sudo mdutil -a -i off
@@ -67,6 +80,101 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
           sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
+
+      - name: Verify Mac App Store variant is unsupported.
+        id: store_variant_rejection
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          mkdir -p "$evidence"
+          rejection_build="$RUNNER_TEMP/telegramd-macstore-rejection"
+          rejection_log="$evidence/macstore-rejection.log"
+          set +e
+          cmake -S "$REPO_NAME" -B "$rejection_build" \
+            -D DESKTOP_APP_SPECIAL_TARGET:STRING=macstore \
+            -D CMAKE_OSX_ARCHITECTURES=arm64 \
+            > "$rejection_log" 2>&1
+          rejection_status=$?
+          set -e
+          cat "$rejection_log"
+          if [ "$rejection_status" -eq 0 ] \
+            || ! grep -Fq 'Mac App Store builds are unsupported by Telegramd.' "$rejection_log"; then
+            echo "::error::Mac App Store configuration was not rejected by Telegramd's build guard."
+            exit 1
+          fi
+          printf 'tested_sha=%s\nvariant=build_macstore\nresult=unsupported\nconfigure_exit_status=%s\n' \
+            "$GITHUB_SHA" "$rejection_status" \
+            > "$evidence/macstore-rejection-status.txt"
+
+      - name: Check changed C++ formatting.
+        id: source-format
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          log="$evidence/source-format.log"
+          clang-format --version > "$log" 2>&1
+          git -C "$REPO_NAME" diff --no-ext-diff --unified=0 --no-color origin/dev...HEAD \
+            -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx' '*.m' '*.mm' \
+            > "$RUNNER_TEMP/changed-cpp.diff"
+          set +e
+          python3 - "$REPO_NAME" "$RUNNER_TEMP/changed-cpp.diff" >> "$log" 2>&1 <<'PY'
+          import re
+          import subprocess
+          import sys
+          from collections import defaultdict
+          from pathlib import Path
+
+          root, diff_path = sys.argv[1:]
+          changed = defaultdict(list)
+          current = None
+          with open(diff_path, encoding="utf-8") as source:
+              for line in source:
+                  if line.startswith("+++ b/"):
+                      current = line[6:].strip()
+                  elif line.startswith("@@") and current:
+                      match = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                      if match:
+                          first = int(match.group(1))
+                          count = int(match.group(2) or "1")
+                          if count:
+                              changed[current].append((first, first + count - 1))
+
+          if not changed:
+              print("::error::No changed C++ source lines were found to format-check.")
+              sys.exit(1)
+
+          style = (
+              "{BasedOnStyle: LLVM, UseTab: Always, IndentWidth: 4, TabWidth: 4, "
+              "ContinuationIndentWidth: 4, ColumnLimit: 80, SortIncludes: false, "
+              "BreakBeforeBinaryOperators: All, "
+              "NamespaceIndentation: None}"
+          )
+          failed = False
+          for relative, ranges in sorted(changed.items()):
+              command = ["clang-format", "--dry-run", "--Werror", f"--style={style}"]
+              for first, last in ranges:
+                  command.append(f"--lines={first}:{last}")
+              command.append(str(Path(root, relative)))
+              result = subprocess.run(command, text=True, capture_output=True)
+              print(f"Checking {relative}")
+              if result.stdout:
+                  print(result.stdout, end="")
+              if result.stderr:
+                  print(result.stderr, end="", file=sys.stderr)
+              failed |= result.returncode != 0
+
+          sys.exit(1 if failed else 0)
+          PY
+          format_status=$?
+          set -e
+          printf 'tested_sha=%s\nvariant=%s\nexit_status=%s\n' \
+            "$GITHUB_SHA" "$BUILD_VARIANT" "$format_status" \
+            > "$evidence/source-format-status.txt"
+          cat "$log"
+          exit "$format_status"
 
       - name: Libraries cache.
         id: cache-libs
@@ -110,21 +218,20 @@ jobs:
         id: build
         if: env.ONLY_CACHE == 'false'
         run: |
-          cd $REPO_NAME/Telegram
+          set -Eeo pipefail
+          BUILD_LOG="$RUNNER_TEMP/telegramd-build-${BUILD_VARIANT}.log"
+          cd "$REPO_NAME/Telegram"
 
-          DEFINE=""
-          if [ -n "${{ matrix.defines }}" ]; then
-            DEFINE="-D ${{ matrix.defines }}=ON"
-            echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Telegramd-macOS-arm64 ${{ matrix.defines }}" >> $GITHUB_ENV
-          else
-            echo "ARTIFACT_NAME=Telegramd-macOS-arm64" >> $GITHUB_ENV
+          BUILD_ARGS=()
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            BUILD_ARGS+=(-D TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=ON)
           fi
 
           # cmake/validate_special_target.cmake defaults this to "x86_64;arm64",
           # so the inherited build spent half its compile time on a slice no one
           # here can run. The prepared Libraries are universal, so linking an
           # arm64-only client against them needs nothing else.
+          configure_status=0
           ./configure.sh \
           -D CMAKE_OSX_ARCHITECTURES=arm64 \
           -D CMAKE_CONFIGURATION_TYPES=Debug \
@@ -133,14 +240,23 @@ jobs:
           -D TDESKTOP_API_TEST=ON \
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
-          $DEFINE
+          "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG" || configure_status=$?
+          if [ "$configure_status" -ne 0 ]; then
+            echo "::error::Telegramd configure failed for variant=$BUILD_VARIANT exit_status=$configure_status; see the retained build log."
+            exit "$configure_status"
+          fi
 
           grep -F 'DESKTOP_APP_DISABLE_AUTOUPDATE:BOOL=ON' ../out/CMakeCache.txt
-          cmake --build ../out --config Debug --parallel
+          build_status=0
+          cmake --build ../out --config Debug --parallel 2>&1 | tee -a "$BUILD_LOG" || build_status=$?
+          if [ "$build_status" -ne 0 ]; then
+            echo "::error::Telegramd build failed for variant=$BUILD_VARIANT exit_status=$build_status; see the retained build log."
+            exit "$build_status"
+          fi
 
       - name: Verify artifact architecture.
         id: artifact-verification
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: env.ONLY_CACHE == 'false'
         run: |
           set -Eeuo pipefail
           cd $REPO_NAME/out/Debug
@@ -195,6 +311,71 @@ jobs:
           bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME" observer \
             2>&1 | tee "$evidence/observer-self-tests.txt"
 
+      - name: Run protected profile and IPC integration tests.
+        id: profile-ipc
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          state="$(mktemp -d "$RUNNER_TEMP/telegramd-profile-ipc-${BUILD_VARIANT}.XXXXXX")"
+          trap 'rm -rf "$state"' EXIT
+          mkdir -p "$state/home" "$state/tmp"
+          executable="$REPO_NAME/out/Debug/Telegramd.app/Contents/MacOS/Telegramd"
+          set +e
+          env HOME="$state/home" TMPDIR="$state/tmp" \
+            TDESKTOP_MAC_PROFILE_TEST_TMP_BASE="$state/tmp" \
+            bash "$REPO_NAME/Telegram/build/test_mac_profile_guard.sh" \
+              "$executable" \
+            2>&1 | tee "$evidence/profile-ipc-${BUILD_VARIANT}.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          test_status="${statuses[0]}"
+          tee_status="${statuses[1]}"
+          if [ "$test_status" -ne 0 ]; then
+            cp -R "$state" "$evidence/profile-ipc-${BUILD_VARIANT}-state"
+          elif [ "$tee_status" -ne 0 ]; then
+            test_status="$tee_status"
+            echo "::error::Could not retain profile/IPC integration logs for variant=$BUILD_VARIANT."
+          fi
+          printf 'tested_sha=%s\nvariant=%s\nexit_status=%s\n' \
+            "$GITHUB_SHA" "$BUILD_VARIANT" "$test_status" \
+            > "$evidence/profile-ipc-${BUILD_VARIANT}-status.txt"
+          {
+            printf '### Protected profile and IPC: %s\n\n' "$BUILD_VARIANT"
+            printf -- '- Tested SHA: `%s`\n- Exit status: `%s`\n' \
+              "$GITHUB_SHA" "$test_status"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$test_status"
+
+      - name: Summarize on-demand validation.
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        env:
+          FORMAT_OUTCOME: ${{ steps.source-format.outcome }}
+          STORE_REJECTION_OUTCOME: ${{ steps.store_variant_rejection.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.artifact-verification.outcome }}
+          PROFILE_IPC_OUTCOME: ${{ steps.profile-ipc.outcome }}
+        run: |
+          set -Eeuo pipefail
+          {
+            printf '### macOS Telegramd validation: %s\n\n' "$BUILD_VARIANT"
+            printf -- '- Tested SHA: `%s`\n- C++ format check: `%s`\n' \
+              "$GITHUB_SHA" "$FORMAT_OUTCOME"
+            printf -- '- Mac App Store rejection check: `%s`\n- Build: `%s`\n- Artifact verification: `%s`\n- Profile/IPC harness: `%s`\n' \
+              "$STORE_REJECTION_OUTCOME" "$BUILD_OUTCOME" "$ARTIFACT_OUTCOME" "$PROFILE_IPC_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve on-demand failure logs.
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && steps.build.outcome == 'failure' }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$REPO_NAME/out/Debug/evidence"
+          mkdir -p "$evidence"
+          build_log="$RUNNER_TEMP/telegramd-build-${BUILD_VARIANT}.log"
+          if [ -f "$build_log" ]; then
+            cp "$build_log" "$evidence/build-${BUILD_VARIANT}.log"
+          fi
+
       - name: Classify Telegramd artifact publication.
         if: always()
         run: |
@@ -203,7 +384,8 @@ jobs:
           mkdir -p "$evidence"
           ready=false
           if [ "${{ steps.build.outcome }}" = "success" ] \
-            && [ "${{ steps.artifact-verification.outcome }}" = "success" ]; then
+            && [ "${{ steps.artifact-verification.outcome }}" = "success" ] \
+            && [ "$UPLOAD_ARTIFACT" = "true" ]; then
             ready=true
           fi
           printf 'artifact_ready=%s\n' "$ready" > "$evidence/artifact-publication.txt"
@@ -292,3 +474,31 @@ jobs:
             --title "$RELEASE_TAG" \
             --notes "$notes" \
             --draft
+
+      - name: Require on-demand validation checks.
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        env:
+          FORMAT_OUTCOME: ${{ steps.source-format.outcome }}
+          STORE_REJECTION_OUTCOME: ${{ steps.store_variant_rejection.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.artifact-verification.outcome }}
+          PROFILE_IPC_OUTCOME: ${{ steps.profile-ipc.outcome }}
+        run: |
+          set -Eeuo pipefail
+          failed=false
+          for check in \
+            "C++ format=$FORMAT_OUTCOME" \
+            "Mac App Store rejection=$STORE_REJECTION_OUTCOME" \
+            "build=$BUILD_OUTCOME" \
+            "artifact verification=$ARTIFACT_OUTCOME" \
+            "profile/IPC harness=$PROFILE_IPC_OUTCOME"; do
+            printf '%s\n' "$check"
+            case "$check" in
+              *'=success') ;;
+              *)
+                echo "::error::Required on-demand check did not pass: $check"
+                failed=true
+                ;;
+            esac
+          done
+          [[ "$failed" == false ]]

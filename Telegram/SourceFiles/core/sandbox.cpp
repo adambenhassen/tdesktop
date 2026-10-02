@@ -22,6 +22,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/local_url_handlers.h"
 #include "core/update_checker.h"
 #include "core/deadlock_detector.h"
+#ifdef Q_OS_MAC
+#include "core/mac_protected_path_runtime.h"
+#endif // Q_OS_MAC
 #include "base/timer.h"
 #include "base/concurrent_timer.h"
 #include "base/invoke_queued.h"
@@ -36,9 +39,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #endif // Q_OS_MAC
 
 #include <QtCore/QLockFile>
+#include <QtCore/QFileInfo>
 #include <QtGui/QSessionManager>
 #include <QtGui/QScreen>
 #include <QtGui/qpa/qplatformscreen.h>
+
+#ifdef Q_OS_MAC
+#include <cstdio>
+#include <sys/un.h>
+#endif // Q_OS_MAC
 
 namespace Core {
 namespace {
@@ -75,6 +84,37 @@ int Sandbox::start() {
 		_localServerName = Platform::SingleInstanceLocalServerName(h);
 	}
 
+#ifdef Q_OS_MAC
+	if (_localServerName.isEmpty()) {
+		LOG(("Mac local socket directory is unavailable."));
+		return 1;
+	}
+	const auto encodedSocketName = QFile::encodeName(_localServerName);
+	auto socketAddress = sockaddr_un();
+	const auto socketPathLimit = sizeof(socketAddress.sun_path) - 1;
+	if (size_t(encodedSocketName.size()) > socketPathLimit) {
+		LOG(("Mac local socket path too long: %1 bytes exceeds %2: %3")
+				.arg(encodedSocketName.size())
+				.arg(socketPathLimit)
+				.arg(_localServerName));
+		return 1;
+	}
+	if (MacProtectedPath::IntegrationTestActive()) {
+		const auto socketDirectory = QFileInfo(_localServerName).absolutePath();
+		if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+										 _localServerName, Q_FUNC_INFO)
+			|| !MacProtectedPath::CheckPath(
+				MacProtectedPath::Operation::OpenDir, socketDirectory,
+				Q_FUNC_INFO)
+			|| !MacProtectedPath::CheckPath(MacProtectedPath::Operation::Mkdir,
+											socketDirectory, Q_FUNC_INFO)
+			|| !QDir().mkpath(socketDirectory)) {
+			LOG(("Could not prepare single-instance IPC path."));
+			return 1;
+		}
+	}
+#endif // Q_OS_MAC
+
 	if (cLaunchMode() == LaunchModeCleanup) {
 		const auto result = stopRunningInstance();
 		psCleanup();
@@ -91,7 +131,30 @@ int Sandbox::start() {
 		QByteArray h;
 		h.resize(32);
 		hashMd5Hex(d.constData(), d.size(), h.data());
+#ifdef Q_OS_MAC
+		const auto ipcDirectory = MacProtectedPath::IpcDirectory();
+		if (ipcDirectory.isEmpty()) {
+			LOG(("Mac IPC directory is unavailable for the instance lock."));
+			return 1;
+		}
+		const auto lockPath = MacProtectedPath::IntegrationTestActive()
+								  ? ipcDirectory + u"/Telegramd-lock-"_q
+										+ QString::fromLatin1(h.left(16))
+								  : ipcDirectory + '/' + h + '-' + cGUIDStr();
+		if (MacProtectedPath::IntegrationTestActive()) {
+			if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Stat,
+											 lockPath, Q_FUNC_INFO)
+				|| !MacProtectedPath::CheckPath(
+					MacProtectedPath::Operation::Unlink, lockPath, Q_FUNC_INFO)
+				|| !MacProtectedPath::CheckPath(
+					MacProtectedPath::Operation::Lock, lockPath, Q_FUNC_INFO)) {
+				return 1;
+			}
+		}
+		_lockFile = std::make_unique<QLockFile>(lockPath);
+#else  // Q_OS_MAC
 		_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h + '-' + cGUIDStr());
+#endif // !Q_OS_MAC
 		_lockFile->setStaleLockTime(0);
 		if (!_lockFile->tryLock()
 			&& Launcher::Instance().customWorkingDir()) {
@@ -171,6 +234,12 @@ int Sandbox::start() {
 	});
 
 	LOG(("Connecting local socket to %1...").arg(_localServerName));
+#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+									 _localServerName, Q_FUNC_INFO)) {
+		return 1;
+	}
+#endif // Q_OS_MAC
 	_localSocket.connectToServer(_localServerName);
 
 	if (QuitOnStartRequested) {
@@ -183,6 +252,12 @@ int Sandbox::start() {
 
 int Sandbox::stopRunningInstance() {
 	LOG(("Cleanup: connecting to %1...").arg(_localServerName));
+#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+									 _localServerName, Q_FUNC_INFO)) {
+		return 1;
+	}
+#endif // Q_OS_MAC
 	_localSocket.connectToServer(_localServerName);
 	if (!_localSocket.waitForConnected(int(kCleanupIpcTimeout))) {
 		if (_localSocket.error() == QLocalSocket::ServerNotFoundError) {
@@ -213,6 +288,12 @@ int Sandbox::stopRunningInstance() {
 		LOG(("Cleanup: bad response to the quit command."));
 		return 1;
 	}
+#ifdef Q_OS_MAC
+	if (MacProtectedPath::IntegrationTestActive()) {
+		fprintf(stderr, "Mac profile IPC cleanup response: %s\n",
+				response.constData());
+	}
+#endif // Q_OS_MAC
 	const auto processId = match.capturedView(1).toULongLong();
 	LOG(("Cleanup: waiting for process %1 to quit...").arg(processId));
 	if (!Platform::WaitForProcessExit(processId, kCleanupQuitTimeout)) {
@@ -415,12 +496,30 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 
 	// Local server does not work in WinRT build.
 #ifndef Q_OS_WINRT
+#ifdef Q_OS_MAC
+	if (!MacProtectedPath::CheckPath(MacProtectedPath::Operation::Stat,
+									 _localServerName, Q_FUNC_INFO)
+		|| !MacProtectedPath::CheckPath(MacProtectedPath::Operation::Unlink,
+										_localServerName, Q_FUNC_INFO)
+		|| !MacProtectedPath::CheckPath(MacProtectedPath::Operation::Open,
+										_localServerName, Q_FUNC_INFO)) {
+		return Quit();
+	}
+#endif // Q_OS_MAC
 	psCheckLocalSocket(_localServerName);
 
 	if (!_localServer.listen(_localServerName)) {
 		LOG(("Failed to start listening to %1 server: %2").arg(_localServerName, _localServer.errorString()));
 		return Quit();
 	}
+#ifdef Q_OS_MAC
+	if (MacProtectedPath::IntegrationTestActive()) {
+		const auto fullServerName = _localServer.fullServerName().toUtf8();
+		fprintf(stderr,
+				"Mac profile IPC ready: listening=%d full_server_name=%s\n",
+				_localServer.isListening() ? 1 : 0, fullServerName.constData());
+	}
+#endif // Q_OS_MAC
 #endif // !Q_OS_WINRT
 
 	if (!Core::UpdaterDisabled()
@@ -507,13 +606,20 @@ void Sandbox::readClients() {
 		i->second.append(i->first->readAll());
 		if (i->second.size()) {
 			bool activationRequired = false;
+			bool quitAfterResponse = false;
 			QString cmds(QString::fromLatin1(i->second));
 			int32 from = 0, l = cmds.length();
 			for (int32 to = cmds.indexOf(QChar(';'), from); to >= from; to = (from < l) ? cmds.indexOf(QChar(';'), from) : -1) {
 				auto cmd = base::StringViewMid(cmds, from, to - from);
 				if (cmd.startsWith(u"CMD:"_q)) {
 					const auto processId = QApplication::applicationPid();
-					const auto windowId = execExternal(cmds.mid(from + 4, to - from - 4));
+					const auto command = cmds.mid(from + 4, to - from - 4);
+					auto windowId = uint64(0);
+					if (command == u"quit"_q) {
+						quitAfterResponse = true;
+					} else {
+						windowId = execExternal(command);
+					}
 					const auto response = u"RES:%1_%2;"_q.arg(processId).arg(windowId).toLatin1();
 					i->first->write(response.data(), response.size());
 				} else if (cmd.startsWith(u"XDG_ACTIVATION_TOKEN:"_q)) {
@@ -544,6 +650,23 @@ void Sandbox::readClients() {
 				: 0;
 			const auto response = u"RES:%1_%2;"_q.arg(processId).arg(windowId).toLatin1();
 			i->first->write(response.data(), response.size());
+			if (quitAfterResponse) {
+				const auto client = i->first;
+				const auto quitWhenFlushed = [=] {
+					if (!client->bytesToWrite()) {
+						Quit();
+					}
+				};
+				if (client->bytesToWrite()) {
+					connect(client, &QLocalSocket::bytesWritten, this,
+							[=](qint64) { quitWhenFlushed(); });
+					connect(client, &QLocalSocket::disconnected, this,
+							[=] { Quit(); });
+				} else {
+					QMetaObject::invokeMethod(this, quitWhenFlushed,
+											  Qt::QueuedConnection);
+				}
+			}
 		}
 	}
 	cRefStartUrls() << base::take(startUrls);

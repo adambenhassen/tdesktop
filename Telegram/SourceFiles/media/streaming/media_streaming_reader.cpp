@@ -849,13 +849,11 @@ Reader::SerializedSlice Reader::Slices::unloadToCache() {
 	return {};
 }
 
-Reader::Reader(
-	std::unique_ptr<Loader> loader,
-	Storage::Cache::Database *cache)
-: _loader(std::move(loader))
-, _cache(cache)
-, _cacheHelper(cache ? InitCacheHelper(_loader->baseCacheKey()) : nullptr)
-, _slices(_loader->size(), _cacheHelper != nullptr) {
+Reader::Reader(std::unique_ptr<Loader> loader,
+			   Fn<Storage::Cache::Database *()> cache)
+	: _loader(std::move(loader)), _cache(std::move(cache)),
+	  _cacheHelper(_cache ? InitCacheHelper(_loader->baseCacheKey()) : nullptr),
+	  _slices(_loader->size(), _cacheHelper != nullptr) {
 	_loader->parts(
 	) | rpl::on_next([=](LoadedPart &&part) {
 		if (_attachedDownloader) {
@@ -1100,6 +1098,17 @@ bool Reader::downloaderWaitForCachedSlice(uint32 offset) {
 
 void Reader::checkCacheResultsForDownloader() {
 	continueDownloaderFromMainThread();
+	const auto waiting = _waiting.exchange(nullptr, std::memory_order_acq_rel);
+	if (waiting) {
+		waiting->release();
+	}
+	if (_cacheHelper) {
+		const auto cacheWaiting = _cacheHelper->waiting.exchange(
+			nullptr, std::memory_order_acq_rel);
+		if (cacheWaiting && (cacheWaiting != waiting)) {
+			cacheWaiting->release();
+		}
+	}
 }
 
 void Reader::continueDownloaderFromMainThread() {
@@ -1140,7 +1149,7 @@ std::shared_ptr<Reader::CacheHelper> Reader::InitCacheHelper(
 
 // 0 is for headerData, slice index = sliceNumber - 1.
 void Reader::readFromCache(int sliceNumber) {
-	Expects(_cache != nullptr);
+	Expects(static_cast<bool>(_cache));
 	Expects(_cacheHelper != nullptr);
 	Expects(!sliceNumber || !_slices.headerModeUnknown());
 
@@ -1186,7 +1195,11 @@ void Reader::readFromCache(int sliceNumber) {
 	for (auto i = 0; i != count; ++i) {
 		keys.push_back(_cacheHelper->key(i + 1));
 	}
-	_cache->getWithSizes(key, std::move(keys), ready);
+	if (const auto cache = _cache()) {
+		cache->getWithSizes(key, std::move(keys), ready);
+	} else {
+		ready(QByteArray(), std::vector<int>());
+	}
 }
 
 bool Reader::readFromCacheForDownloader(int sliceNumber) {
@@ -1201,11 +1214,13 @@ bool Reader::readFromCacheForDownloader(int sliceNumber) {
 }
 
 void Reader::putToCache(SerializedSlice &&slice) {
-	Expects(_cache != nullptr);
+	Expects(static_cast<bool>(_cache));
 	Expects(_cacheHelper != nullptr);
 	Expects(slice.number >= 0);
 
-	_cache->put(_cacheHelper->key(slice.number), std::move(slice.data));
+	if (const auto cache = _cache()) {
+		cache->put(_cacheHelper->key(slice.number), std::move(slice.data));
+	}
 }
 
 int64 Reader::size() const {
@@ -1394,16 +1409,17 @@ void Reader::loadAtOffset(uint32 offset) {
 }
 
 void Reader::finalizeCache() {
-	if (!_cacheHelper) {
+	if (!_cacheHelper || !_cache) {
 		return;
 	}
-	Assert(_cache != nullptr);
 	auto toCache = _slices.unloadToCache();
 	while (toCache.number >= 0) {
 		putToCache(std::move(toCache));
 		toCache = _slices.unloadToCache();
 	}
-	_cache->sync();
+	if (const auto cache = _cache()) {
+		cache->sync();
+	}
 }
 
 Reader::~Reader() {

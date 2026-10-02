@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/timer.h"
 #include "base/flags.h"
+#include "base/flat_set.h"
 #include "storage/cache/storage_cache_database.h"
 #include "data/stickers/data_stickers_set.h"
 #include "data/data_drafts.h"
@@ -47,6 +48,11 @@ class EncryptionKey;
 using FileKey = quint64;
 
 enum class StartResult : uchar;
+
+void ClearLegacyFilesGuarded(
+	const QString &base,
+	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)> collectGoodNames,
+	Fn<void()> done = nullptr);
 
 struct ServerCacheBinding {
 	bool fingerprintKnown = false;

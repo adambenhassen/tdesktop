@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/calls_panel.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/data_group_call.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -1145,16 +1146,29 @@ void Call::createAndStartController(const MTPDphoneCall &call) {
 	if (Logs::DebugEnabled()) {
 		const auto callLogFolder = cWorkingDir() + u"DebugLogs"_q;
 		const auto callLogPath = callLogFolder + u"/last_call_log.txt"_q;
-		const auto callLogNative = QDir::toNativeSeparators(callLogPath);
+		if (Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::OpenDir, callLogFolder,
+				Q_FUNC_INFO)
+			&& Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Mkdir, callLogFolder,
+				Q_FUNC_INFO)
+			&& Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Unlink, callLogPath,
+				Q_FUNC_INFO)
+			&& Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Write, callLogPath,
+				Q_FUNC_INFO)
+			&& QDir().mkpath(callLogFolder)) {
+			QFile(callLogPath).remove();
+			const auto callLogNative = QDir::toNativeSeparators(callLogPath);
 #ifdef Q_OS_WIN
-		descriptor.config.logPath.data = callLogNative.toStdWString();
+			descriptor.config.logPath.data = callLogNative.toStdWString();
 #else // Q_OS_WIN
-		const auto callLogUtf = QFile::encodeName(callLogNative);
-		descriptor.config.logPath.data.resize(callLogUtf.size());
-		ranges::copy(callLogUtf, descriptor.config.logPath.data.begin());
+			const auto callLogUtf = QFile::encodeName(callLogNative);
+			descriptor.config.logPath.data.resize(callLogUtf.size());
+			ranges::copy(callLogUtf, descriptor.config.logPath.data.begin());
 #endif // Q_OS_WIN
-		QFile(callLogPath).remove();
-		QDir().mkpath(callLogFolder);
+		}
 	}
 
 	const auto ids = CollectEndpointIds(call.vconnections().v);

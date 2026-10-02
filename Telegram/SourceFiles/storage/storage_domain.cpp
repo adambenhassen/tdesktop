@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_config.h"
 #include "main/main_domain.h"
 #include "main/main_account.h"
+#include "core/mac_protected_path_runtime.h"
 #include "base/random.h"
 
 #include <QtCore/QDir>
@@ -22,6 +23,12 @@ namespace Storage {
 namespace {
 
 using namespace details;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckDomainPath(Operation operation, const QString &path,
+								   const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 
 [[nodiscard]] QString BaseGlobalPath() {
 #ifdef TDESKTOP_UNIT_TESTS
@@ -222,8 +229,14 @@ void Domain::writeAccounts() {
 	Expects(!_owner->accounts().empty());
 
 	const auto path = BaseGlobalPath();
+	if (!CheckDomainPath(Operation::Stat, path, Q_FUNC_INFO)) {
+		return;
+	}
 	if (!QDir().exists(path)) {
-		QDir().mkpath(path);
+		if (!CheckDomainPath(Operation::Mkdir, path, Q_FUNC_INFO)
+			|| !QDir().mkpath(path)) {
+			return;
+		}
 	}
 
 	FileWriteDescriptor key(ComputeKeyName(_dataName), path);

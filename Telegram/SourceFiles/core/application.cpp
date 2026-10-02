@@ -244,6 +244,7 @@ Application::~Application() {
 
 	_private->proxyRotation = nullptr;
 	_domain->finish();
+	_spoilerPreloadLifetime.destroy();
 
 	Local::finish();
 
@@ -321,7 +322,7 @@ void Application::run() {
 
 	auto regressionResult = 0;
 
-	Ui::PreloadTextSpoilerMask();
+	Ui::PreloadTextSpoilerMask(_spoilerPreloadLifetime);
 	startShortcuts();
 	startEmojiImageLoader();
 	startSystemDarkModeViewer();

@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/local_url_handlers.h"
 #include "core/file_utilities.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/bank_card_click_handler.h"
 #include "core/sandbox.h"
 #include "core/click_handler_types.h"
@@ -281,7 +282,28 @@ void UiIntegration::unregisterLeaveSubscription(not_null<QWidget*> widget) {
 }
 
 QString UiIntegration::emojiCacheFolder() {
-	return cWorkingDir() + "tdata/emoji";
+	const auto folder = cWorkingDir() + "tdata/emoji";
+	const auto spoiler = folder + "/spoiler";
+	constexpr auto kCallsite = "emojiCacheFolder";
+	const auto allowed = [&](const QString &path) {
+		return MacProtectedPath::CheckPath(MacProtectedPath::Operation::Read,
+										   path, kCallsite)
+			   && MacProtectedPath::CheckPath(
+				   MacProtectedPath::Operation::Mkdir, path, kCallsite)
+			   && MacProtectedPath::CheckPath(
+				   MacProtectedPath::Operation::Write, path, kCallsite);
+	};
+	const auto allowedCacheFile = [&](const QString &path) {
+		return MacProtectedPath::CheckPath(MacProtectedPath::Operation::Read,
+										   path, kCallsite)
+			   && MacProtectedPath::CheckPath(
+				   MacProtectedPath::Operation::Write, path, kCallsite);
+	};
+	return allowed(folder) && allowed(spoiler)
+				   && allowedCacheFile(spoiler + u"/text"_q)
+				   && allowedCacheFile(spoiler + u"/image"_q)
+			   ? folder
+			   : QString();
 }
 
 QString UiIntegration::openglCheckFilePath() {

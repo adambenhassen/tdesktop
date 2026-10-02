@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/basic_types.h"
 #include "settings/settings_common_session.h"
 #include "storage/cache/storage_cache_database.h"
 #include "ui/round_rect.h"
@@ -110,8 +111,8 @@ private:
 		Callback &&callback);
 
 	const not_null<Main::Session*> _session;
-	const not_null<Storage::Cache::Database*> _db;
-	const not_null<Storage::Cache::Database*> _dbBig;
+	const Fn<Storage::Cache::Database *()> _db;
+	const Fn<Storage::Cache::Database *()> _dbBig;
 
 	Database::Stats _stats;
 	Database::Stats _statsBig;

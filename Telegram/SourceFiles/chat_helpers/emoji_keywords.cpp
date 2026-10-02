@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 
 #include <QtGui/QGuiApplication>
 
@@ -30,6 +31,13 @@ constexpr auto kKeepNotUsedLangPacksCount = 4;
 constexpr auto kKeepNotUsedInputLanguagesCount = 4;
 
 using namespace Ui::Emoji;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckEmojiKeywordPath(Operation operation,
+										 const QString &path,
+										 const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 
 using Result = EmojiKeywords::Result;
 
@@ -82,7 +90,11 @@ struct LangPackData {
 }
 
 void CreateCacheFilePath() {
-	QDir().mkpath(internal::CacheFileFolder() + u"/keywords"_q);
+	const auto path = internal::CacheFileFolder() + u"/keywords"_q;
+	if (CheckEmojiKeywordPath(Operation::OpenDir, path, Q_FUNC_INFO)
+		&& CheckEmojiKeywordPath(Operation::Mkdir, path, Q_FUNC_INFO)) {
+		QDir().mkpath(path);
+	}
 }
 
 [[nodiscard]] QString CacheFilePath(QString id) {
@@ -96,7 +108,8 @@ void CreateCacheFilePath() {
 
 [[nodiscard]] LangPackData ReadLocalCache(const QString &id) {
 	auto file = QFile(CacheFilePath(id));
-	if (!file.open(QIODevice::ReadOnly)) {
+	if (!CheckEmojiKeywordPath(Operation::Read, file.fileName(), Q_FUNC_INFO)
+		|| !file.open(QIODevice::ReadOnly)) {
 		return {};
 	}
 	auto result = LangPackData();
@@ -147,7 +160,8 @@ void WriteLocalCache(const QString &id, const LangPackData &data) {
 	}
 	CreateCacheFilePath();
 	auto file = QFile(CacheFilePath(id));
-	if (!file.open(QIODevice::WriteOnly)) {
+	if (!CheckEmojiKeywordPath(Operation::Write, file.fileName(), Q_FUNC_INFO)
+		|| !file.open(QIODevice::WriteOnly)) {
 		return;
 	}
 	auto stream = QDataStream(&file);

@@ -474,6 +474,7 @@ private:
 
 	rpl::event_stream<> _materializeLocalDraftsRequests;
 
+	rpl::lifetime _spoilerPreloadLifetime;
 	rpl::lifetime _lifetime;
 
 	crl::time _lastNonIdleTime = 0;

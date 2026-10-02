@@ -7,6 +7,12 @@
 add_executable(Telegram WIN32 MACOSX_BUNDLE)
 init_non_host_target(Telegram)
 
+option(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST
+    "Enable the opt-in macOS protected-path integration guard" OFF)
+if (TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST AND NOT APPLE)
+    message(FATAL_ERROR "Protected-path integration testing requires macOS.")
+endif()
+
 if (APPLE AND NOT DESKTOP_APP_DISABLE_SWIFT6)
     set(TRANSLATION_FRAMEWORK "-weak_framework Translation" CACHE STRING "Weak-link Translation.framework" FORCE)
     set(CMAKE_Swift_FLAGS "-target arm64-apple-macos13.0")
@@ -2125,6 +2131,8 @@ if (APPLE)
         tray_accounts_menu.cpp
         media/view/media_view_metal_texture.mm
         media/streaming/media_streaming_native_frame_mac.mm
+        core/mac_protected_path_runtime.mm
+        core/mac_protected_path_runtime.h
     )
 else()
     nice_target_sources(Telegram ${src_loc}
@@ -2298,6 +2306,7 @@ if (build_macstore)
     set(bundle_identifier "com.adambenhassen.telegramd")
     set(bundle_entitlements "Telegram Lite.entitlements")
     set(output_name "Telegramd")
+    target_compile_definitions(Telegram PRIVATE OS_MAC_STORE)
     target_link_options(Telegram
     PRIVATE
         -F${libs_loc}/breakpad/src/client/mac/build/Release
@@ -2367,6 +2376,12 @@ PRIVATE
 
 if (APPLE)
     target_compile_definitions(Telegram PRIVATE TDESKTOP_TELEGRAMD)
+    if (TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
+        target_compile_definitions(Telegram
+        PRIVATE
+            TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST
+        )
+    endif()
 endif()
 
 get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)

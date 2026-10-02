@@ -102,6 +102,13 @@ PRIVATE
     mtproto/proxy_check.cpp
 )
 
+if(APPLE)
+    nice_target_sources(test_unit ${src_loc}
+    PRIVATE
+        tests/unit/mac_protected_path_runtime_stub.cpp
+    )
+endif()
+
 target_link_libraries(test_unit
 PRIVATE
     test_unit_mtproto

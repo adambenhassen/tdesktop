@@ -44,16 +44,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/data_drafts.h"
 #include "export/export_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "webview/webview_interface.h"
 #include "window/themes/window_theme.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QMetaObject>
 
+#include <memory>
+
+#ifdef Q_OS_MAC
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif // Q_OS_MAC
+
 namespace Storage {
 namespace {
 
 using namespace details;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckAccountPath(Operation operation, const QString &path,
+									const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
 using Database = Cache::Database;
 
 constexpr auto kDelayedWriteTimeout = crl::time(1000);
@@ -79,6 +96,7 @@ constexpr auto kMultiDraftTag = quint64(0xFFFF'FFFF'FFFF'FF03ULL);
 constexpr auto kMultiDraftCursorsTag = quint64(0xFFFF'FFFF'FFFF'FF04ULL);
 constexpr auto kRichDraftsTag = quint64(0xFFFF'FFFF'FFFF'FF05ULL);
 constexpr auto kDraftsTag2 = quint64(0xFFFF'FFFF'FFFF'FF06ULL);
+constexpr auto kLegacyFilesPartSize = size_type(10000);
 
 enum { // Local Storage Keys
 	lskUserMap = 0x00,
@@ -147,6 +165,141 @@ constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
 		+ '/';
 }
 
+#ifdef Q_OS_MAC
+[[nodiscard]] DIR *OpenGuardedLegacyDirectory(const QString &path) {
+	if (!CheckAccountPath(Operation::OpenDir, path,
+						  "Storage::Account::legacyCleanup.openDir")) {
+		return nullptr;
+	}
+	auto native = QFile::encodeName(path);
+	while (native.size() > 1 && native.endsWith('/')) {
+		native.chop(1);
+	}
+	const auto descriptor = ::open(
+		native.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+	if (descriptor < 0) {
+		return nullptr;
+	}
+	const auto result = fdopendir(descriptor);
+	if (!result) {
+		::close(descriptor);
+	}
+	return result;
+}
+
+[[nodiscard]] std::vector<QString>
+CollectGuardedLegacyFiles(const QString &base, size_type limit,
+						  ::base::flat_set<QString> &skip) {
+	auto result = std::vector<QString>();
+	if (auto directory = OpenGuardedLegacyDirectory(base)) {
+		const auto guard = gsl::finally([=] { closedir(directory); });
+		while (const auto entry = readdir(directory)) {
+			const auto local = entry->d_name;
+			if (!std::strcmp(local, ".") || !std::strcmp(local, "..")) {
+				continue;
+			}
+			auto name = QFile::decodeName(local);
+			if (skip.contains(name)) {
+				continue;
+			}
+			const auto path = base + name;
+			if (!CheckAccountPath(Operation::Open, path,
+								  "Storage::Account::legacyCleanup.collect")) {
+				skip.emplace(std::move(name));
+				continue;
+			}
+			struct stat info = {};
+			if (fstatat(dirfd(directory), local, &info, AT_SYMLINK_NOFOLLOW)
+				!= 0) {
+				skip.emplace(std::move(name));
+				continue;
+			} else if (S_ISDIR(info.st_mode) || S_ISLNK(info.st_mode)) {
+				skip.emplace(std::move(name));
+				continue;
+			}
+			result.push_back(std::move(name));
+			if (result.size() == limit) {
+				break;
+			}
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] bool RemoveGuardedLegacyFiles(const QString &base,
+											const std::vector<QString> &files,
+											::base::flat_set<QString> &skip) {
+	auto directory = OpenGuardedLegacyDirectory(base);
+	if (!directory) {
+		return false;
+	}
+	const auto guard = gsl::finally([=] { closedir(directory); });
+	for (const auto &name : files) {
+		if (skip.contains(name)) {
+			continue;
+		}
+		const auto path = base + name;
+		if (!CheckAccountPath(Operation::Unlink, path,
+							  "Storage::Account::legacyCleanup.unlink")) {
+			skip.emplace(name);
+			continue;
+		}
+		const auto native = QFile::encodeName(name);
+		if (unlinkat(dirfd(directory), native.constData(), 0) != 0) {
+			skip.emplace(name);
+		}
+	}
+	return true;
+}
+
+void FinishGuardedLegacyCleanup(Fn<void()> done) {
+	if (done) {
+		crl::on_main(std::move(done));
+	}
+}
+
+using CollectGoodNames = Fn<void(FnMut<void(::base::flat_set<QString> &&)>)>;
+
+void ClearLegacyFilesGuardedPart(
+	QString base, std::shared_ptr<CollectGoodNames> collectGoodNames,
+	Fn<void()> done, ::base::flat_set<QString> skip = {}) {
+	const auto files
+		= CollectGuardedLegacyFiles(base, kLegacyFilesPartSize, skip);
+	if (files.empty()) {
+		FinishGuardedLegacyCleanup(std::move(done));
+		return;
+	}
+	crl::on_main(
+		[base = std::move(base), collectGoodNames = std::move(collectGoodNames),
+		 done = std::move(done), files, skip = std::move(skip)]() mutable {
+			(*collectGoodNames)([base = std::move(base), collectGoodNames,
+								 done = std::move(done), files,
+								 skip = std::move(skip)](
+									::base::flat_set<QString> &&good) mutable {
+				for (const auto &name : good) {
+					skip.emplace(name);
+				}
+				crl::async([base = std::move(base),
+							collectGoodNames = std::move(collectGoodNames),
+							done = std::move(done), files,
+							skip = std::move(skip)]() mutable {
+					if (!RemoveGuardedLegacyFiles(base, files, skip)) {
+						FinishGuardedLegacyCleanup(std::move(done));
+						return;
+					}
+					if (files.size() == kLegacyFilesPartSize) {
+						ClearLegacyFilesGuardedPart(
+							std::move(base), std::move(collectGoodNames),
+							std::move(done), std::move(skip));
+					} else {
+						FinishGuardedLegacyCleanup(std::move(done));
+					}
+				});
+			});
+		});
+}
+#endif // Q_OS_MAC
+
 [[nodiscard]] QString LegacyTempDirectory() {
 	return cWorkingDir() + u"tdata/tdld/"_q;
 }
@@ -179,6 +332,39 @@ constexpr auto kCustomServerPinUnknownPref = "mtp_custom_server_unknown"_cs;
 }
 
 } // namespace
+
+void ClearLegacyFilesGuarded(
+	const QString &base,
+	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)> collectGoodNames,
+	Fn<void()> done) {
+	Expects(base.endsWith('/'));
+#ifdef Q_OS_MAC
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		ClearLegacyFiles(base, std::move(collectGoodNames));
+		if (done) {
+			crl::on_main(std::move(done));
+		}
+		return;
+	}
+	if (!CheckAccountPath(Operation::OpenDir, base,
+						  "Storage::Account::legacyCleanup.start")) {
+		FinishGuardedLegacyCleanup(std::move(done));
+		return;
+	}
+	auto collector
+		= std::make_shared<CollectGoodNames>(std::move(collectGoodNames));
+	crl::async([base, collector = std::move(collector),
+				done = std::move(done)]() mutable {
+		ClearLegacyFilesGuardedPart(base, std::move(collector),
+									std::move(done));
+	});
+#else  // Q_OS_MAC
+	ClearLegacyFiles(base, std::move(collectGoodNames));
+	if (done) {
+		crl::on_main(std::move(done));
+	}
+#endif // !Q_OS_MAC
+}
 
 Account::Account(not_null<Main::Account*> owner, const QString &dataName)
 : _owner(owner.get())
@@ -310,12 +496,12 @@ void Account::clearLegacyFiles() {
 	}
 #endif
 	const auto weak = base::make_weak(_owner);
-	ClearLegacyFiles(_basePath, [weak, this](
-			FnMut<void(base::flat_set<QString>&&)> then) {
-		crl::on_main(weak, [this, then = std::move(then)]() mutable {
-			then(collectGoodNames());
+	ClearLegacyFilesGuarded(
+		_basePath, [weak, this](FnMut<void(base::flat_set<QString> &&)> then) {
+			crl::on_main(weak, [this, then = std::move(then)]() mutable {
+				then(collectGoodNames());
+			});
 		});
-	});
 }
 
 base::flat_set<QString> Account::collectGoodNames() const {
@@ -709,14 +895,29 @@ void Account::reset() {
 	_cacheBigFileTotalTimeLimit = Database::Settings().totalTimeLimit;
 	_mediaLastPlaybackPosition.clear();
 
-	const auto wvbots = _webviewStorageIdBots.path;
-	const auto wvother = _webviewStorageIdOther.path;
-	const auto wvclear = [](Webview::StorageId &storageId) {
-		Webview::ClearStorageDataByToken(
-			base::take(storageId).token.toStdString());
-	};
-	wvclear(_webviewStorageIdBots);
-	wvclear(_webviewStorageIdOther);
+	const auto wvbots
+		= _webviewStorageIdBots.token.isEmpty()	  ? QString()
+		  : !_webviewStorageIdBots.path.isEmpty() ? _webviewStorageIdBots.path
+		  : (_webviewStorageIdBots.token == Webview::LegacyStorageIdToken())
+			  ? BaseGlobalPath() + u"webview"_q
+			  : _databasePath + u"wvbots"_q;
+	const auto wvother = _webviewStorageIdOther.token.isEmpty() ? QString()
+						 : !_webviewStorageIdOther.path.isEmpty()
+							 ? _webviewStorageIdOther.path
+							 : _databasePath + u"wvother"_q;
+	const auto wvclear
+		= [](Webview::StorageId &storageId, const QString &path) {
+			  const auto token = base::take(storageId).token.toStdString();
+			  if (!token.empty()
+				  && CheckAccountPath(Operation::OpenDir, path,
+									  "Storage::Account::clearWebview")
+				  && CheckAccountPath(Operation::RecursiveDelete, path,
+									  "Storage::Account::clearWebview")) {
+				  Webview::ClearStorageDataByToken(token);
+			  }
+		  };
+	wvclear(_webviewStorageIdBots, wvbots);
+	wvclear(_webviewStorageIdOther, wvother);
 
 	_mapChanged = true;
 	writeMap();
@@ -734,17 +935,34 @@ void Account::reset() {
 				&& !name.endsWith(u"map1"_q)
 				&& !name.endsWith(u"maps"_q)
 				&& !name.endsWith(u"configs"_q)) {
-				QFile::remove(base + name);
+				const auto path = base + name;
+				if (CheckAccountPath(Operation::Unlink, path,
+									 "Storage::Account::remove")) {
+					QFile::remove(path);
+				}
 			}
 		}
-		QDir(LegacyTempDirectory()).removeRecursively();
+		const auto legacyTemp = LegacyTempDirectory();
+		if (CheckAccountPath(Operation::RecursiveDelete, legacyTemp,
+							 "Storage::Account::remove")) {
+			QDir(legacyTemp).removeRecursively();
+		}
 		if (!wvbots.isEmpty()) {
-			QDir(wvbots).removeRecursively();
+			if (CheckAccountPath(Operation::RecursiveDelete, wvbots,
+								 "Storage::Account::remove")) {
+				QDir(wvbots).removeRecursively();
+			}
 		}
 		if (!wvother.isEmpty()) {
-			QDir(wvother).removeRecursively();
+			if (CheckAccountPath(Operation::RecursiveDelete, wvother,
+								 "Storage::Account::remove")) {
+				QDir(wvother).removeRecursively();
+			}
 		}
-		QDir(temp).removeRecursively();
+		if (CheckAccountPath(Operation::RecursiveDelete, temp,
+							 "Storage::Account::remove")) {
+			QDir(temp).removeRecursively();
+		}
 	});
 
 	Local::sync();

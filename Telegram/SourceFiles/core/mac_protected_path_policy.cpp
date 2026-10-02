@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/mac_protected_path_policy.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QMutexLocker>
 
 #include <algorithm>
 #include <deque>
@@ -221,6 +222,12 @@ struct WalkResult {
 		|| operation == Operation::RecursiveDelete;
 }
 
+[[nodiscard]] bool FollowsFinalComponent(Operation operation) {
+	return operation != Operation::Lstat && operation != Operation::Mkdir
+		   && operation != Operation::Link && operation != Operation::Rename
+		   && operation != Operation::Unlink && operation != Operation::Rmdir;
+}
+
 [[nodiscard]] MacProtectedPathPolicy::Components ComponentsFromAscii(
 		std::initializer_list<const char *> values) {
 	MacProtectedPathPolicy::Components result;
@@ -263,13 +270,11 @@ struct WalkResult {
 	return result;
 }
 
-template <typename Classify, typename IsHome>
-[[nodiscard]] WalkResult Walk(
-		const ParsedPath &path,
-		const FileSystem &filesystem,
-		Classify &&classify,
-		IsHome &&isHome,
-		bool allowMissingSuffix) {
+template <typename Classify, typename ClassifySymlinkTarget, typename IsHome>
+[[nodiscard]] WalkResult
+Walk(const ParsedPath &path, const FileSystem &filesystem, Classify &&classify,
+	 ClassifySymlinkTarget &&classifySymlinkTarget, IsHome &&isHome,
+	 bool allowMissingSuffix, bool followFinalComponent) {
 	if (!path.absolute || !filesystem.lstat || !filesystem.readlink) {
 		return {};
 	}
@@ -312,6 +317,10 @@ template <typename Classify, typename IsHome>
 				.components = std::move(resolved),
 				.protectedClass = protectedClass };
 		}
+		if (pending.empty() && !followFinalComponent) {
+			resolvedTypes.push_back(FileType::Other);
+			break;
+		}
 
 		if (missingSuffix) {
 			resolvedTypes.push_back(FileType::Other);
@@ -345,6 +354,20 @@ template <typename Classify, typename IsHome>
 			ParsedPath target;
 			if (!ParsePath(readlink.target, &target)) {
 				return {};
+			}
+			auto targetComponents
+				= target.absolute ? std::vector<QByteArray>()
+								  : std::vector<QByteArray>(resolved.begin(),
+															resolved.end() - 1);
+			targetComponents.insert(targetComponents.end(),
+									target.components.begin(),
+									target.components.end());
+			const auto targetClass = classifySymlinkTarget(
+				FoldedComponents(CanonicalRawComponents(targetComponents)));
+			if (targetClass != ProtectedClass::None) {
+				return {.status = WalkResult::Status::Refused,
+						.components = std::move(resolved),
+						.protectedClass = targetClass};
 			}
 			resolved.pop_back();
 			if (target.absolute) {
@@ -388,7 +411,7 @@ template <typename Classify, typename IsHome>
 		RefusalLog *refusals) {
 	const auto refusal = RefusalRecord{ operation, protectedClass, callsite };
 	if (refusals) {
-		refusals->record(refusal);
+		static_cast<void>(refusals->record(refusal));
 	}
 	return {
 		.status = ResolutionStatus::Refused,
@@ -413,7 +436,8 @@ RefusalLog::RefusalLog(std::function<qint64()> clock)
 }) {
 }
 
-void RefusalLog::record(const RefusalRecord &refusal) {
+bool RefusalLog::record(const RefusalRecord &refusal) {
+	QMutexLocker lock(&_mutex);
 	const auto key = std::pair(
 		int(refusal.operation),
 		int(refusal.protectedClass));
@@ -421,10 +445,11 @@ void RefusalLog::record(const RefusalRecord &refusal) {
 	const auto i = _last.find(key);
 	if (i != _last.end()
 		&& (now < i->second || now - i->second < kRefusalInterval)) {
-		return;
+		return false;
 	}
 	_last[key] = now;
 	_records.push_back(refusal);
+	return true;
 }
 
 const std::vector<RefusalRecord> &RefusalLog::records() const {
@@ -439,10 +464,31 @@ bool PairResolution::allowed() const {
 	return first.allowed() && second.allowed();
 }
 
-MacProtectedPathPolicy MacProtectedPathPolicy::Build(
-		const HomeRoots &homes,
-		const FileSystem &filesystem) {
+QByteArray TelegramdProfileRoot(const HomeRoots &homes, bool appSandboxed) {
+	auto result = appSandboxed ? homes.foundation : homes.accountDatabase;
+	if (result.isEmpty()) {
+		return {};
+	}
+	while (result.size() > 1 && result.endsWith('/')) {
+		result.chop(1);
+	}
+	if (!result.endsWith('/')) {
+		result.append('/');
+	}
+	result.append("Library/Application Support/Telegramd");
+	return result;
+}
+
+MacProtectedPathPolicy
+MacProtectedPathPolicy::Build(const HomeRoots &homes,
+							  const FileSystem &filesystem,
+							  RefusalRecord *failure) {
 	auto result = MacProtectedPathPolicy();
+	if (failure) {
+		*failure = {.operation = Operation::Open,
+					.protectedClass = ProtectedClass::Invalid,
+					.callsite = u"profile.home"_q};
+	}
 	if (homes.accountDatabase.isEmpty()
 		|| homes.foundation.isEmpty()) {
 		return result;
@@ -532,18 +578,24 @@ MacProtectedPathPolicy MacProtectedPathPolicy::Build(
 		return classifier.ClassifyComponents(components);
 	};
 	for (const auto &candidate : candidates) {
-		if (classify(candidate.folded, true) != ProtectedClass::None) {
+		const auto candidateClass = classify(candidate.folded, true);
+		if (candidateClass != ProtectedClass::None) {
+			if (failure) {
+				failure->protectedClass = candidateClass;
+			}
 			return result;
 		}
 		const auto resolved = Walk(
-			ParsedPath{ .absolute = true, .components = candidate.traversal },
-			filesystem,
-			classify,
-			[](const Components &) { return false; },
-			false);
+			ParsedPath{.absolute = true, .components = candidate.traversal},
+			filesystem, classify,
+			[](const Components &) { return ProtectedClass::None; },
+			[](const Components &) { return false; }, false, true);
 		if (resolved.status != WalkResult::Status::Allowed
 			|| resolved.components.empty()
 			|| resolved.finalType != FileType::Directory) {
+			if (failure && resolved.status == WalkResult::Status::Refused) {
+				failure->protectedClass = resolved.protectedClass;
+			}
 			return result;
 		}
 		addHomeCandidates(resolved.components, preflightHomes);
@@ -765,37 +817,36 @@ Resolution MacProtectedPathPolicy::ResolveBytes(
 	}
 
 	const auto walked = Walk(
-		parsed,
-		_filesystem,
-		classify,
+		parsed, _filesystem, classify,
 		[&](const Components &components) {
-			return IsHomeRoot(components);
+			if (!IsDestructive(operation)) {
+				return ProtectedClass::None;
+			}
+			for (const auto &home : _homeRoots) {
+				if (StartsWith(components, home)
+					&& components.size() > home.size()) {
+					return ClassifyAncestorComponents(components);
+				}
+			}
+			return ProtectedClass::None;
 		},
-		true);
+		[&](const Components &components) { return IsHomeRoot(components); },
+		true, FollowsFinalComponent(operation));
 	if (walked.status == WalkResult::Status::Refused) {
-		return Refused(
-			operation,
-			walked.protectedClass,
-			callsite,
-			refusals);
+		return Refused(operation, walked.protectedClass, callsite, refusals);
 	}
 	if (walked.status != WalkResult::Status::Allowed) {
-		return Refused(
-			operation,
-			ProtectedClass::Invalid,
-			callsite,
-			refusals);
+		return Refused(operation, ProtectedClass::Invalid, callsite, refusals);
 	}
 	return Allowed(walked.components);
 }
 
-PairResolution MacProtectedPathPolicy::ResolvePair(
-		Operation operation,
-		const QByteArray &first,
-		const QByteArray &second,
-		const QByteArray &anchor,
-		const QString &callsite,
-		RefusalLog *refusals) const {
+PairResolution MacProtectedPathPolicy::ResolvePair(Operation operation,
+												   const QByteArray &first,
+												   const QByteArray &second,
+												   const QByteArray &anchor,
+												   const QString &callsite,
+												   RefusalLog *refusals) const {
 	return {
 		Resolve(operation, first, anchor, callsite, refusals),
 		Resolve(operation, second, anchor, callsite, refusals) };

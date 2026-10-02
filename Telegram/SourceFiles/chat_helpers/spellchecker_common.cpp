@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "spellcheck/spellcheck_value.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/version.h"
 
 #include <QtCore/QJsonArray>
@@ -38,6 +39,21 @@ namespace Spellchecker {
 namespace {
 
 using namespace Storage::CloudBlob;
+using Core::MacProtectedPath::Operation;
+
+[[nodiscard]] bool CheckSpellcheckerPath(Operation operation,
+										 const QString &path,
+										 const char *callsite) {
+	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
+}
+
+[[nodiscard]] bool CheckSpellcheckerPair(Operation operation,
+										 const QString &first,
+										 const QString &second,
+										 const char *callsite) {
+	return Core::MacProtectedPath::CheckPair(operation, first, second,
+											 callsite);
+}
 
 constexpr auto kDictExtensions = { "dic", "aff" };
 
@@ -249,7 +265,10 @@ inline auto IsSupportedLang(int lang) {
 }
 
 void EnsurePath() {
-	if (!QDir::current().mkpath(Spellchecker::DictionariesPath())) {
+	const auto path = Spellchecker::DictionariesPath();
+	if (!CheckSpellcheckerPath(Operation::OpenDir, path, Q_FUNC_INFO)
+		|| !CheckSpellcheckerPath(Operation::Mkdir, path, Q_FUNC_INFO)
+		|| !QDir::current().mkpath(path)) {
 		LOG(("App Error: Could not create dictionaries path."));
 	}
 }
@@ -353,7 +372,9 @@ void DictLoader::unpack(const QString &path) {
 	crl::async([=] {
 		const auto success = Spellchecker::UnpackDictionary(path, id());
 		if (success) {
-			QFile(path).remove();
+			if (CheckSpellcheckerPath(Operation::Unlink, path, Q_FUNC_INFO)) {
+				QFile(path).remove();
+			}
 			destroy();
 			return;
 		}
@@ -422,8 +443,15 @@ bool UnpackDictionary(const QString &path, int langId) {
 		for (const auto &ext : kDictExtensions) {
 			const auto from = u"sr_Cyrl_RS.%1"_q.arg(ext);
 			const auto to = u"sr_RS.%1"_q.arg(ext);
-			if (dir.exists(from) && !dir.exists(to)) {
-				QFile::rename(dir.filePath(from), dir.filePath(to));
+			const auto fromPath = dir.filePath(from);
+			const auto toPath = dir.filePath(to);
+			if (CheckSpellcheckerPath(Operation::Stat, fromPath, Q_FUNC_INFO)
+				&& dir.exists(from)
+				&& CheckSpellcheckerPath(Operation::Stat, toPath, Q_FUNC_INFO)
+				&& !dir.exists(to)
+				&& CheckSpellcheckerPair(Operation::Rename, fromPath, toPath,
+										 Q_FUNC_INFO)) {
+				QFile::rename(fromPath, toPath);
 			}
 		}
 	}
@@ -437,7 +465,9 @@ bool DictionaryExists(int langId) {
 	const auto folder = DictPathByLangId(langId) + '/';
 	return ranges::none_of(kDictExtensions, [&](const auto &ext) {
 		const auto name = Spellchecker::LocaleFromLangId(langId).name();
-		return !QFile(folder + name + '.' + ext).exists();
+		const auto path = folder + name + '.' + ext;
+		return !CheckSpellcheckerPath(Operation::Stat, path, Q_FUNC_INFO)
+			   || !QFile(path).exists();
 	});
 }
 
@@ -449,7 +479,9 @@ bool RemoveDictionary(int langId) {
 	const auto folder = u"%1/%2/"_q.arg(
 		DictionariesPath(),
 		fileName);
-	return QDir(folder).removeRecursively();
+	return CheckSpellcheckerPath(Operation::RecursiveDelete, folder,
+								 Q_FUNC_INFO)
+		   && QDir(folder).removeRecursively();
 }
 
 bool WriteDefaultDictionary() {
@@ -462,17 +494,27 @@ bool WriteDefaultDictionary() {
 	const auto folder = u"%1/%2/"_q.arg(
 		DictionariesPath(),
 		fileName);
+	if (!CheckSpellcheckerPath(Operation::RecursiveDelete, folder,
+							   Q_FUNC_INFO)) {
+		return false;
+	}
 	QDir(folder).removeRecursively();
 
 	const auto path = folder + fileName;
-	QDir().mkpath(folder);
+	if (!CheckSpellcheckerPath(Operation::Mkdir, folder, Q_FUNC_INFO)
+		|| !QDir().mkpath(folder)) {
+		return false;
+	}
 	auto input = QFile(u":/misc/en_US_dictionary"_q);
 	auto output = QFile(path);
 	if (input.open(QIODevice::ReadOnly)
+		&& CheckSpellcheckerPath(Operation::Write, path, Q_FUNC_INFO)
 		&& output.open(QIODevice::WriteOnly)) {
 		output.write(input.readAll());
 		const auto result = Spellchecker::UnpackDictionary(path, en);
-		output.remove();
+		if (CheckSpellcheckerPath(Operation::Unlink, path, Q_FUNC_INFO)) {
+			output.remove();
+		}
 		return result;
 	}
 	return false;

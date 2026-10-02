@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/data_forum_topic.h"
 #include "data/data_peer.h"
 #include "data/data_saved_sublist.h"
@@ -319,6 +320,9 @@ private:
 };
 
 [[nodiscard]] QString ResolveSoundsFolder() {
+	if (Core::MacProtectedPath::IntegrationTestActive()) {
+		return cWorkingDir() + u"tdata/sounds"_q;
+	}
 	NSArray *paths = NSSearchPathForDirectoriesInDomains(
 		NSLibraryDirectory,
 		NSUserDomainMask,

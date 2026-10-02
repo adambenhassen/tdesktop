@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "history/history_widget.h"
 #include "core/crash_reports.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/sandbox.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -82,7 +83,8 @@ namespace {
 } // namespace
 
 QString psAppDataPath() {
-	return objc_appDataPath();
+	const auto profile = Core::MacProtectedPath::ProfileRoot();
+	return profile.isEmpty() ? objc_appDataPath() : profile;
 }
 
 void psDoCleanup() {
@@ -117,11 +119,18 @@ void finish() {
 }
 
 QString SingleInstanceLocalServerName(const QString &hash) {
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
 #ifndef OS_MAC_STORE
-	return u"/tmp/"_q + hash + '-' + cGUIDStr();
+		return u"/tmp/"_q + hash + '-' + cGUIDStr();
 #else // OS_MAC_STORE
-	return objc_documentsPath() + hash.left(4);
+		const auto directory = Core::MacProtectedPath::IpcDirectory();
+		return directory.isEmpty()
+				   ? QString()
+				   : directory + u"/Telegramd-"_q + hash.left(16);
 #endif // OS_MAC_STORE
+	}
+	return Core::MacProtectedPath::IpcDirectory() + u"/Telegramd-"_q
+		   + hash.left(16);
 }
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
