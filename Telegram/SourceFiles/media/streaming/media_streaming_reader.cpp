@@ -1098,6 +1098,17 @@ bool Reader::downloaderWaitForCachedSlice(uint32 offset) {
 
 void Reader::checkCacheResultsForDownloader() {
 	continueDownloaderFromMainThread();
+	const auto waiting = _waiting.exchange(nullptr, std::memory_order_acq_rel);
+	if (waiting) {
+		waiting->release();
+	}
+	if (_cacheHelper) {
+		const auto cacheWaiting = _cacheHelper->waiting.exchange(
+			nullptr, std::memory_order_acq_rel);
+		if (cacheWaiting && (cacheWaiting != waiting)) {
+			cacheWaiting->release();
+		}
+	}
 }
 
 void Reader::continueDownloaderFromMainThread() {
@@ -1186,6 +1197,8 @@ void Reader::readFromCache(int sliceNumber) {
 	}
 	if (const auto cache = _cache()) {
 		cache->getWithSizes(key, std::move(keys), ready);
+	} else {
+		ready(QByteArray(), std::vector<int>());
 	}
 }
 

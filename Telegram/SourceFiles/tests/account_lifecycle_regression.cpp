@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/mac_protected_path_runtime.h"
 #include "crl/crl_on_main.h"
+#include "crl/crl_semaphore.h"
 #include "data/data_chat.h"
 #include "data/data_peer_id.h"
 #include "data/data_session.h"
@@ -20,6 +21,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "media/streaming/media_streaming_loader.h"
+#include "media/streaming/media_streaming_reader.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_config.h"
@@ -28,6 +31,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
+#include "storage/streamed_file_downloader.h"
+#include "ui/image/image_location.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
@@ -36,13 +41,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
+#include <QtCore/QMutex>
+#include <QtCore/QSemaphore>
+#include <QtCore/QTemporaryDir>
 #include <QtCore/QTimer>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <future>
 #include <memory>
 #include <optional>
+#include <set>
 #include <thread>
 
 namespace Tests {
@@ -501,6 +511,190 @@ template <typename Result, typename Start>
 
 using CacheGetter = Fn<Storage::Cache::Database &()>;
 using CacheClearer = Fn<void()>;
+using CachePointerGetter = Fn<Storage::Cache::Database *()>;
+using RefusedCacheReaderRegression = Fn<bool()>;
+
+class RefusedCacheLoader final : public Media::Streaming::Loader {
+  public:
+	static constexpr auto kSize = int64(81) * Loader::kPartSize;
+
+	Storage::Cache::Key baseCacheKey() const override {
+		return {0x5245465553454443ULL, 0x4143484554455354ULL};
+	}
+
+	int64 size() const override { return kSize; }
+
+	void load(int64 offset) override {
+		QMutexLocker lock(&_mutex);
+		_loaded.emplace(offset);
+	}
+
+	void cancel(int64) override {}
+
+	void resetPriorities() override {}
+
+	void setPriority(int) override {}
+
+	void stop() override {}
+
+	void tryRemoveFromQueue() override {}
+
+	rpl::producer<Media::Streaming::LoadedPart> parts() const override {
+		return _parts.events();
+	}
+
+	rpl::producer<Media::Streaming::SpeedEstimate>
+	speedEstimate() const override {
+		return _speed.events();
+	}
+
+	void
+	attachDownloader(not_null<Storage::StreamedFileDownloader *>) override {}
+
+	void clearAttachedDownloader() override {}
+
+	[[nodiscard]] bool loaded(int64 offset) const {
+		QMutexLocker lock(&_mutex);
+		return _loaded.contains(offset);
+	}
+
+  private:
+	mutable QMutex _mutex;
+	std::set<int64> _loaded;
+	rpl::event_stream<Media::Streaming::LoadedPart> _parts;
+	rpl::event_stream<Media::Streaming::SpeedEstimate> _speed;
+};
+
+[[nodiscard]] bool
+RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
+	auto loader = std::make_unique<RefusedCacheLoader>();
+	auto rawLoader = loader.get();
+	auto reader = std::make_shared<Media::Streaming::Reader>(std::move(loader),
+															 std::move(cache));
+	auto notify = std::make_shared<crl::semaphore>();
+	struct Result {
+		std::atomic<bool> completed = false;
+		Media::Streaming::Reader::FillState state
+			= Media::Streaming::Reader::FillState::WaitingCache;
+	};
+	const auto result = std::make_shared<Result>();
+	auto entered = QSemaphore();
+	auto loop = QEventLoop();
+	auto timeout = QTimer();
+	timeout.setSingleShot(true);
+	QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+	auto streaming = std::thread([=, &entered, &loop] {
+		auto buffer = QByteArray(1, Qt::Uninitialized);
+		auto state = reader->fill(0, bytes::make_span(buffer), notify.get());
+		entered.release();
+		if (state == Media::Streaming::Reader::FillState::WaitingCache) {
+			notify->acquire();
+			state = reader->fill(0, bytes::make_span(buffer), notify.get());
+		}
+		result->state = state;
+		result->completed.store(true, std::memory_order_release);
+		QMetaObject::invokeMethod(
+			&loop, [&loop] { loop.quit(); }, Qt::QueuedConnection);
+	});
+	entered.acquire();
+	if (!result->completed.load(std::memory_order_acquire)) {
+		timeout.start(5000);
+		loop.exec();
+	}
+	const auto completed = result->completed.load(std::memory_order_acquire);
+	if (!completed) {
+		notify->release();
+	}
+	streaming.join();
+	reader->stopStreaming();
+	return completed
+		   && (result->state
+			   == Media::Streaming::Reader::FillState::WaitingRemote)
+		   && rawLoader->loaded(0);
+}
+
+[[nodiscard]] bool
+RunRefusedCacheDownloaderRegression(not_null<Main::Account *> account,
+									CachePointerGetter cache) {
+	auto loader = std::make_unique<RefusedCacheLoader>();
+	auto rawLoader = loader.get();
+	auto reader = std::make_shared<Media::Streaming::Reader>(std::move(loader),
+															 std::move(cache));
+	auto downloader = std::make_unique<Storage::StreamedFileDownloader>(
+		not_null<Main::Session *>(&account->session()), 1, 2,
+		Data::FileOrigin(), Storage::Cache::Key{1, 2}, MediaKey{0, 0}, reader,
+		Core::MacProtectedPath::ProfileRoot()
+			+ u"tdata/refused_cache_download"_q,
+		RefusedCacheLoader::kSize, DocumentFileLocation, LoadToFileOnly,
+		LoadFromCloudOrLocal, false, 0);
+	auto loop = QEventLoop();
+	auto timeout = QTimer();
+	auto poll = QTimer();
+	timeout.setSingleShot(true);
+	poll.setInterval(10);
+	QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+		if (rawLoader->loaded(0)) {
+			loop.quit();
+		}
+	});
+	QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+	reader->loadForDownloader(downloader.get(), 0);
+	reader->continueDownloaderFromMainThread();
+	if (!rawLoader->loaded(0)) {
+		poll.start();
+		timeout.start(5000);
+		loop.exec();
+	}
+	poll.stop();
+	return rawLoader->loaded(0);
+}
+
+[[nodiscard]] bool
+RunRefusedCacheReaderRegressions(not_null<Main::Account *> account,
+								 bool mediaCache) {
+	const auto cache = [=] {
+		auto &data = account->session().data();
+		return mediaCache ? data.cacheBigFileIfAllowed()
+						  : data.cacheIfAllowed();
+	};
+	const auto streaming = RunRefusedCacheStreamingRegression(cache);
+	const auto downloading
+		= RunRefusedCacheDownloaderRegression(account, cache);
+	return streaming && downloading;
+}
+
+[[nodiscard]] bool RunCacheConcurrentDeletionRegression() {
+#if defined(Q_OS_MAC) && defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		return true;
+	}
+	const auto parent
+		= QDir(Core::MacProtectedPath::ProfileRoot()).filePath("tdata");
+	if (!QDir().mkpath(parent)) {
+		return false;
+	}
+	auto directory
+		= QTemporaryDir(QDir(parent).filePath("cache-scan-deletion-XXXXXX"));
+	const auto vanished = QDir(directory.path()).filePath("vanished");
+	if (!directory.isValid()
+		|| !WriteFixtureFile(vanished, "synthetic cache entry")) {
+		return false;
+	}
+	auto deleted = false;
+	const auto allowed = Core::MacProtectedPath::CheckCachePathForTesting(
+		directory.path(), "Tests::ProtectedCache::concurrent-deletion",
+		[&](const QString &entry) {
+			if (entry != vanished) {
+				return;
+			}
+			auto remove = std::thread([&] { deleted = QFile::remove(entry); });
+			remove.join();
+		});
+	return allowed && deleted && !QFileInfo::exists(vanished);
+#else
+	return true;
+#endif
+}
 
 [[nodiscard]] QString ActiveCacheVersionPath(const QString &path) {
 	const auto directories
@@ -534,10 +728,10 @@ using CacheClearer = Fn<void()>;
 		   && marker.readAll() == "synthetic protected fixture";
 }
 
-[[nodiscard]] bool RunPostOpenCacheSymlinkRegression(const QString &path,
-													 const QString &fixture,
-													 CacheGetter cache,
-													 CacheClearer clearCaches) {
+[[nodiscard]] bool
+RunPostOpenCacheSymlinkRegression(const QString &path, const QString &fixture,
+								  CacheGetter cache, CacheClearer clearCaches,
+								  RefusedCacheReaderRegression cacheRefusal) {
 	const auto seedKey = Storage::Cache::Key{
 		0x4d41494e39353731ULL,
 		0x4341434845534545ULL,
@@ -576,6 +770,7 @@ using CacheClearer = Fn<void()>;
 	const auto fixtureEntries = QDir(fixture).entryList(
 		QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
 		QDir::Name);
+	const auto readerRefused = cacheRefusal();
 	const auto read = AwaitCacheCallback<QByteArray>(
 		[&](auto done) { cache().get(seedKey, std::move(done)); });
 	const auto readRefused = read && read->isEmpty();
@@ -598,7 +793,17 @@ using CacheClearer = Fn<void()>;
 	const auto originalRestored = QDir().rename(saved, active);
 	restored = aliasRemoved && originalRestored;
 	cache().sync();
-	return readRefused && writeRefused && unchanged && restored;
+	const auto passed
+		= readerRefused && readRefused && writeRefused && unchanged && restored;
+	if (!passed) {
+		std::fprintf(
+			stderr,
+			"Post-open cache regression failed: reader=%d read=%d write=%d "
+			"fixture=%d restored=%d path=%s.\n",
+			readerRefused, readRefused, writeRefused, unchanged, restored,
+			qPrintable(path));
+	}
+	return passed;
 }
 
 [[nodiscard]] Main::Account *FindAuthorizationBlockedAccount(
@@ -750,6 +955,11 @@ using CacheClearer = Fn<void()>;
 StartChatParticipantsRegression(Main::Domain &domain,
 								const ProtectedCacheFixtures &fixtures,
 								Fn<void(int)> done) {
+	if (Core::MacProtectedPath::IntegrationTestActive()
+		&& !RunCacheConcurrentDeletionRegression()) {
+		return FailChatParticipantsRegression(
+			"cache scan rejected an entry removed after enumeration");
+	}
 	const auto requiredAccounts
 		= Core::MacProtectedPath::IntegrationTestActive() ? 3 : 2;
 	if (domain.accounts().size()
@@ -879,12 +1089,17 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			data.cache().sync();
 			data.cacheBigFile().sync();
 		};
-		if (!RunPostOpenCacheSymlinkRegression(guarded->local().cachePath(),
-											   fixtures.openedCache,
-											   cacheGetter, clearCaches)
+		if (!RunPostOpenCacheSymlinkRegression(
+				guarded->local().cachePath(), fixtures.openedCache, cacheGetter,
+				clearCaches,
+				[guarded] {
+					return RunRefusedCacheReaderRegressions(guarded, false);
+				})
 			|| !RunPostOpenCacheSymlinkRegression(
 				guarded->local().cacheBigFilePath(), fixtures.openedMediaCache,
-				mediaCacheGetter, clearCaches)) {
+				mediaCacheGetter, clearCaches, [guarded] {
+					return RunRefusedCacheReaderRegressions(guarded, true);
+				})) {
 			return FailChatParticipantsRegression(
 				"post-open cache get or put accessed a protected alias");
 		}

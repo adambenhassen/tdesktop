@@ -348,7 +348,11 @@ bool CheckPath(Operation operation, const QString &path, const char *callsite) {
 	return true;
 }
 
-bool CheckCachePath(const QString &path, const char *callsite) {
+namespace {
+
+bool CheckCachePathImpl(
+	const QString &path, const char *callsite,
+	const std::function<void(const QString &)> &beforeEntryStat) {
 	if (!IntegrationTestActive()) {
 		return true;
 	}
@@ -398,10 +402,15 @@ bool CheckCachePath(const QString &path, const char *callsite) {
 				allowed = false;
 				continue;
 			}
+			if (beforeEntryStat) {
+				beforeEntryStat(child);
+			}
 			struct stat info = {};
 			if (fstatat(dirfd(stream), local, &info, AT_SYMLINK_NOFOLLOW)
 				!= 0) {
-				allowed = false;
+				if (errno != ENOENT) {
+					allowed = false;
+				}
 				continue;
 			}
 			if (S_ISDIR(info.st_mode)) {
@@ -427,6 +436,20 @@ bool CheckCachePath(const QString &path, const char *callsite) {
 	}
 	return allowed;
 }
+
+} // namespace
+
+bool CheckCachePath(const QString &path, const char *callsite) {
+	return CheckCachePathImpl(path, callsite, {});
+}
+
+#if defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
+bool CheckCachePathForTesting(
+	const QString &path, const char *callsite,
+	std::function<void(const QString &)> beforeEntryStat) {
+	return CheckCachePathImpl(path, callsite, beforeEntryStat);
+}
+#endif
 
 bool CheckPair(Operation operation, const QString &first, const QString &second,
 			   const char *callsite) {

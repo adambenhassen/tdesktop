@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/mac_protected_path_policy.h"
 
+#include <functional>
+
 namespace Core::MacProtectedPath {
 
 #ifdef Q_OS_MAC
@@ -22,6 +24,12 @@ namespace Core::MacProtectedPath {
 							 const char *callsite);
 
 [[nodiscard]] bool CheckCachePath(const QString &path, const char *callsite);
+
+#if defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
+[[nodiscard]] bool
+CheckCachePathForTesting(const QString &path, const char *callsite,
+						 std::function<void(const QString &)> beforeEntryStat);
+#endif
 
 [[nodiscard]] bool CheckPair(Operation operation, const QString &first,
 							 const QString &second, const char *callsite);
