@@ -1,0 +1,127 @@
+name: macOS Brew setup diagnostic
+
+on:
+  pull_request:
+    types: [opened]
+    branches: [dev]
+    paths:
+      - .github/workflows/mac_brew_setup_diagnostic.yml
+
+jobs:
+  setup:
+    if: github.event.pull_request.head.ref == 'chore/main-1158-brew-setup-diagnostic'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    env:
+      GIT: "https://github.com"
+      CMAKE_GENERATOR: "Ninja"
+      CMAKE_BUILD_TYPE: "Debug"
+      CMAKE_BUILD_PARALLEL_LEVEL: ""
+      CCACHE_MAXSIZE: "1G"
+      CMAKE_PREFIX_PATH: "/opt/homebrew/opt/ffmpeg@6:/opt/homebrew/opt/openal-soft"
+      TDE2E: "51743dfd01dff6179e2d8f7095729caa4e2222e9"
+      ONLY_CACHE: "false"
+      MANUAL_CACHING: "1"
+      AUTO_CACHING: "1"
+
+    steps:
+      - name: Get repository name.
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Clone packaged setup revision.
+        uses: actions/checkout@v7
+        with:
+          ref: 9b5487bb07b5a06c38b867e5c22bd724fa4d178e
+          submodules: recursive
+          path: tdesktop
+
+      - name: Record diagnostic revisions.
+        env:
+          DIAGNOSTIC_WORKFLOW_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Diagnostic workflow revision: $DIAGNOSTIC_WORKFLOW_SHA"
+          echo "Packaged setup revision: $(git -C tdesktop rev-parse HEAD)"
+
+      - name: Measure Brew setup.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          libs="ada-url ffmpeg@6 jpeg-xl libavif libheif minizip openal-soft openh264 openssl opus qtbase qtimageformats qtshadertools qtsvg xz"
+          cache_root="$(brew --cache)"
+
+          cache_snapshot() {
+            find "$cache_root" -type f -exec stat -f '%z %N' {} \; 2>/dev/null | sort
+          }
+
+          report_cache_delta() {
+            awk -v phase="$1" '
+              FILENAME == ARGV[1] { before[$2] = $1; next }
+              {
+                size = $1
+                path = $2
+                if (!(path in before)) {
+                  bytes += size
+                  files++
+                } else if (size > before[path]) {
+                  bytes += size - before[path]
+                  files++
+                }
+              }
+              END {
+                printf "METRIC: %s added_or_grown_cache_files=%d added_cache_bytes=%.0f\n", phase, files, bytes
+              }
+            ' "$2" "$3"
+          }
+
+          snapshot_cache() {
+            cache_snapshot > "$1" || true
+          }
+
+          TIMEFORMAT='METRIC: brew update elapsed=%3R user=%3U system=%3S seconds'
+          snapshot_cache "$RUNNER_TEMP/brew-before-update.txt"
+          time brew update
+          snapshot_cache "$RUNNER_TEMP/brew-after-update.txt"
+          report_cache_delta brew_update "$RUNNER_TEMP/brew-before-update.txt" "$RUNNER_TEMP/brew-after-update.txt"
+
+          TIMEFORMAT='METRIC: brew upgrade elapsed=%3R user=%3U system=%3S seconds'
+          snapshot_cache "$RUNNER_TEMP/brew-before-upgrade.txt"
+          { time brew upgrade; } || true
+          snapshot_cache "$RUNNER_TEMP/brew-after-upgrade.txt"
+          report_cache_delta brew_upgrade "$RUNNER_TEMP/brew-before-upgrade.txt" "$RUNNER_TEMP/brew-after-upgrade.txt"
+
+          TIMEFORMAT='METRIC: brew install elapsed=%3R user=%3U system=%3S seconds'
+          snapshot_cache "$RUNNER_TEMP/brew-before-install.txt"
+          time brew install autoconf automake boost ccache cmake libtool ninja pkg-config python $libs
+          snapshot_cache "$RUNNER_TEMP/brew-after-install.txt"
+          report_cache_delta brew_install "$RUNNER_TEMP/brew-before-install.txt" "$RUNNER_TEMP/brew-after-install.txt"
+
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
+
+          echo "Installed requested Brew package versions:"
+          brew list --versions $libs autoconf automake boost ccache cmake libtool ninja pkgconf python@3.14
+
+          xcodebuild -version > CACHE_KEY.txt
+          brew list --versions $libs >> CACHE_KEY.txt
+          echo $MANUAL_CACHING >> CACHE_KEY.txt
+          echo "$GITHUB_WORKSPACE" >> CACHE_KEY.txt
+          if [ "$AUTO_CACHING" = "1" ]; then
+            thisFile=$REPO_NAME/.github/workflows/mac_packaged.yml
+            echo `md5 -q $thisFile` >> CACHE_KEY.txt
+          fi
+          echo "CACHE_KEY=`md5 -q CACHE_KEY.txt`" >> $GITHUB_ENV
+          {
+            xcodebuild -version
+            ccache --version
+          } > CCACHE_KEY.txt
+          echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> $GITHUB_ENV
+
+          echo "MACOSX_DEPLOYMENT_TARGET=$(grep 'set(QT_SUPPORTED_MIN_MACOS_VERSION' /opt/homebrew/Cellar/qtbase/*/lib/cmake/Qt6/Qt6ConfigExtras.cmake | sed -E 's/^.*\"(.*)\"\)$/\1/')" >> $GITHUB_ENV
+          echo "LibrariesPath=`pwd`" >> $GITHUB_ENV
+
+          curl_header="Authorization: Bearer $GITHUB_TOKEN"
+          echo "RNNOISE=$(curl -sSL --header "$curl_header" https://api.github.com/repos/xiph/rnnoise/git/refs/heads/master | jq -r .object.sha)" >> $GITHUB_ENV
+          echo "WEBRTC=$(curl -sSL --header "$curl_header" https://api.github.com/repos/desktop-app/tg_owt/git/refs/heads/master | jq -r .object.sha)" >> $GITHUB_ENV
