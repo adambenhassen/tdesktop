@@ -16,6 +16,9 @@ jobs:
     # This fork cannot schedule a depot label, and a build that queues forever
     # is not a build.
     runs-on: macos-latest
+    permissions:
+      contents: read
+      actions: write
 
     strategy:
       matrix:
@@ -27,6 +30,7 @@ jobs:
       CMAKE_GENERATOR: "Ninja"
       CMAKE_BUILD_TYPE: "Debug"
       CMAKE_BUILD_PARALLEL_LEVEL: ""
+      CCACHE_MAXSIZE: "1G"
       CMAKE_PREFIX_PATH: "/opt/homebrew/opt/ffmpeg@6:/opt/homebrew/opt/openal-soft"
       TDE2E: "51743dfd01dff6179e2d8f7095729caa4e2222e9"
       ONLY_CACHE: "false"
@@ -44,11 +48,12 @@ jobs:
           path: ${{ env.REPO_NAME }}
 
       - name: First set up.
+        id: setup
         run: |
           libs="ada-url ffmpeg@6 jpeg-xl libavif libheif minizip openal-soft openh264 openssl opus qtbase qtimageformats qtshadertools qtsvg xz"
           brew update
           brew upgrade || true
-          brew install autoconf automake boost cmake libtool ninja pkg-config python $libs
+          brew install autoconf automake boost ccache cmake libtool ninja pkg-config python $libs
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
 
@@ -61,12 +66,25 @@ jobs:
             echo `md5 -q $thisFile` >> CACHE_KEY.txt
           fi
           echo "CACHE_KEY=`md5 -q CACHE_KEY.txt`" >> $GITHUB_ENV
+          {
+            xcodebuild -version
+            ccache --version
+          } > CCACHE_KEY.txt
+          echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> $GITHUB_ENV
 
           echo "MACOSX_DEPLOYMENT_TARGET=$(grep 'set(QT_SUPPORTED_MIN_MACOS_VERSION' /opt/homebrew/Cellar/qtbase/*/lib/cmake/Qt6/Qt6ConfigExtras.cmake | sed -E 's/^.*"(.*)"\)$/\1/')" >> $GITHUB_ENV
           echo "LibrariesPath=`pwd`" >> $GITHUB_ENV
 
           echo "RNNOISE=`curl -sSL --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' https://api.github.com/repos/xiph/rnnoise/git/refs/heads/master | jq -r .object.sha`" >> $GITHUB_ENV
           echo "WEBRTC=`curl -sSL --header 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' https://api.github.com/repos/desktop-app/tg_owt/git/refs/heads/master | jq -r .object.sha`" >> $GITHUB_ENV
+
+      - name: Telegramd compiler cache.
+        id: cache-ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: macOS-arm64-ccache-${{ hashFiles('CCACHE_KEY.txt') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: macOS-arm64-ccache-${{ hashFiles('CCACHE_KEY.txt') }}-
 
       - name: RNNoise cache.
         id: cache-rnnoise
@@ -142,7 +160,11 @@ jobs:
             -DTDESKTOP_API_TEST=ON \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             $DEFINE
+          ccache --max-size="$CCACHE_MAXSIZE"
+          ccache --zero-stats
           cmake --build build
           if ! ./build/test_unit; then
             lldb --batch -o run -k bt -- ./build/test_unit
@@ -400,6 +422,28 @@ jobs:
           cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
           echo "Full chat info session regression passed on $GITHUB_SHA."
           echo "Full chat info session regression passed on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report compiler cache hits.
+        id: ccache-stats
+        if: ${{ always() && env.ONLY_CACHE == 'false' && steps.setup.outcome == 'success' }}
+        run: |
+          ccache --show-stats
+          MISSES=$(ccache --print-stats | sed -n 's/^cache_miss\t//p' | head -1)
+          case "$MISSES" in (*[!0-9]*|'') MISSES=0;; esac
+          echo "misses=$MISSES" >> "$GITHUB_OUTPUT"
+          echo "ccache misses this run: $MISSES"
+
+      - name: Save Telegramd compiler cache.
+        if: >
+          always()
+            && !cancelled()
+            && steps.ccache-stats.outcome == 'success'
+            && github.ref_name == github.event.repository.default_branch
+            && fromJSON(steps.ccache-stats.outputs.misses) > 300
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: macOS-arm64-ccache-${{ hashFiles('CCACHE_KEY.txt') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload Telegramd manual QA artifact.
         if: success()
