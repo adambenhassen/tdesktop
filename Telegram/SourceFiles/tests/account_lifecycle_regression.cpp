@@ -586,7 +586,10 @@ RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
 	QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
 	auto streaming = std::thread([=, &entered, &loop] {
 		auto buffer = QByteArray(1, Qt::Uninitialized);
-		auto state = reader->fill(0, bytes::make_span(buffer), notify.get());
+		auto state = reader->fill(
+			0,
+			bytes::make_detached_span(buffer),
+			notify.get());
 		entered.release();
 		while ((state != Media::Streaming::Reader::FillState::Failed)
 			&& !rawLoader->loaded(0)
@@ -595,7 +598,10 @@ RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
 			if (result->cancelled.load(std::memory_order_acquire)) {
 				break;
 			}
-			state = reader->fill(0, bytes::make_span(buffer), notify.get());
+			state = reader->fill(
+				0,
+				bytes::make_detached_span(buffer),
+				notify.get());
 		}
 		result->state = state;
 		result->completed.store(true, std::memory_order_release);
