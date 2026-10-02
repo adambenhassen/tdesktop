@@ -51,6 +51,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QCoreApplication>
 #include <QtCore/QMetaObject>
 
+#include <memory>
+
 #ifdef Q_OS_MAC
 #include <cstring>
 #include <dirent.h>
@@ -256,9 +258,11 @@ void FinishGuardedLegacyCleanup(Fn<void()> done) {
 	}
 }
 
+using CollectGoodNames =
+	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)>;
+
 void ClearLegacyFilesGuardedPart(
-	QString base,
-	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)> collectGoodNames,
+	QString base, std::shared_ptr<CollectGoodNames> collectGoodNames,
 	Fn<void()> done, ::base::flat_set<QString> skip = {}) {
 	const auto files
 		= CollectGuardedLegacyFiles(base, kLegacyFilesPartSize, skip);
@@ -269,9 +273,8 @@ void ClearLegacyFilesGuardedPart(
 	crl::on_main(
 		[base = std::move(base), collectGoodNames = std::move(collectGoodNames),
 		 done = std::move(done), files, skip = std::move(skip)]() mutable {
-			collectGoodNames([base = std::move(base),
-							  collectGoodNames = std::move(collectGoodNames),
-							  done = std::move(done), files,
+			(*collectGoodNames)([base = std::move(base),
+							  collectGoodNames, done = std::move(done), files,
 							  skip = std::move(skip)](
 								 ::base::flat_set<QString> &&good) mutable {
 				for (const auto &name : good) {
@@ -349,10 +352,12 @@ void ClearLegacyFilesGuarded(
 		FinishGuardedLegacyCleanup(std::move(done));
 		return;
 	}
-	crl::async([=, collectGoodNames = std::move(collectGoodNames),
+	auto collector = std::make_shared<CollectGoodNames>(
+		std::move(collectGoodNames));
+	crl::async([base, collector = std::move(collector),
 				done = std::move(done)]() mutable {
-		ClearLegacyFilesGuardedPart(base, std::move(collectGoodNames),
-									std::move(done));
+		ClearLegacyFilesGuardedPart(
+			base, std::move(collector), std::move(done));
 	});
 #else  // Q_OS_MAC
 	ClearLegacyFiles(base, std::move(collectGoodNames));
