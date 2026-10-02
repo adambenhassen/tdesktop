@@ -574,6 +574,7 @@ RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
 	auto notify = std::make_shared<crl::semaphore>();
 	struct Result {
 		std::atomic<bool> completed = false;
+		std::atomic<bool> cancelled = false;
 		Media::Streaming::Reader::FillState state
 			= Media::Streaming::Reader::FillState::WaitingCache;
 	};
@@ -587,8 +588,13 @@ RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
 		auto buffer = QByteArray(1, Qt::Uninitialized);
 		auto state = reader->fill(0, bytes::make_span(buffer), notify.get());
 		entered.release();
-		if (state == Media::Streaming::Reader::FillState::WaitingCache) {
+		while ((state != Media::Streaming::Reader::FillState::Failed)
+			&& !rawLoader->loaded(0)
+			&& !result->cancelled.load(std::memory_order_acquire)) {
 			notify->acquire();
+			if (result->cancelled.load(std::memory_order_acquire)) {
+				break;
+			}
 			state = reader->fill(0, bytes::make_span(buffer), notify.get());
 		}
 		result->state = state;
@@ -603,6 +609,7 @@ RunRefusedCacheStreamingRegression(CachePointerGetter cache) {
 	}
 	const auto completed = result->completed.load(std::memory_order_acquire);
 	if (!completed) {
+		result->cancelled.store(true, std::memory_order_release);
 		notify->release();
 	}
 	streaming.join();
