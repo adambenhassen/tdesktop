@@ -432,13 +432,14 @@ jobs:
           case "$MISSES" in (*[!0-9]*|'') MISSES=0;; esac
           echo "misses=$MISSES" >> "$GITHUB_OUTPUT"
           echo "ccache misses this run: $MISSES"
+          bash "$REPO_NAME/.github/scripts/ccache_save_decision.sh" "$MISSES" >> "$GITHUB_OUTPUT"
 
       - name: Save Telegramd compiler cache.
         if: >
           always()
             && !cancelled()
             && steps.ccache-stats.outcome == 'success'
-            && fromJSON(steps.ccache-stats.outputs.misses) > 300
+            && steps.ccache-stats.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/ccache

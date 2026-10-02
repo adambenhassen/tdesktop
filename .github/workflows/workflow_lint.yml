@@ -8,10 +8,14 @@ on:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
+      - '.github/scripts/ccache_save_decision.sh'
+      - '.github/scripts/test_ccache_save_decision.sh'
   pull_request:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
+      - '.github/scripts/ccache_save_decision.sh'
+      - '.github/scripts/test_ccache_save_decision.sh'
   workflow_dispatch:
 
 concurrency:
@@ -50,3 +54,6 @@ jobs:
           # from day one. What is linted is workflow syntax, expressions, action
           # inputs and runner labels.
           ./actionlint -color -shellcheck= -pyflakes=
+
+      - name: Test ccache save decision.
+        run: bash .github/scripts/test_ccache_save_decision.sh
