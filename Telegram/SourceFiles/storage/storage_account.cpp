@@ -258,8 +258,7 @@ void FinishGuardedLegacyCleanup(Fn<void()> done) {
 	}
 }
 
-using CollectGoodNames =
-	Fn<void(FnMut<void(::base::flat_set<QString> &&)>)>;
+using CollectGoodNames = Fn<void(FnMut<void(::base::flat_set<QString> &&)>)>;
 
 void ClearLegacyFilesGuardedPart(
 	QString base, std::shared_ptr<CollectGoodNames> collectGoodNames,
@@ -273,10 +272,10 @@ void ClearLegacyFilesGuardedPart(
 	crl::on_main(
 		[base = std::move(base), collectGoodNames = std::move(collectGoodNames),
 		 done = std::move(done), files, skip = std::move(skip)]() mutable {
-			(*collectGoodNames)([base = std::move(base),
-							  collectGoodNames, done = std::move(done), files,
-							  skip = std::move(skip)](
-								 ::base::flat_set<QString> &&good) mutable {
+			(*collectGoodNames)([base = std::move(base), collectGoodNames,
+								 done = std::move(done), files,
+								 skip = std::move(skip)](
+									::base::flat_set<QString> &&good) mutable {
 				for (const auto &name : good) {
 					skip.emplace(name);
 				}
@@ -352,12 +351,12 @@ void ClearLegacyFilesGuarded(
 		FinishGuardedLegacyCleanup(std::move(done));
 		return;
 	}
-	auto collector = std::make_shared<CollectGoodNames>(
-		std::move(collectGoodNames));
+	auto collector
+		= std::make_shared<CollectGoodNames>(std::move(collectGoodNames));
 	crl::async([base, collector = std::move(collector),
 				done = std::move(done)]() mutable {
-		ClearLegacyFilesGuardedPart(
-			base, std::move(collector), std::move(done));
+		ClearLegacyFilesGuardedPart(base, std::move(collector),
+									std::move(done));
 	});
 #else  // Q_OS_MAC
 	ClearLegacyFiles(base, std::move(collectGoodNames));
