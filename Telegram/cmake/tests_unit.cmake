@@ -62,6 +62,7 @@ target_precompile_headers(test_unit PRIVATE
 
 nice_target_sources(test_unit ${src_loc}
 PRIVATE
+    core/local_url_conversion.cpp
     # Compiled in the application target only, so the test links it
     # directly: the code under test is the shipped code.
     passport/passport_encryption.cpp
@@ -81,6 +82,7 @@ PRIVATE
     tests/unit/data_chat_participants_tests.cpp
     tests/unit/intro_signup_error_tests.cpp
     tests/unit/intro_username_validation_tests.cpp
+    tests/unit/local_url_conversion_tests.cpp
     tests/unit/mac_protected_path_policy_tests.cpp
     tests/unit/mtproto_custom_server_input_tests.cpp
     tests/unit/mtproto_dc_options_tests.cpp
