@@ -8,10 +8,18 @@ on:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
+      - '.github/scripts/ccache_save_decision.sh'
+      - '.github/scripts/test_ccache_save_decision.sh'
+      - '.github/scripts/ccache_miss_count.sh'
+      - '.github/scripts/test_ccache_miss_count.sh'
   pull_request:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
+      - '.github/scripts/ccache_save_decision.sh'
+      - '.github/scripts/test_ccache_save_decision.sh'
+      - '.github/scripts/ccache_miss_count.sh'
+      - '.github/scripts/test_ccache_miss_count.sh'
   workflow_dispatch:
 
 concurrency:
@@ -50,3 +58,23 @@ jobs:
           # from day one. What is linted is workflow syntax, expressions, action
           # inputs and runner labels.
           ./actionlint -color -shellcheck= -pyflakes=
+
+      - name: Test ccache save decision.
+        run: bash .github/scripts/test_ccache_save_decision.sh
+
+      - name: Test ccache miss count.
+        run: bash .github/scripts/test_ccache_miss_count.sh
+
+  ccache-helpers-macos:
+    name: ccache helpers (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Clone.
+        uses: actions/checkout@v4
+
+      - name: Test compiler cache helpers.
+        run: |
+          set -euo pipefail
+          bash .github/scripts/test_ccache_save_decision.sh
+          bash .github/scripts/test_ccache_miss_count.sh
