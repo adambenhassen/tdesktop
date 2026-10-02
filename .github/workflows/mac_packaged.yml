@@ -427,9 +427,9 @@ jobs:
         id: ccache-stats
         if: ${{ always() && env.ONLY_CACHE == 'false' && steps.setup.outcome == 'success' }}
         run: |
+          set -euo pipefail
           ccache --show-stats
-          MISSES=$(ccache --print-stats | sed -n 's/^cache_miss\t//p' | head -1)
-          case "$MISSES" in (*[!0-9]*|'') MISSES=0;; esac
+          MISSES=$(ccache --print-stats | bash "$REPO_NAME/.github/scripts/ccache_miss_count.sh")
           echo "misses=$MISSES" >> "$GITHUB_OUTPUT"
           echo "ccache misses this run: $MISSES"
           bash "$REPO_NAME/.github/scripts/ccache_save_decision.sh" "$MISSES" >> "$GITHUB_OUTPUT"

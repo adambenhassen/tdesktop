@@ -10,12 +10,16 @@ on:
       - '.github/actionlint.yaml'
       - '.github/scripts/ccache_save_decision.sh'
       - '.github/scripts/test_ccache_save_decision.sh'
+      - '.github/scripts/ccache_miss_count.sh'
+      - '.github/scripts/test_ccache_miss_count.sh'
   pull_request:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
       - '.github/scripts/ccache_save_decision.sh'
       - '.github/scripts/test_ccache_save_decision.sh'
+      - '.github/scripts/ccache_miss_count.sh'
+      - '.github/scripts/test_ccache_miss_count.sh'
   workflow_dispatch:
 
 concurrency:
@@ -57,3 +61,6 @@ jobs:
 
       - name: Test ccache save decision.
         run: bash .github/scripts/test_ccache_save_decision.sh
+
+      - name: Test ccache miss count.
+        run: bash .github/scripts/test_ccache_miss_count.sh
