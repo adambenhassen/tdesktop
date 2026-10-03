@@ -1257,7 +1257,7 @@ StartChatParticipantsRegression(Main::Domain &domain,
 					MTP_int(0),
 					MTP_string(QString())),
 			}),
-			MTP_int(2)).c_chatParticipants());
+			MTP_int(2)));
 	if (!HasExpectedParticipants(fullListDemotionChat, UserId(2))
 		|| fullListDemotionChat->admins.contains(self)
 		|| fullListDemotionChat->adminRights() != ChatAdminRights()
