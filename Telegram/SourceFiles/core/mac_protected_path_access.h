@@ -82,6 +82,15 @@ DispatchExternalPathIfAllowed(Operation operation, const QString &path,
 	return true;
 }
 
+template <typename Checker, typename Prepare>
+[[nodiscard]] bool
+PrepareExternalDirectoryIfAllowed(const QString &path, const char *callsite,
+								  Checker &&checker, Prepare &&prepare) {
+	return !path.isEmpty() && checker(Operation::Mkdir, path, callsite)
+		   && checker(Operation::OpenDir, path, callsite)
+		   && std::forward<Prepare>(prepare)();
+}
+
 template <typename Checker, typename Completion>
 [[nodiscard]] bool CompleteWebViewFileInputSelectionIfAllowed(
 	const QStringList &paths, Checker &&checker, Completion &&completion) {

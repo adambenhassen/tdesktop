@@ -1589,3 +1589,65 @@ TEST_CASE(WebViewFileInputAllowsDownloadsForUpload) {
 	CHECK(allowed);
 	CHECK(uploaded == paths);
 }
+
+TEST_CASE(ProfileTempSymlinkIntoProtectedPathStopsBeforePreparation) {
+	auto fs = FakeFileSystem();
+	const auto tdataPath = QByteArray(
+		"/Users/alice/Library/Application Support/Telegramd/tdata");
+	AddDirectoryHierarchy(fs, tdataPath);
+	const auto temporaryPath = tdataPath + "/temp";
+	fs.entries.emplace(temporaryPath, LstatResult{
+										  .type = FileType::Symlink,
+										  .error = FileError::None,
+									  });
+	fs.links.emplace(
+		temporaryPath,
+		ReadlinkResult{
+			.target
+			= "/Users/alice/Library/Application Support/Telegram Desktop/tdata",
+			.error = FileError::None,
+		});
+	auto policy = TestPolicy(fs);
+	ClearCalls(fs);
+	auto operations = std::vector<Operation>();
+	auto mkdirAllowed = false;
+	auto openDirRefused = false;
+	auto refusalClass = ProtectedClass::None;
+	auto preparations = 0;
+	const auto prepared = PrepareExternalDirectoryIfAllowed(
+		QString::fromUtf8(temporaryPath), "unit.profile.helper-temp",
+		[&](Operation operation, const QString &path, const char *callsite) {
+			operations.push_back(operation);
+			const auto result
+				= policy.Resolve(operation, QFile::encodeName(path), {},
+								 QString::fromUtf8(callsite));
+			if (operation == Operation::Mkdir) {
+				mkdirAllowed = result.allowed();
+			} else if (operation == Operation::OpenDir) {
+				openDirRefused = !result.allowed();
+				refusalClass = result.refusal.protectedClass;
+			}
+			return result.allowed();
+		},
+		[&] {
+			++preparations;
+			return true;
+		});
+	CHECK(!prepared);
+	CHECK(mkdirAllowed);
+	CHECK(openDirRefused);
+	CHECK(refusalClass == ProtectedClass::ApplicationSupport);
+	CHECK_EQ(preparations, 0);
+	CHECK_EQ(int(operations.size()), 2);
+	CHECK(operations[0] == Operation::Mkdir);
+	CHECK(operations[1] == Operation::OpenDir);
+	CHECK_EQ(int(fs.readlinkCalls.size()), 1);
+	CHECK_EQ(fs.readlinkCalls.front(), temporaryPath);
+	CHECK(fs.openCalls.empty());
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+}
