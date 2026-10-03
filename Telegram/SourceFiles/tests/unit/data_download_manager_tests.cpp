@@ -20,7 +20,7 @@ using namespace Core::MacProtectedPath;
 
 TEST_CASE(RefusedHistoryEntryWithoutLiveMessageRemainsUnpublished) {
 	const auto protectedPath = u"/Users/alice/Library/Application Support/"_q
-		+ u"Telegram Desktop/tdata/download"_q;
+							   + u"Telegram Desktop/tdata/download"_q;
 	auto downloaded = std::vector<Data::DownloadedId>();
 	downloaded.push_back(Data::DownloadedId{
 		.path = protectedPath,
@@ -33,16 +33,13 @@ TEST_CASE(RefusedHistoryEntryWithoutLiveMessageRemainsUnpublished) {
 		Data::details::GenerateAndNotifyLoadedEntry(
 			entry,
 			[&](Data::DownloadedId &candidate) {
-				refused = !PersistedExternalPath(candidate.path).allowed(
-					Operation::Read,
-					"download-history.generate",
-					[](Operation, const QString &, const char *) {
-						return false;
-					});
+				refused = !PersistedExternalPath(candidate.path)
+							   .allowed(Operation::Read,
+										"download-history.generate",
+										[](Operation, const QString &,
+										   const char *) { return false; });
 			},
-			[&](const Data::DownloadedId *) {
-				published = true;
-			});
+			[&](const Data::DownloadedId *) { published = true; });
 	}
 	CHECK(refused);
 	CHECK(!published);

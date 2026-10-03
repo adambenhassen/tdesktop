@@ -944,20 +944,15 @@ void DownloadManager::resolveRequestsFinished(
 		const auto media = item ? item->media() : nullptr;
 		const auto document = media ? media->document() : nullptr;
 		const auto photo = media ? media->photo() : nullptr;
-		const auto generate =
-			(i->download.type == DownloadType::Document
-				&& (!document || document->id != i->download.objectId))
-			|| (i->download.type == DownloadType::Photo
-				&& (!photo || photo->id != i->download.objectId));
+		const auto generate
+			= (i->download.type == DownloadType::Document
+			   && (!document || document->id != i->download.objectId))
+			  || (i->download.type == DownloadType::Photo
+				  && (!photo || photo->id != i->download.objectId));
 		if (generate) {
 			details::GenerateAndNotifyLoadedEntry(
-				*i,
-				[=](DownloadedId &entry) {
-					generateEntry(session, entry);
-				},
-				[=](const DownloadedId *entry) {
-					_loadedAdded.fire(entry);
-				});
+				*i, [=](DownloadedId &entry) { generateEntry(session, entry); },
+				[=](const DownloadedId *entry) { _loadedAdded.fire(entry); });
 		} else {
 			i->object = std::make_unique<DownloadObject>(DownloadObject{
 				.item = item,

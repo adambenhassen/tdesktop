@@ -68,10 +68,8 @@ struct DownloadedId {
 namespace details {
 
 template <typename Generate, typename Notify>
-void GenerateAndNotifyLoadedEntry(
-		DownloadedId &entry,
-		Generate &&generate,
-		Notify &&notify) {
+void GenerateAndNotifyLoadedEntry(DownloadedId &entry, Generate &&generate,
+								  Notify &&notify) {
 	generate(entry);
 	if (entry.object) {
 		notify(&entry);
