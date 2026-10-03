@@ -430,6 +430,10 @@ RegressionOtherServerKey() {
 			Core::TeagramIconChoice::TPrimary,
 			Core::TeagramIconChoice::MugSignal,
 			Core::TeagramIconChoice::MugGreen,
+			Core::TeagramIconChoice::MugCrimson,
+			Core::TeagramIconChoice::TCrimson,
+			Core::TeagramIconChoice::MugBrown,
+			Core::TeagramIconChoice::TBrown,
 		}) {
 		Core::WriteTeagramIconChoice(settings, choice);
 		auto reloaded = Core::Settings();

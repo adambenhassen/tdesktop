@@ -21,6 +21,10 @@ enum class TeagramIconChoice : int {
 	TNavy = 5,
 	TNight = 6,
 	TPaper = 7,
+	MugCrimson = 8,
+	TCrimson = 9,
+	MugBrown = 10,
+	TBrown = 11,
 };
 
 inline constexpr auto kTeagramIconChoicePreference
@@ -37,6 +41,10 @@ inline constexpr auto kTeagramIconSvgResources = std::array{
 	std::string_view(":/gui/art/teagram-app-icon-t-navy.svg"),
 	std::string_view(":/gui/art/teagram-app-icon-t-night.svg"),
 	std::string_view(":/gui/art/teagram-app-icon-t-paper.svg"),
+	std::string_view(":/gui/art/teagram-app-icon-mug-crimson.svg"),
+	std::string_view(":/gui/art/teagram-app-icon-t-crimson.svg"),
+	std::string_view(":/gui/art/teagram-app-icon-mug-brown.svg"),
+	std::string_view(":/gui/art/teagram-app-icon-t-brown.svg"),
 };
 inline constexpr auto kTeagramIconChoiceCount = static_cast<int>(
 	kTeagramIconSvgResources.size());

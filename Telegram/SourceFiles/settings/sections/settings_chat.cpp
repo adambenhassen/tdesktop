@@ -936,37 +936,59 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 				tr::lng_settings_teagram_icon_mug_signal(tr::now),
 			},
 			std::pair{
-				Core::TeagramIconChoice::MugTea,
-				tr::lng_settings_teagram_icon_mug_tea(tr::now),
-			},
-			std::pair{
-				Core::TeagramIconChoice::MugGreen,
-				tr::lng_settings_teagram_icon_mug_green(tr::now),
-			},
-			std::pair{
-				Core::TeagramIconChoice::MugSky,
-				tr::lng_settings_teagram_icon_mug_sky(tr::now),
-			},
-			std::pair{
 				Core::TeagramIconChoice::TPrimary,
 				tr::lng_settings_teagram_icon_t_primary(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugTea,
+				tr::lng_settings_teagram_icon_mug_tea(tr::now),
 			},
 			std::pair{
 				Core::TeagramIconChoice::TNavy,
 				tr::lng_settings_teagram_icon_t_navy(tr::now),
 			},
 			std::pair{
+				Core::TeagramIconChoice::MugGreen,
+				tr::lng_settings_teagram_icon_mug_green(tr::now),
+			},
+			std::pair{
 				Core::TeagramIconChoice::TNight,
 				tr::lng_settings_teagram_icon_t_night(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugSky,
+				tr::lng_settings_teagram_icon_mug_sky(tr::now),
 			},
 			std::pair{
 				Core::TeagramIconChoice::TPaper,
 				tr::lng_settings_teagram_icon_t_paper(tr::now),
 			},
+			std::pair{
+				Core::TeagramIconChoice::MugCrimson,
+				tr::lng_settings_teagram_icon_mug_crimson(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TCrimson,
+				tr::lng_settings_teagram_icon_t_crimson(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugBrown,
+				tr::lng_settings_teagram_icon_mug_brown(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TBrown,
+				tr::lng_settings_teagram_icon_t_brown(tr::now),
+			},
 		};
 		const auto selected = Core::ReadTeagramIconChoice(
 			Core::App().settings());
-		const auto selectedIndex = static_cast<int>(selected);
+		auto selectedIndex = 0;
+		for (auto index = 0; index != Core::kTeagramIconChoiceCount; ++index) {
+			if (choices[index].first == selected) {
+				selectedIndex = index;
+				break;
+			}
+		}
 		const auto group = std::make_shared<Ui::RadiobuttonGroup>(
 			selectedIndex);
 		auto wrap = object_ptr<Ui::VerticalLayout>(ctx.container.get());
@@ -1023,12 +1045,15 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 		scrollRaw->setOwnedWidget(std::move(row));
 		inner->add(std::move(scroll), st::settingsSendTypePadding);
 		group->setChangedCallback([=](int value) {
+			if (value < 0 || value >= Core::kTeagramIconChoiceCount) {
+				return;
+			}
 			for (auto index = 0; index != Core::kTeagramIconChoiceCount; ++index) {
 				previews[index]->setSelected(index == value);
 			}
 			Core::WriteTeagramIconChoice(
 				Core::App().settings(),
-				static_cast<Core::TeagramIconChoice>(value));
+				choices[value].first);
 			Core::App().refreshApplicationIcon();
 		});
 		return SectionBuilder::WidgetToAdd{ .widget = std::move(wrap) };
@@ -1047,6 +1072,10 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 				u"night"_q,
 				u"paper"_q,
 				u"primary"_q,
+				u"crimson"_q,
+				u"brown"_q,
+				u"багряний"_q,
+				u"брунатний"_q,
 			},
 		};
 	});

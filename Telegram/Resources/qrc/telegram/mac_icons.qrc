@@ -11,5 +11,9 @@
     <file alias="art/teagram-app-icon-t-navy.svg">../../art/teagram-app-icon-t-navy.svg</file>
     <file alias="art/teagram-app-icon-t-night.svg">../../art/teagram-app-icon-t-night.svg</file>
     <file alias="art/teagram-app-icon-t-paper.svg">../../art/teagram-app-icon-t-paper.svg</file>
+    <file alias="art/teagram-app-icon-mug-crimson.svg">../../art/teagram-app-icon-mug-crimson.svg</file>
+    <file alias="art/teagram-app-icon-t-crimson.svg">../../art/teagram-app-icon-t-crimson.svg</file>
+    <file alias="art/teagram-app-icon-mug-brown.svg">../../art/teagram-app-icon-mug-brown.svg</file>
+    <file alias="art/teagram-app-icon-t-brown.svg">../../art/teagram-app-icon-t-brown.svg</file>
   </qresource>
 </RCC>
