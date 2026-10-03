@@ -18,6 +18,7 @@ using Data::details::CanMarkUserLoadedNormally;
 using Data::details::CanAddBasicChatAdmins;
 using Data::details::CanManageBasicChatCall;
 using Data::details::BasicChatAdminCapabilitiesFor;
+using Data::details::BasicChatAdminRightsFor;
 using Data::details::BasicChatRole;
 
 auto ResolveForAccount(
@@ -56,6 +57,14 @@ TEST_CASE(CustomServerBasicGroupAdminEditorIsRoleOnly) {
 	CHECK(normal.canEditRights);
 	CHECK(normal.canSetRank);
 	CHECK(normal.canTransferOwnership);
+}
+
+TEST_CASE(BasicGroupAdminRightsMapOnlyForOfficialServer) {
+	constexpr auto defaultRights = 0x25u;
+	CHECK(BasicChatAdminRightsFor(true, false, defaultRights) == defaultRights);
+	CHECK(BasicChatAdminRightsFor(false, false, defaultRights) == 0u);
+	CHECK(BasicChatAdminRightsFor(true, true, defaultRights) == 0u);
+	CHECK(BasicChatAdminRightsFor(false, true, defaultRights) == 0u);
 }
 
 TEST_CASE(BasicGroupCallManagementRespectsServerAdminRights) {

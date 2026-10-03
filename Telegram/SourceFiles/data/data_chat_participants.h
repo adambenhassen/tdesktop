@@ -45,6 +45,14 @@ BasicChatAdminCapabilitiesFor(bool customServer) {
 	};
 }
 
+template <typename Rights>
+[[nodiscard]] inline constexpr Rights BasicChatAdminRightsFor(
+		bool isAdmin,
+		bool customServer,
+		Rights defaultRights) {
+	return (isAdmin && !customServer) ? defaultRights : Rights();
+}
+
 [[nodiscard]] inline constexpr bool CanManageBasicChatCall(
 		BasicChatRole role,
 		bool customServer) {
