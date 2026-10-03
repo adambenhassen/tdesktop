@@ -200,8 +200,7 @@ void ShowInFolder(const QString &filepath) {
 	crl::on_main([=] {
 		Ui::PreventDelayedActivation();
 		(void)Core::MacProtectedPath::DispatchExternalPathIfAllowed(
-			Core::MacProtectedPath::Operation::Open,
-			filepath,
+			Core::MacProtectedPath::Operation::Open, filepath,
 			"file.reveal-in-folder",
 			[&] { base::Platform::ShowInFolder(filepath); });
 	});

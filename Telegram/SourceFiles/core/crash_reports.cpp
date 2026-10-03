@@ -370,8 +370,7 @@ void StartCatching() {
 #else // MAC_USE_BREAKPAD
 	crashpad::CrashpadClient crashpad_client;
 	const auto handlerPath
-		= cExeDir() + cExeName()
-			+ u"/Contents/Helpers/crashpad_handler"_q;
+		= cExeDir() + cExeName() + u"/Contents/Helpers/crashpad_handler"_q;
 	if (!Core::MacProtectedPath::CheckPath(
 			Core::MacProtectedPath::Operation::Read, handlerPath, Q_FUNC_INFO)
 		|| !Core::MacProtectedPath::CheckPath(

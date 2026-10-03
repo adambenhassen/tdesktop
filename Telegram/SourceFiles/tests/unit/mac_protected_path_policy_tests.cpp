@@ -1420,7 +1420,8 @@ TEST_CASE(LocalFileUrlsExposeDecodedPathsForHandoffChecks) {
 		u"file:///Users/alice/Library/Application%20Support/Telegram%20Desktop/tdata/x"_q);
 	CHECK(local.has_value());
 	if (local) {
-		CHECK_EQ(*local,
+		CHECK_EQ(
+			*local,
 			u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q);
 	}
 	CHECK(!LocalFilePathFromUrl(u"https://example.com/file"_q));
@@ -1438,13 +1439,10 @@ TEST_CASE(ExternalPathHandoffRefusesBeforeDispatchAndAllowsDownloads) {
 		CHECK(!DispatchExternalPathIfAllowed(
 			Operation::Open,
 			u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q,
-			"unit.os-handoff",
-			[&] { ++dispatches; }));
+			"unit.os-handoff", [&] { ++dispatches; }));
 		CHECK_EQ(dispatches, 0);
 		CHECK(DispatchExternalPathIfAllowed(
-			Operation::Open,
-			u"/Users/alice/Downloads/x"_q,
-			"unit.os-handoff",
+			Operation::Open, u"/Users/alice/Downloads/x"_q, "unit.os-handoff",
 			[&] { ++dispatches; }));
 	}
 	CHECK_EQ(dispatches, 1);
@@ -1456,22 +1454,21 @@ TEST_CASE(CustomIconSymlinkIntoProtectedPathNeverReachesHelper) {
 	auto policy = TestPolicy(fs);
 	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
 	const auto source = QByteArray("/Users/alice/Downloads/icon.icns");
-	fs.entries.emplace(
-		source,
-		LstatResult{ .type = FileType::Symlink, .error = FileError::None });
+	fs.entries.emplace(source, LstatResult{.type = FileType::Symlink,
+										   .error = FileError::None});
 	fs.links.emplace(
 		source,
 		ReadlinkResult{
-			.target = "../Library/Application Support/Telegram Desktop/tdata/icon.icns",
-			.error = FileError::None });
+			.target
+			= "../Library/Application Support/Telegram Desktop/tdata/icon.icns",
+			.error = FileError::None});
 	const auto checker = CheckerFor(policy);
 	auto helpers = 0;
 	{
 		ScopedExternalPathCheckerForTesting scope(checker);
-		CHECK(!DispatchCustomAppIconIfAllowed(
-			QString::fromUtf8(source),
-			"unit.custom-icon.source",
-			[&] { ++helpers; }));
+		CHECK(!DispatchCustomAppIconIfAllowed(QString::fromUtf8(source),
+											  "unit.custom-icon.source",
+											  [&] { ++helpers; }));
 	}
 	CHECK_EQ(helpers, 0);
 	for (const auto &call : fs.lstatCalls) {
@@ -1483,31 +1480,27 @@ TEST_CASE(CustomIconSymlinkIntoProtectedPathNeverReachesHelper) {
 }
 
 TEST_CASE(CustomIconProtectedDestinationAndTemporaryDirectoryStopHelper) {
-	for (const auto denyTemporaryDirectory : { false, true }) {
+	for (const auto denyTemporaryDirectory : {false, true}) {
 		auto denied = false;
-		const auto checker = [&](Operation operation, const QString &path,
-								 const char *) {
-			if (denyTemporaryDirectory
-				&& path == QDir::tempPath()
-				&& operation == Operation::Write) {
-				denied = true;
-				return false;
-			}
-			if (!denyTemporaryDirectory
-				&& path.endsWith(u"/Icon\r"_q)
-				&& operation == Operation::Write) {
-				denied = true;
-				return false;
-			}
-			return true;
-		};
+		const auto checker
+			= [&](Operation operation, const QString &path, const char *) {
+				  if (denyTemporaryDirectory && path == QDir::tempPath()
+					  && operation == Operation::Write) {
+					  denied = true;
+					  return false;
+				  }
+				  if (!denyTemporaryDirectory && path.endsWith(u"/Icon\r"_q)
+					  && operation == Operation::Write) {
+					  denied = true;
+					  return false;
+				  }
+				  return true;
+			  };
 		auto helpers = 0;
 		{
 			ScopedExternalPathCheckerForTesting scope(checker);
 			CHECK(!DispatchCustomAppIconIfAllowed(
-				QString(),
-				"unit.custom-icon.destination",
-				[&] { ++helpers; }));
+				QString(), "unit.custom-icon.destination", [&] { ++helpers; }));
 		}
 		CHECK(denied);
 		CHECK_EQ(helpers, 0);

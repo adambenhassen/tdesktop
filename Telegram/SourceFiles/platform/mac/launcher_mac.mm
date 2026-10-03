@@ -45,7 +45,13 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	// We just relaunch our app.
 	if (action == UpdaterLaunch::JustRelaunch) {
 		NSDictionary *conf = [NSDictionary dictionaryWithObject:[NSArray array] forKey:NSWorkspaceLaunchConfigurationArguments];
-		[[NSWorkspace sharedWorkspace] launchApplicationAtURL:[NSURL fileURLWithPath:Q2NSString(applicationPath)] options:NSWorkspaceLaunchAsync | NSWorkspaceLaunchNewInstance configuration:conf error:0];
+		[[NSWorkspace sharedWorkspace]
+			launchApplicationAtURL:[NSURL fileURLWithPath:Q2NSString(
+															  applicationPath)]
+						   options:NSWorkspaceLaunchAsync
+								   | NSWorkspaceLaunchNewInstance
+					 configuration:conf
+							 error:0];
 		return true;
 	}
 #endif // OS_MAC_STORE

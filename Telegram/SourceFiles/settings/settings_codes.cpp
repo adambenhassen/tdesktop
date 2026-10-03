@@ -280,12 +280,11 @@ auto GenerateCodes() {
 			auto success = false;
 			const auto dispatched
 				= Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
-					path,
-					"settings.custom-icon",
-					[&] {
-						success = path.isEmpty()
-							? base::ClearCustomAppIcon()
-							: base::SetCustomAppIcon(path).has_value();
+					path, "settings.custom-icon", [&] {
+						success
+							= path.isEmpty()
+								  ? base::ClearCustomAppIcon()
+								  : base::SetCustomAppIcon(path).has_value();
 					});
 			success = dispatched && success;
 			Ui::Toast::Show(success

@@ -285,7 +285,7 @@ bool InitializeProfile() {
 	}
 	if (!qputenv("TMPDIR", QFile::encodeName(temporaryPath))
 		|| QDir::cleanPath(QDir::tempPath())
-			!= QDir::cleanPath(temporaryPath)) {
+			   != QDir::cleanPath(temporaryPath)) {
 		ReportInvalidInitialization(u"profile.helper-temp"_q);
 		return false;
 	}

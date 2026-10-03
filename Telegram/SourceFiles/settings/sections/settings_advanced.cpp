@@ -606,8 +606,7 @@ void BuildSystemIntegrationSection(SectionBuilder &builder) {
 	const auto roundIconEnabled = [=] {
 		auto digest = std::optional<uint64>();
 		(void)Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
-			QString(),
-			"settings.round-icon.state",
+			QString(), "settings.round-icon.state",
 			[&] { digest = base::Platform::CurrentCustomAppIconDigest(); });
 		return digest && (settings->macRoundIconDigest() == digest);
 	};
@@ -618,31 +617,32 @@ void BuildSystemIntegrationSection(SectionBuilder &builder) {
 		.keywords = { u"icon"_q, u"round"_q, u"dock"_q },
 	});
 	if (roundIcon) {
-		roundIcon->checkedChanges(
-		) | rpl::filter([=](bool checked) {
+		roundIcon->checkedChanges() | rpl::filter([=](bool checked) {
 			return (checked != roundIconEnabled());
-		}) | rpl::on_next([=](bool checked) {
-			auto digest = std::optional<uint64>();
-			const auto allowed
-				= Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
-					QString(),
-					"settings.round-icon",
-					[&] {
-						if (checked) {
-							digest = base::Platform::SetCustomAppIcon(
-								IconMacRound());
-						} else {
-							base::Platform::ClearCustomAppIcon();
-						}
-					});
-			if (!allowed) {
-				return;
-			}
-			Window::OverrideApplicationIcon(checked ? IconMacRound() : QImage());
-			Core::App().refreshApplicationIcon();
-			settings->setMacRoundIconDigest(digest);
-			Core::App().saveSettings();
-		}, roundIcon->lifetime());
+		})
+			| rpl::on_next(
+				[=](bool checked) {
+					auto digest = std::optional<uint64>();
+					const auto allowed = Core::MacProtectedPath::
+						DispatchCustomAppIconIfAllowed(
+							QString(), "settings.round-icon", [&] {
+								if (checked) {
+									digest = base::Platform::SetCustomAppIcon(
+										IconMacRound());
+								} else {
+									base::Platform::ClearCustomAppIcon();
+								}
+							});
+					if (!allowed) {
+						return;
+					}
+					Window::OverrideApplicationIcon(checked ? IconMacRound()
+															: QImage());
+					Core::App().refreshApplicationIcon();
+					settings->setMacRoundIconDigest(digest);
+					Core::App().saveSettings();
+				},
+				roundIcon->lifetime());
 	}
 #endif // OS_MAC_STORE
 #elif defined Q_OS_WIN // Q_OS_MAC
@@ -1811,39 +1811,38 @@ void SetupSystemIntegrationContent(
 	const auto enabled = [=] {
 		auto digest = std::optional<uint64>();
 		(void)Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
-			QString(),
-			"settings.round-icon.state",
+			QString(), "settings.round-icon.state",
 			[&] { digest = base::Platform::CurrentCustomAppIconDigest(); });
 		return digest && (settings->macRoundIconDigest() == digest);
 	};
 	const auto roundIcon = addCheckbox(
 		tr::lng_settings_mac_round_icon(),
 		enabled());
-	roundIcon->checkedChanges(
-	) | rpl::filter([=](bool checked) {
-		return (checked != enabled());
-	}) | rpl::on_next([=](bool checked) {
-		auto digest = std::optional<uint64>();
-		const auto allowed
-			= Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
-				QString(),
-				"settings.round-icon",
-				[&] {
-					if (checked) {
-						digest = base::Platform::SetCustomAppIcon(
-							IconMacRound());
-					} else {
-						base::Platform::ClearCustomAppIcon();
-					}
-				});
-		if (!allowed) {
-			return;
-		}
-		Window::OverrideApplicationIcon(checked ? IconMacRound() : QImage());
-		Core::App().refreshApplicationIcon();
-		settings->setMacRoundIconDigest(digest);
-		Core::App().saveSettings();
-	}, roundIcon->lifetime());
+	roundIcon->checkedChanges()
+		| rpl::filter([=](bool checked) { return (checked != enabled()); })
+		| rpl::on_next(
+			[=](bool checked) {
+				auto digest = std::optional<uint64>();
+				const auto allowed
+					= Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
+						QString(), "settings.round-icon", [&] {
+							if (checked) {
+								digest = base::Platform::SetCustomAppIcon(
+									IconMacRound());
+							} else {
+								base::Platform::ClearCustomAppIcon();
+							}
+						});
+				if (!allowed) {
+					return;
+				}
+				Window::OverrideApplicationIcon(checked ? IconMacRound()
+														: QImage());
+				Core::App().refreshApplicationIcon();
+				settings->setMacRoundIconDigest(digest);
+				Core::App().saveSettings();
+			},
+			roundIcon->lifetime());
 #endif // OS_MAC_STORE
 #elif defined Q_OS_WIN // Q_OS_MAC
 	using Behavior = Core::Settings::CloseBehavior;

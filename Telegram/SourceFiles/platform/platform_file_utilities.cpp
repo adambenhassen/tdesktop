@@ -16,10 +16,8 @@ void UnsafeOpenUrl(const QString &url) {
 	const auto localPath = Core::MacProtectedPath::LocalFilePathFromUrl(url);
 	if (localPath) {
 		(void)Core::MacProtectedPath::DispatchExternalPathIfAllowed(
-			Core::MacProtectedPath::Operation::Open,
-			*localPath,
-			"platform.open-url",
-			[&] {
+			Core::MacProtectedPath::Operation::Open, *localPath,
+			"platform.open-url", [&] {
 				if (!Test::BlockLaunch(u"UnsafeOpenUrl"_q, url)) {
 					Unfused::UnsafeOpenUrl(url);
 				}
@@ -42,13 +40,11 @@ bool UnsafeShowOpenWithDropdown(const QString &filepath) {
 	auto result = false;
 	const auto dispatched
 		= Core::MacProtectedPath::DispatchExternalPathIfAllowed(
-			Core::MacProtectedPath::Operation::Open,
-			filepath,
-			"platform.open-with-dropdown",
-			[&] {
-				result = Test::BlockLaunch(
-					u"UnsafeShowOpenWithDropdown"_q, filepath)
-					|| Unfused::UnsafeShowOpenWithDropdown(filepath);
+			Core::MacProtectedPath::Operation::Open, filepath,
+			"platform.open-with-dropdown", [&] {
+				result = Test::BlockLaunch(u"UnsafeShowOpenWithDropdown"_q,
+										   filepath)
+						 || Unfused::UnsafeShowOpenWithDropdown(filepath);
 			});
 	return !dispatched || result;
 }
@@ -57,21 +53,17 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 	auto result = false;
 	const auto dispatched
 		= Core::MacProtectedPath::DispatchExternalPathIfAllowed(
-			Core::MacProtectedPath::Operation::Open,
-			filepath,
-			"platform.open-with",
-			[&] {
+			Core::MacProtectedPath::Operation::Open, filepath,
+			"platform.open-with", [&] {
 				result = Test::BlockLaunch(u"UnsafeShowOpenWith"_q, filepath)
-					|| Unfused::UnsafeShowOpenWith(filepath);
+						 || Unfused::UnsafeShowOpenWith(filepath);
 			});
 	return !dispatched || result;
 }
 
 void UnsafeLaunch(const QString &filepath) {
 	(void)Core::MacProtectedPath::DispatchExternalPathIfAllowed(
-		Core::MacProtectedPath::Operation::Open,
-		filepath,
-		"platform.launch",
+		Core::MacProtectedPath::Operation::Open, filepath, "platform.launch",
 		[&] {
 			if (!Test::BlockLaunch(u"UnsafeLaunch"_q, filepath)) {
 				Unfused::UnsafeLaunch(filepath);

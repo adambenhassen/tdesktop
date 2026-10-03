@@ -89,8 +89,7 @@ QString strNeedToRefresh2() {
 	NSString *path = [url path];
 	if (!path
 		|| !Core::MacProtectedPath::CheckExternalPathForUse(
-			Core::MacProtectedPath::Operation::Read,
-			NS2QString(path),
+			Core::MacProtectedPath::Operation::Read, NS2QString(path),
 			"mac.open-with.application-info")) {
 		*bundle = *name = *version = nil;
 		*icon = nil;
@@ -119,8 +118,7 @@ QString strNeedToRefresh2() {
 	toOpen = [file retain];
 	if (self = [super init]) {
 		if (!Core::MacProtectedPath::CheckExternalPathForUse(
-				Core::MacProtectedPath::Operation::Open,
-				NS2QString(file),
+				Core::MacProtectedPath::Operation::Open, NS2QString(file),
 				"mac.open-with.lookup-source")) {
 			return self;
 		}
@@ -233,15 +231,13 @@ QString strNeedToRefresh2() {
 		const auto sourcePath = NS2QString(toOpen);
 		const auto applicationPath = NS2QString([url path]);
 		if (Core::MacProtectedPath::CheckExternalPathForUse(
-				Core::MacProtectedPath::Operation::Read,
-				sourcePath,
+				Core::MacProtectedPath::Operation::Read, sourcePath,
 				"mac.open-with.dispatch-source")
 			&& Core::MacProtectedPath::CheckExternalPathForUse(
-				Core::MacProtectedPath::Operation::Read,
-				applicationPath,
+				Core::MacProtectedPath::Operation::Read, applicationPath,
 				"mac.open-with.dispatch-app")) {
-			[[NSWorkspace sharedWorkspace]
-				openFile:toOpen withApplication:[url path]];
+			[[NSWorkspace sharedWorkspace] openFile:toOpen
+									withApplication:[url path]];
 		}
 	} else if (!Platform::File::UnsafeShowOpenWith(NS2QString(toOpen))) {
 		Platform::File::UnsafeLaunch(NS2QString(toOpen));
@@ -330,8 +326,7 @@ QString strNeedToRefresh2() {
 	NSString *path = [url path];
 	if (!path
 		|| !Core::MacProtectedPath::CheckExternalPathForUse(
-			Core::MacProtectedPath::Operation::Read,
-			NS2QString(path),
+			Core::MacProtectedPath::Operation::Read, NS2QString(path),
 			"mac.open-with.panel-candidate")) {
 		return NO;
 	}
@@ -445,8 +440,7 @@ bool UnsafeShowOpenWithDropdown(const QString &filepath) {
 
 bool UnsafeShowOpenWith(const QString &filepath) {
 	if (!Core::MacProtectedPath::CheckExternalPathForUse(
-			Core::MacProtectedPath::Operation::Open,
-			filepath,
+			Core::MacProtectedPath::Operation::Open, filepath,
 			"mac.open-with.panel-source")) {
 		return true;
 	}
@@ -564,32 +558,32 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 					if (path
 						&& Core::MacProtectedPath::CheckExternalPathForUse(
 							Core::MacProtectedPath::Operation::Read,
-							NS2QString(file),
-							"mac.open-with.panel-source")
+							NS2QString(file), "mac.open-with.panel-source")
 						&& Core::MacProtectedPath::CheckExternalPathForUse(
 							Core::MacProtectedPath::Operation::Read,
-							NS2QString(path),
-							"mac.open-with.panel-app")) {
+							NS2QString(path), "mac.open-with.panel-app")) {
 						if ([button state] == NSOnState) {
-							NSArray *UTIs = (NSArray *)UTTypeCreateAllIdentifiersForTag(
-								kUTTagClassFilenameExtension,
-								(CFStringRef)ext,
-								nil);
+							NSArray *UTIs
+								= (NSArray *)UTTypeCreateAllIdentifiersForTag(
+									kUTTagClassFilenameExtension,
+									(CFStringRef)ext, nil);
 							for (NSString *UTI in UTIs) {
-								OSStatus result = LSSetDefaultRoleHandlerForContentType(
-									(CFStringRef)UTI,
-									kLSRolesAll,
-									(CFStringRef)[[NSBundle bundleWithPath:path]
-										bundleIdentifier]);
-								DEBUG_LOG(("App Info: set default handler for '%1' UTI result: %2")
-									.arg(NS2QString(UTI))
-									.arg(result));
+								OSStatus result
+									= LSSetDefaultRoleHandlerForContentType(
+										(CFStringRef)UTI, kLSRolesAll,
+										(CFStringRef)[[NSBundle
+											bundleWithPath:
+												path] bundleIdentifier]);
+								DEBUG_LOG(("App Info: set default handler for "
+										   "'%1' UTI result: %2")
+											  .arg(NS2QString(UTI))
+											  .arg(result));
 							}
 
 							[UTIs release];
 						}
-						[[NSWorkspace sharedWorkspace]
-							openFile:file withApplication:[app path]];
+						[[NSWorkspace sharedWorkspace] openFile:file
+												withApplication:[app path]];
 					}
 				}
 			}
@@ -605,8 +599,7 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 	}
 	@catch (NSException *exception) {
 		if (Core::MacProtectedPath::CheckExternalPathForUse(
-				Core::MacProtectedPath::Operation::Read,
-				NS2QString(file),
+				Core::MacProtectedPath::Operation::Read, NS2QString(file),
 				"mac.open-with.exception-fallback")) {
 			[[NSWorkspace sharedWorkspace] openFile:file];
 		}
