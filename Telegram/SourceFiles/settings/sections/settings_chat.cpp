@@ -50,6 +50,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/vertical_list.h"
 #include "ui/ui_utility.h"
 #include "ui/widgets/menu/menu_add_action_callback.h"
+#include "ui/rp_widget.h"
 #include "history/view/history_view_quick_action.h"
 #include "lang/lang_keys.h"
 #include "lottie/lottie_icon.h"
@@ -90,9 +91,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 
 #include <QAction>
-#include <QtGui/QImage>
+#include <QtGui/QPainter>
 #include <QtGui/QPixmap>
-#include <QtWidgets/QLabel>
 
 namespace Settings {
 namespace {
@@ -870,6 +870,30 @@ void BuildThemeSettingsSection(SectionBuilder &builder) {
 }
 
 #if defined Q_OS_MAC
+class TeagramIconPreview final : public Ui::RpWidget {
+public:
+	TeagramIconPreview(
+			QWidget *parent,
+			const QString &path,
+			const QString &accessibleName)
+	: Ui::RpWidget(parent)
+	, _pixmap(path) {
+		setFixedSize(st::teagramAppIconPreviewSize);
+		setAccessibleName(accessibleName);
+	}
+
+protected:
+	void paintEvent(QPaintEvent *) override {
+		auto p = QPainter(this);
+		p.setRenderHint(QPainter::SmoothPixmapTransform);
+		p.drawPixmap(rect(), _pixmap);
+	}
+
+private:
+	QPixmap _pixmap;
+
+};
+
 void BuildTeagramIconSection(SectionBuilder &builder) {
 	builder.add([](const WidgetContext &ctx) {
 		const auto selected = Core::ReadTeagramIconChoice(
@@ -888,15 +912,9 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 				int value,
 				const QString &title,
 				const QString &path) {
-			auto preview = object_ptr<QLabel>(inner);
-			preview->setAlignment(Qt::AlignCenter);
-			preview->setAccessibleName(title);
-			preview->setFixedSize(st::teagramAppIconPreviewSize);
-			preview->setPixmap(QPixmap::fromImage(QImage(path).scaled(
-				st::teagramAppIconPreviewSize,
-				Qt::KeepAspectRatio,
-				Qt::SmoothTransformation)));
-			inner->add(std::move(preview), st::settingsSendTypePadding);
+			inner->add(
+				object_ptr<TeagramIconPreview>(inner, path, title),
+				st::settingsSendTypePadding);
 			inner->add(
 				object_ptr<Ui::Radiobutton>(
 					inner,
