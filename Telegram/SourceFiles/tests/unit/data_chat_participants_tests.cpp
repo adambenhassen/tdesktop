@@ -17,6 +17,7 @@ using Data::details::ResolveChatParticipants;
 using Data::details::CanMarkUserLoadedNormally;
 using Data::details::CanAddBasicChatAdmins;
 using Data::details::CanManageBasicChatCall;
+using Data::details::BasicChatAdminRoleForSave;
 using Data::details::BasicChatAdminCapabilitiesFor;
 using Data::details::BasicChatAdminRightsFor;
 using Data::details::BasicChatRole;
@@ -57,6 +58,14 @@ TEST_CASE(CustomServerBasicGroupAdminEditorIsRoleOnly) {
 	CHECK(normal.canEditRights);
 	CHECK(normal.canSetRank);
 	CHECK(normal.canTransferOwnership);
+}
+
+TEST_CASE(CustomServerAdminSaveDemotesAnExistingAdmin) {
+	CHECK(!BasicChatAdminRoleForSave(true));
+}
+
+TEST_CASE(CustomServerAdminSavePromotesAMember) {
+	CHECK(BasicChatAdminRoleForSave(false));
 }
 
 TEST_CASE(BasicGroupAdminRightsMapOnlyForOfficialServer) {

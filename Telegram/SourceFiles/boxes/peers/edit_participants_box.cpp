@@ -410,7 +410,8 @@ Fn<void(
 				}
 			};
 			if (!capabilities.canEditRights) {
-				saveChatAdmin(strippedNewRights.flags != 0);
+				saveChatAdmin(Data::details::BasicChatAdminRoleForSave(
+					chat->admins.contains(user)));
 			} else if (strippedNewRights.flags
 				== chat->defaultAdminRights(user).flags) {
 				saveChatAdmin(true);
