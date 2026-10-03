@@ -544,7 +544,7 @@ TEST_CASE(SettingsExternalPathsSurviveAllowedRestartAndRecheckSymlinks) {
 	const auto allowedSoundPath = sound;
 	Core::SettingsExternalPaths original;
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		original.setDownloadPath(allowedDownloadPath);
 		original.setSoundOverride(u"notification"_q, allowedSoundPath);
 		CHECK_EQ(original.downloadPath(), allowedDownloadPath);
@@ -554,7 +554,7 @@ TEST_CASE(SettingsExternalPathsSurviveAllowedRestartAndRecheckSymlinks) {
 	const auto serialized = SerializeSettingsExternalPaths(original);
 	auto restarted = Core::SettingsExternalPaths();
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		ReadSettingsExternalPaths(serialized, restarted);
 		CHECK_EQ(restarted.downloadPath(), allowedDownloadPath);
 		CHECK_EQ(restarted.getSoundPath(u"notification"_q), allowedSoundPath);
@@ -564,7 +564,7 @@ TEST_CASE(SettingsExternalPathsSurviveAllowedRestartAndRecheckSymlinks) {
 		"/Users/alice/Library/Containers/org.telegram.desktop/Data/fixture");
 	ReplaceWithProtectedTarget(fs, parent, replacement, protectedTarget);
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		CHECK(restarted.downloadPath().isEmpty());
 		CHECK_EQ(restarted.getSoundPath(u"notification"_q),
 				 u":/sounds/notification.mp3"_q);
@@ -599,7 +599,7 @@ TEST_CASE(SettingsExternalPathsPreserveRefusedSerializedValues) {
 							"Desktop/tdata/refused");
 	auto serialized = QByteArray();
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		auto loaded = Core::SettingsExternalPaths();
 		loaded.setDownloadPathFromSerialized(refused);
 		auto sounds = base::flat_map<QString, QString>();
@@ -618,7 +618,7 @@ TEST_CASE(SettingsExternalPathsPreserveRefusedSerializedValues) {
 	}
 	auto restarted = Core::SettingsExternalPaths();
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		ReadSettingsExternalPaths(serialized, restarted);
 		CHECK(restarted.downloadPath().isEmpty());
 		CHECK_EQ(restarted.downloadPathStored(), refused);
@@ -657,7 +657,7 @@ TEST_CASE(FileLocationSurvivesRestartAndRefusesReplacedSymlink) {
 	QString storedPath;
 	auto restarted = Core::FileLocation();
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		auto beforeRestart = Core::FileLocation(filePath);
 		CHECK_EQ(beforeRestart.name(), filePath);
 		storedPath = beforeRestart.serializedName();
@@ -668,7 +668,7 @@ TEST_CASE(FileLocationSurvivesRestartAndRefusesReplacedSymlink) {
 		stream << storedPath;
 	}
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		auto restartedPath = QString();
 		QDataStream stream(serialized);
 		stream >> restartedPath;
@@ -682,7 +682,7 @@ TEST_CASE(FileLocationSurvivesRestartAndRefusesReplacedSymlink) {
 		fs, parent, replacement,
 		"/Users/alice/Library/Group Containers/telegramd/fixture");
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		CHECK(restarted.name().isEmpty());
 		CHECK(!restarted.check());
 		CHECK_EQ(restarted.serializedName(), filePath);
@@ -724,7 +724,7 @@ TEST_CASE(PersistedThemeRechecksPathAfterRestartAndSymlinkReplacement) {
 	auto checker = CheckerFor(policy);
 	auto serialized = QByteArray();
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		auto original = Window::Theme::Object();
 		original.content = "serialized theme bytes";
 		original.pathAbsolute = themePath;
@@ -754,7 +754,7 @@ TEST_CASE(PersistedThemeRechecksPathAfterRestartAndSymlinkReplacement) {
 		return Storage::details::LoadThemeFileContent(restored);
 	};
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		const auto loaded = loadAfterRestart();
 		CHECK(!loaded.refusedPath);
 		CHECK(loaded.contentChanged);
@@ -764,7 +764,7 @@ TEST_CASE(PersistedThemeRechecksPathAfterRestartAndSymlinkReplacement) {
 		fs, parent, replacement,
 		"/Users/alice/Library/Application Support/Telegram Desktop/themes");
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		const auto refused = loadAfterRestart();
 		CHECK(refused.refusedPath);
 		CHECK(!refused.contentChanged);
@@ -796,7 +796,7 @@ TEST_CASE(CancelledDownloadDoesNotUnlinkReplacedProtectedTarget) {
 	auto checker = CheckerFor(policy);
 	auto output = QFile(destination);
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		CHECK(OpenExternalFile(output, QIODevice::WriteOnly, Operation::Write,
 							   "file-loader.output-open"));
 		const auto partial = QByteArray("partial download bytes");
@@ -807,7 +807,7 @@ TEST_CASE(CancelledDownloadDoesNotUnlinkReplacedProtectedTarget) {
 		fs, parent, replacement,
 		"/Users/alice/Library/Application Support/Telegram Desktop/downloads");
 	{
-		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		Core::MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
 		CHECK(!RemoveExternalFile(output, "file-loader.cancel-remove"));
 	}
 	auto sentinel = QFile(replacement + u"/partial.bin"_q);
