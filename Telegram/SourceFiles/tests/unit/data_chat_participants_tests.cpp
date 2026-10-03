@@ -60,12 +60,10 @@ TEST_CASE(CustomServerBasicGroupAdminEditorIsRoleOnly) {
 	CHECK(normal.canTransferOwnership);
 }
 
-TEST_CASE(CustomServerAdminSaveDemotesAnExistingAdmin) {
-	CHECK(!BasicChatAdminRoleForSave(true));
-}
-
-TEST_CASE(CustomServerAdminSavePromotesAMember) {
-	CHECK(BasicChatAdminRoleForSave(false));
+TEST_CASE(CustomServerAdminSaveUsesSelectedRights) {
+	constexpr auto defaultAdminRights = 0x25u;
+	CHECK(BasicChatAdminRoleForSave(defaultAdminRights));
+	CHECK(!BasicChatAdminRoleForSave(0u));
 }
 
 TEST_CASE(BasicGroupAdminRightsMapOnlyForOfficialServer) {

@@ -411,7 +411,7 @@ Fn<void(
 			};
 			if (!capabilities.canEditRights) {
 				saveChatAdmin(Data::details::BasicChatAdminRoleForSave(
-					chat->admins.contains(user)));
+					strippedNewRights.flags));
 			} else if (strippedNewRights.flags
 				== chat->defaultAdminRights(user).flags) {
 				saveChatAdmin(true);

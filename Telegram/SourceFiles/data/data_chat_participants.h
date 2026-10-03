@@ -45,9 +45,10 @@ BasicChatAdminCapabilitiesFor(bool customServer) {
 	};
 }
 
+template <typename Rights>
 [[nodiscard]] inline constexpr bool BasicChatAdminRoleForSave(
-		bool currentlyAdmin) {
-	return !currentlyAdmin;
+		Rights selectedRights) {
+	return selectedRights != Rights();
 }
 
 template <typename Rights>
