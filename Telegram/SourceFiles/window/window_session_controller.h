@@ -335,6 +335,7 @@ public:
 	base::weak_ptr<Ui::Toast::Instance> showToast(
 		const QString &text,
 		crl::time duration = 0);
+	void showFeatureUnavailableOnServerToast();
 
 	[[nodiscard]] virtual std::shared_ptr<ChatHelpers::Show> uiShow();
 

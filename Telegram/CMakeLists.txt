@@ -1441,6 +1441,7 @@ PRIVATE
     main/main_domain.h
     main/main_session.cpp
     main/main_session.h
+    main/session_feature_support.h
     main/main_session_settings.cpp
     main/main_session_settings.h
     main/session/send_as_peers.cpp

@@ -130,6 +130,14 @@ public:
 	[[nodiscard]] rpl::producer<bool> premiumPossibleValue() const;
 	[[nodiscard]] bool premiumBadgesShown() const;
 	[[nodiscard]] bool premiumCanBuy() const;
+	[[nodiscard]] bool callsSupported() const;
+	[[nodiscard]] bool botAppsSupported() const;
+	[[nodiscard]] bool paidFeaturesSupported() const;
+	[[nodiscard]] bool storiesSupported() const;
+	[[nodiscard]] bool exportSupported() const;
+	[[nodiscard]] bool passportSupported() const;
+	[[nodiscard]] bool aiComposeSupported() const;
+	[[nodiscard]] bool serverTranslationSupported() const;
 
 	[[nodiscard]] bool isTestMode() const;
 	[[nodiscard]] uint64 uniqueId() const; // userId() with TestDC shift.

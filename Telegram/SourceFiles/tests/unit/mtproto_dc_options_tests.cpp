@@ -8,12 +8,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "tests/unit/unit_test.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <iterator>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "main/session_feature_support.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/connection_server_resolving.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -1508,6 +1510,47 @@ TEST_CASE(BlockedConfigRefusesStoredOptions) {
 	CHECK(blocked.blocked());
 	CHECK(!blocked.hasCustomServer());
 	CHECK(blocked.refusesProductionFallback());
+}
+
+TEST_CASE(SessionFeatureSupportUsesTheOwningConfig) {
+	auto custom = DcOptions(Environment::Production);
+	CHECK(custom.setCustomServer(MakeCustomServer()));
+	auto blocked = DcOptions(Environment::Production);
+	blocked.constructBlocked();
+	auto stock = DcOptions(Environment::Production);
+	stock.constructFromBuiltIn();
+
+	CHECK(custom.hasCustomServer());
+	CHECK(blocked.blocked());
+	CHECK(!blocked.hasCustomServer());
+	CHECK(!stock.blocked());
+	CHECK(!stock.hasCustomServer());
+
+	using Capability = bool (*)(const DcOptions &);
+	const auto capabilities = std::array<Capability, 8>{
+		Main::details::callsSupported,
+		Main::details::botAppsSupported,
+		Main::details::paidFeaturesSupported,
+		Main::details::storiesSupported,
+		Main::details::exportSupported,
+		Main::details::passportSupported,
+		Main::details::aiComposeSupported,
+		Main::details::serverTranslationSupported,
+	};
+	for (const auto capability : capabilities) {
+		CHECK(!capability(custom));
+		CHECK(!capability(blocked));
+		CHECK(capability(stock));
+	}
+
+	for (const auto capability : capabilities) {
+		CHECK(!capability(custom));
+		CHECK(capability(stock));
+	}
+	for (const auto capability : capabilities) {
+		CHECK(capability(stock));
+		CHECK(!capability(custom));
+	}
 }
 
 // A pin is immutable for the life of the account. Peer and message ids

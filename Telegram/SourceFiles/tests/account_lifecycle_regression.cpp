@@ -36,6 +36,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_encryption.h"
 #include "storage/streamed_file_downloader.h"
 #include "ui/image/image_location.h"
+#include "window/window_controller.h"
+#include "window/window_session_controller.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
@@ -1157,6 +1159,64 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		return FailChatParticipantsRegression(
 			"could not create the pinned test session");
 	}
+	const auto capabilitiesMatch = [](const Main::Session &session,
+								  bool supported) {
+		return (session.callsSupported() == supported)
+			&& (session.botAppsSupported() == supported)
+			&& (session.paidFeaturesSupported() == supported)
+			&& (session.storiesSupported() == supported)
+			&& (session.exportSupported() == supported)
+			&& (session.passportSupported() == supported)
+			&& (session.aiComposeSupported() == supported)
+			&& (session.serverTranslationSupported() == supported);
+	};
+	auto &app = Core::App();
+	const auto stockWindow = app.ensureSeparateWindowFor(stock);
+	const auto pinnedWindow = app.ensureSeparateWindowFor(pinned);
+	const auto closeWindows = gsl::finally([&] {
+		if (stockWindow && app.separateWindowFor(stock) == stockWindow) {
+			app.closeWindow(stockWindow);
+		}
+		if (pinnedWindow && app.separateWindowFor(pinned) == pinnedWindow) {
+			app.closeWindow(pinnedWindow);
+		}
+		domain.activate(stock);
+	});
+	const auto windowsMatch = [&] {
+		const auto stockController = stockWindow->sessionController();
+		const auto pinnedController = pinnedWindow->sessionController();
+		return (stockWindow != pinnedWindow)
+			&& (app.separateWindowFor(stock) == stockWindow)
+			&& (app.separateWindowFor(pinned) == pinnedWindow)
+			&& (&stockWindow->account() == stock.get())
+			&& (&pinnedWindow->account() == pinned.get())
+			&& stockController
+			&& pinnedController
+			&& (&stockController->session() == &stock->session())
+			&& (&pinnedController->session() == &pinned->session())
+			&& capabilitiesMatch(stockController->session(), true)
+			&& capabilitiesMatch(pinnedController->session(), false);
+	};
+	const auto activateAndCheck = [&](bool customFirst) {
+		const auto first = customFirst ? pinned : stock;
+		const auto second = customFirst ? stock : pinned;
+		domain.activate(first);
+		if ((&domain.active() != first.get())
+			|| !capabilitiesMatch(first->session(), !customFirst)
+			|| !windowsMatch()) {
+			return false;
+		}
+		domain.activate(second);
+		return (&domain.active() == second.get())
+			&& capabilitiesMatch(second->session(), customFirst)
+			&& windowsMatch();
+	};
+	if (!stockWindow || !pinnedWindow || !windowsMatch()
+		|| !activateAndCheck(false)
+		|| !activateAndCheck(true)) {
+		return FailChatParticipantsRegression(
+			"session feature capabilities crossed account or window boundaries");
+	}
 	if (Core::MacProtectedPath::IntegrationTestActive()) {
 		pinned->session().data().cache().sync();
 		pinned->session().data().cacheBigFile().sync();
@@ -1338,9 +1398,9 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		return FailAccountLifecycleRegression(
 			"application domain did not start");
 	}
-	if (Core::App().activePrimaryWindow()) {
+	if (!Core::App().activePrimaryWindow()) {
 		return FailAccountLifecycleRegression(
-			"application unexpectedly created a primary window");
+			"application did not create the primary window fixture");
 	}
 	if (domain.accounts().size() != 1
 		|| domain.accounts().front().account->sessionExists()) {

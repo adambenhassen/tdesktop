@@ -1516,6 +1516,10 @@ auto SessionNavigation::showToast(
 	return uiShow()->showToast(std::move(text));
 }
 
+void SessionNavigation::showFeatureUnavailableOnServerToast() {
+	showToast(tr::lng_server_feature_unavailable(tr::now));
+}
+
 std::shared_ptr<ChatHelpers::Show> SessionNavigation::uiShow() {
 	return parentController()->uiShow();
 }

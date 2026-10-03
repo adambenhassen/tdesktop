@@ -411,6 +411,7 @@ jobs:
           test -x "$executable"
           if ! env \
             HOME="$regression_home" \
+            ALSOFT_DRIVERS=null \
             TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
             arch -arm64 "$executable" \
               -noupdate -debug -workdir "$regression_work" \
