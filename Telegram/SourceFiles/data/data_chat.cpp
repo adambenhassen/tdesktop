@@ -96,7 +96,7 @@ bool ChatData::canAddMembers() const {
 }
 
 bool ChatData::canAddAdmins() const {
-	return amIn() && amCreator() && !usesCustomServer();
+	return Data::details::CanAddBasicChatAdmins(amIn(), amCreator());
 }
 
 bool ChatData::canBanMembers() const {
@@ -425,12 +425,14 @@ void ApplyChatUpdate(
 		chat->invalidateParticipants();
 		return;
 	}
+	const auto isAdmin = mtpIsTrue(update.vis_admin());
 	if (user->isSelf()) {
-		chat->setAdminRights(mtpIsTrue(update.vis_admin())
-			? chat->defaultAdminRights(user).flags
-			: ChatAdminRights());
+		chat->setAdminRights(Data::details::BasicChatAdminRightsFor(
+			isAdmin,
+			chat->usesCustomServer(),
+			chat->defaultAdminRights(user).flags));
 	}
-	if (mtpIsTrue(update.vis_admin())) {
+	if (isAdmin) {
 		if (chat->noParticipantInfo()) {
 			session->api().requestFullPeer(chat);
 		} else {
@@ -623,8 +625,10 @@ void ApplyChatUpdate(
 			} else if (participant.admin) {
 				chat->admins.emplace(user);
 				if (user->isSelf()) {
-					chat->setAdminRights(
-						chat->defaultAdminRights(user).flags);
+					chat->setAdminRights(Data::details::BasicChatAdminRightsFor(
+						true,
+						chat->usesCustomServer(),
+						chat->defaultAdminRights(user).flags));
 				}
 			}
 			if (!participant.rank.isEmpty()) {
