@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/mac/specific_mac.h"
+#include "platform/mac/webview_file_input_bridge.h"
 
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
@@ -112,6 +113,7 @@ namespace Platform {
 
 void start() {
 	objc_start();
+	Mac::InstallWebViewFileInputBridge();
 }
 
 void finish() {

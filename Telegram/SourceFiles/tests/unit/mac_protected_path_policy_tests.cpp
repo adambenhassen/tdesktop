@@ -1506,3 +1506,79 @@ TEST_CASE(CustomIconProtectedDestinationAndTemporaryDirectoryStopHelper) {
 		CHECK_EQ(helpers, 0);
 	}
 }
+
+TEST_CASE(WebViewFileInputRejectsProtectedSelectionsBeforeCompletion) {
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	auto policy = TestPolicy(fs);
+	const auto paths = QStringList{
+		u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q,
+		u"/Users/alice/Downloads/allowed.png"_q,
+	};
+	auto checked = QStringList();
+	auto completed = 0;
+	auto uploaded = QStringList();
+	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
+		paths,
+		[&](const QString &path) {
+			checked.push_back(path);
+			return policy
+				.Resolve(Operation::Read, QFile::encodeName(path), {},
+						 u"unit.webview.file-input"_q)
+				.allowed();
+		},
+		[&](const QStringList &selection) {
+			++completed;
+			uploaded = selection;
+		});
+	CHECK(!allowed);
+	CHECK_EQ(checked, paths);
+	CHECK_EQ(completed, 0);
+	CHECK(uploaded.isEmpty());
+}
+
+TEST_CASE(WebViewFileInputRejectsSymlinksIntoProtectedPaths) {
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	const auto source = QByteArray("/Users/alice/Downloads/selected.png");
+	fs.entries.emplace(source, LstatResult{
+								   .type = FileType::Symlink,
+								   .error = FileError::None,
+							   });
+	fs.links.emplace(
+		source,
+		ReadlinkResult{
+			.target = "../Library/Application Support/Telegram Desktop/tdata/x",
+			.error = FileError::None,
+		});
+	auto policy = TestPolicy(fs);
+	const auto paths = QStringList{QString::fromUtf8(source)};
+	auto completed = false;
+	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
+		paths, CheckerFor(policy),
+		[&](const QStringList &) { completed = true; });
+	CHECK(!allowed);
+	CHECK(!completed);
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+}
+
+TEST_CASE(WebViewFileInputAllowsDownloadsForUpload) {
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	auto policy = TestPolicy(fs);
+	const auto paths = QStringList{
+		u"/Users/alice/Downloads/first.png"_q,
+		u"/Users/alice/Downloads/second.png"_q,
+	};
+	auto uploaded = QStringList();
+	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
+		paths, CheckerFor(policy),
+		[&](const QStringList &selection) { uploaded = selection; });
+	CHECK(allowed);
+	CHECK_EQ(uploaded, paths);
+}

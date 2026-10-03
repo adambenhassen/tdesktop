@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QStringList>
 #include <QtCore/QUrl>
 
 #include <functional>
@@ -78,6 +79,24 @@ DispatchExternalPathIfAllowed(Operation operation, const QString &path,
 		return false;
 	}
 	std::forward<Dispatch>(dispatch)();
+	return true;
+}
+
+template <typename Checker, typename Completion>
+[[nodiscard]] bool CompleteWebViewFileInputSelectionIfAllowed(
+	const QStringList &paths, Checker &&checker, Completion &&completion) {
+	if (paths.isEmpty()) {
+		return false;
+	}
+	auto allowed = true;
+	for (const auto &path : paths) {
+		const auto pathAllowed = !path.isEmpty() && checker(path);
+		allowed = pathAllowed && allowed;
+	}
+	if (!allowed) {
+		return false;
+	}
+	std::forward<Completion>(completion)(paths);
 	return true;
 }
 
