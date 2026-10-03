@@ -2280,7 +2280,7 @@ if ! bundle_identifier="$(plutil -extract CFBundleIdentifier raw -o - "$PLIST")"
 fi
 assert_equal "artifact executable metadata" "Telegramd" "$executable_name"
 assert_equal "artifact bundle metadata" "Telegramd" "$bundle_name"
-assert_equal "artifact identifier metadata" "com.adambenhassen.telegramd" "$bundle_identifier"
+assert_equal "artifact identifier metadata" "com.teagramhq.telegramd" "$bundle_identifier"
 if plutil -extract CFBundleURLTypes xml1 -o - "$PLIST" >/dev/null 2>&1; then
 	fail "artifact URL schemes" "CFBundleURLTypes is present"
 fi
