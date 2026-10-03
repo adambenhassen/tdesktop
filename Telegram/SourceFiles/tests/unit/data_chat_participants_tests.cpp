@@ -17,6 +17,7 @@ using Data::details::ResolveChatParticipants;
 using Data::details::CanMarkUserLoadedNormally;
 using Data::details::CanAddBasicChatAdmins;
 using Data::details::CanManageBasicChatCall;
+using Data::details::BasicChatAdminCapabilitiesFor;
 using Data::details::BasicChatRole;
 
 auto ResolveForAccount(
@@ -43,6 +44,18 @@ TEST_CASE(BasicGroupAdminPromotionRequiresCreatorMembership) {
 	CHECK(CanAddBasicChatAdmins(true, true));
 	CHECK(!CanAddBasicChatAdmins(false, true));
 	CHECK(!CanAddBasicChatAdmins(true, false));
+}
+
+TEST_CASE(CustomServerBasicGroupAdminEditorIsRoleOnly) {
+	const auto custom = BasicChatAdminCapabilitiesFor(true);
+	CHECK(!custom.canEditRights);
+	CHECK(!custom.canSetRank);
+	CHECK(!custom.canTransferOwnership);
+
+	const auto normal = BasicChatAdminCapabilitiesFor(false);
+	CHECK(normal.canEditRights);
+	CHECK(normal.canSetRank);
+	CHECK(normal.canTransferOwnership);
 }
 
 TEST_CASE(BasicGroupCallManagementRespectsServerAdminRights) {

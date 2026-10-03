@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_stories.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_chat_participants.h"
 #include "data/data_user.h"
 #include "data/data_changes.h"
 #include "base/unixtime.h"
@@ -400,13 +401,17 @@ Fn<void(
 				onFail);
 		};
 		if (const auto chat = peer->asChatNotMigrated()) {
+			const auto capabilities = Data::details::BasicChatAdminCapabilitiesFor(
+				chat->usesCustomServer());
 			const auto saveChatAdmin = [&](bool isAdmin) {
 				SaveChatAdmin(show, chat, user, isAdmin, done, onFail);
-				if (rank) {
+				if (rank && capabilities.canSetRank) {
 					SaveMemberRank(show, chat, user, *rank, [] {}, [] {});
 				}
 			};
-			if (strippedNewRights.flags
+			if (!capabilities.canEditRights) {
+				saveChatAdmin(strippedNewRights.flags != 0);
+			} else if (strippedNewRights.flags
 				== chat->defaultAdminRights(user).flags) {
 				saveChatAdmin(true);
 			} else if (!strippedNewRights.flags) {

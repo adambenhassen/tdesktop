@@ -30,6 +30,21 @@ enum class BasicChatRole {
 	return isMember && isCreator;
 }
 
+struct BasicChatAdminCapabilities {
+	bool canEditRights = true;
+	bool canSetRank = true;
+	bool canTransferOwnership = true;
+};
+
+[[nodiscard]] inline constexpr BasicChatAdminCapabilities
+BasicChatAdminCapabilitiesFor(bool customServer) {
+	return {
+		!customServer,
+		!customServer,
+		!customServer,
+	};
+}
+
 [[nodiscard]] inline constexpr bool CanManageBasicChatCall(
 		BasicChatRole role,
 		bool customServer) {
