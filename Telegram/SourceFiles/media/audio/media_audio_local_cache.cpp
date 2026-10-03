@@ -330,7 +330,7 @@ QString LocalDiskCache::name(const LocalSound &sound) {
 
 	const auto integrationTest
 		= Core::MacProtectedPath::IntegrationTestActive();
-	const auto prefix = integrationTest ? u"Telegramd_%1"_q : u"TD_%1"_q;
+	const auto prefix = integrationTest ? u"Teagram_%1"_q : u"TD_%1"_q;
 	auto result = prefix.arg(sound.id ? QString::number(sound.id, 16).toUpper()
 									  : u"Default"_q);
 	const auto path = _base + u"%1.wav"_q.arg(result);

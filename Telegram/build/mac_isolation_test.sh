@@ -15,7 +15,7 @@ elif [ "$#" -eq 1 ] && [ "$1" = "--self-test-observer-coverage" ]; then
 	APP_PATH=""
 	EVIDENCE_DIR="$TEST_ROOT/evidence"
 elif [ "$#" -ne 2 ]; then
-	echo "usage: mac_isolation_test.sh TELEGRAMD_APP EVIDENCE_DIR" >&2
+	echo "usage: mac_isolation_test.sh TEAGRAM_APP EVIDENCE_DIR" >&2
 	exit 2
 else
 	APP_PATH="$1"
@@ -360,9 +360,9 @@ wait_for_stopped() {
 launch_suspended() {
 	local output="$1"
 	shift
-	env HOME="$HOME_ROOT" /bin/sh -c 'kill -STOP $$; exec "$@"' telegramd-launcher "$FORK_EXE" "$@" > "$output" 2>&1 &
+	env HOME="$HOME_ROOT" /bin/sh -c 'kill -STOP $$; exec "$@"' teagram-launcher "$FORK_EXE" "$@" > "$output" 2>&1 &
 	LAUNCHED_PID=$!
-	wait_for_stopped "$LAUNCHED_PID" 10 || fail "suspended Telegramd launch" "pid=$LAUNCHED_PID did not stop before observation"
+	wait_for_stopped "$LAUNCHED_PID" 10 || fail "suspended Teagram launch" "pid=$LAUNCHED_PID did not stop before observation"
 }
 
 stop_observer_process() {
@@ -1558,9 +1558,9 @@ track_pids() {
 }
 
 start_pid_tracking() {
-	PID_ROOTS_FILE="$EVIDENCE_DIR/telegramd-root-pids.txt"
-	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
-	PID_LOCK_DIR="$EVIDENCE_DIR/.telegramd-pids.lock"
+	PID_ROOTS_FILE="$EVIDENCE_DIR/teagram-root-pids.txt"
+	PID_FILE="$EVIDENCE_DIR/teagram-pids.txt"
+	PID_LOCK_DIR="$EVIDENCE_DIR/.teagram-pids.lock"
 	TRACK_STOP_FILE="$EVIDENCE_DIR/.stop-pid-tracker"
 	FORK_CHILDREN_FILE="$EVIDENCE_DIR/fork-child-observers.txt"
 	FORK_ONLY_PID_FILE="$EVIDENCE_DIR/fork-only-pids.txt"
@@ -1717,20 +1717,20 @@ count_live_fork_processes() {
 	local count=0
 	local pid
 	local command
-	: > "$EVIDENCE_DIR/telegramd-live-pids.txt"
+	: > "$EVIDENCE_DIR/teagram-live-pids.txt"
 	while IFS= read -r pid; do
 		[ -n "$pid" ] || continue
 		if process_alive "$pid"; then
 			command="$(process_command "$pid")"
 			case "$command" in
 				"$FORK_EXE"|"$FORK_EXE "*)
-					printf '%s\n' "$pid" >> "$EVIDENCE_DIR/telegramd-live-pids.txt"
+					printf '%s\n' "$pid" >> "$EVIDENCE_DIR/teagram-live-pids.txt"
 					count=$((count + 1))
 					;;
 			esac
 		fi
 	done < "$PID_FILE"
-	printf '%s\n' "$count" > "$EVIDENCE_DIR/telegramd-process-count.txt"
+	printf '%s\n' "$count" > "$EVIDENCE_DIR/teagram-process-count.txt"
 	printf '%s\n' "$count"
 }
 
@@ -1984,13 +1984,13 @@ run_observer_coverage_case() {
 	local check_output=""
 	local check_status=0
 	EVIDENCE_DIR="$case_root/evidence"
-	PID_FILE="$EVIDENCE_DIR/telegramd-pids.txt"
+	PID_FILE="$EVIDENCE_DIR/teagram-pids.txt"
 	FORK_CHILDREN_FILE="$EVIDENCE_DIR/fork-child-observers.txt"
 	FORK_ONLY_PID_FILE="$EVIDENCE_DIR/fork-only-pids.txt"
 	TARGET_TRACE_DIR="$EVIDENCE_DIR/fs_usage-pid"
 	TARGET_EXEC_DIR="$EVIDENCE_DIR/fs_usage-exec"
 	TARGET_FORK_DIR="$EVIDENCE_DIR/fs_usage-fork"
-	TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
+	TARGET_OBSERVER_FILE="$EVIDENCE_DIR/teagram-observers.txt"
 	OBSERVER_MANAGER_FAILURE_FILE="$EVIDENCE_DIR/observer-manager-failure.txt"
 	mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR" "$TARGET_FORK_DIR"
 	: > "$EVIDENCE_DIR/events.txt"
@@ -2002,13 +2002,13 @@ run_observer_coverage_case() {
 	printf '%s %s %s %s\n' "$target_pid" 601 601 701 > "$TARGET_OBSERVER_FILE"
 	: > "$TARGET_FORK_DIR/$target_pid.txt"
 	if [ "$filesystem_state" = nonempty ]; then
-		printf '%s\n' "12:00:00.000 open /tmp/Telegramd/tdata/allowed 0.001 Telegramd.708206" > \
+		printf '%s\n' "12:00:00.000 open /tmp/Teagram/tdata/allowed 0.001 Teagram.708206" > \
 			"$TARGET_TRACE_DIR/$target_pid.txt"
 	else
 		: > "$TARGET_TRACE_DIR/$target_pid.txt"
 	fi
 	if [ "$exec_state" = nonempty ]; then
-		printf '%s\n' "12:00:01.000 exec /tmp/Telegramd/bin/helper 0.001 Telegramd.708206" > \
+		printf '%s\n' "12:00:01.000 exec /tmp/Teagram/bin/helper 0.001 Teagram.708206" > \
 			"$TARGET_EXEC_DIR/$target_pid.txt"
 	else
 		: > "$TARGET_EXEC_DIR/$target_pid.txt"
@@ -2062,7 +2062,7 @@ run_cleanup_self_test() {
 	local self_test_failed=0
 	local expected="/bin/sleep"
 	mkdir -p "$EVIDENCE_DIR"
-	/bin/sh -c 'kill -STOP $$; exec "$@"' telegramd-launcher "$expected" 60 \
+	/bin/sh -c 'kill -STOP $$; exec "$@"' teagram-launcher "$expected" 60 \
 		> "$EVIDENCE_DIR/self-test.log" 2>&1 &
 	self_test_pid=$!
 	if ! wait_for_stopped "$self_test_pid" 5; then
@@ -2182,8 +2182,8 @@ cleanup() {
 		{
 			echo "official_pid=$OFFICIAL_PID"
 			echo "official_command=$(if [ -n "$OFFICIAL_PID" ]; then process_command "$OFFICIAL_PID"; fi)"
-			echo "telegramd_pid=$FORK_PID"
-			echo "telegramd_command=$(if [ -n "$FORK_PID" ]; then process_command "$FORK_PID"; fi)"
+			echo "teagram_pid=$FORK_PID"
+			echo "teagram_command=$(if [ -n "$FORK_PID" ]; then process_command "$FORK_PID"; fi)"
 		} > "$EVIDENCE_DIR/failure-snapshot.txt"
 	fi
 	{
@@ -2263,7 +2263,7 @@ if ! APP_PATH="$(canonical_path "$APP_PATH")"; then
 	fail "artifact canonical path" "could not canonicalize app path"
 fi
 PLIST="$APP_PATH/Contents/Info.plist"
-FORK_EXE="$APP_PATH/Contents/MacOS/Telegramd"
+FORK_EXE="$APP_PATH/Contents/MacOS/Teagram"
 [ -d "$APP_PATH" ] || fail "artifact app" "missing app=$APP_PATH"
 [ -x "$FORK_EXE" ] || fail "artifact executable" "missing executable=$FORK_EXE"
 if ! plutil -p "$PLIST" > "$EVIDENCE_DIR/plist.txt"; then
@@ -2278,9 +2278,9 @@ fi
 if ! bundle_identifier="$(plutil -extract CFBundleIdentifier raw -o - "$PLIST")"; then
 	fail "artifact identifier metadata" "could not read CFBundleIdentifier"
 fi
-assert_equal "artifact executable metadata" "Telegramd" "$executable_name"
-assert_equal "artifact bundle metadata" "Telegramd" "$bundle_name"
-assert_equal "artifact identifier metadata" "com.adambenhassen.telegramd" "$bundle_identifier"
+assert_equal "artifact executable metadata" "Teagram" "$executable_name"
+assert_equal "artifact bundle metadata" "Teagram" "$bundle_name"
+assert_equal "artifact identifier metadata" "io.teagram.desktop" "$bundle_identifier"
 if plutil -extract CFBundleURLTypes xml1 -o - "$PLIST" >/dev/null 2>&1; then
 	fail "artifact URL schemes" "CFBundleURLTypes is present"
 fi
@@ -2315,20 +2315,20 @@ fi
 
 RUN_ROOT="$(mktemp -d /tmp/main701.XXXXXX)"
 RUN_ROOT="$(canonical_path "$RUN_ROOT")"
-FORK_APP="$RUN_ROOT/Telegramd-test.app"
+FORK_APP="$RUN_ROOT/Teagram-test.app"
 if ! ditto "$APP_PATH" "$FORK_APP"; then
-	unavailable "could not create an isolated test copy of Telegramd.app"
+	unavailable "could not create an isolated test copy of Teagram.app"
 fi
-FORK_EXE="$FORK_APP/Contents/MacOS/Telegramd"
-if ! shasum -a 256 "$APP_PATH/Contents/MacOS/Telegramd" "$FORK_EXE" > "$EVIDENCE_DIR/test-copy-hashes.txt"; then
+FORK_EXE="$FORK_APP/Contents/MacOS/Teagram"
+if ! shasum -a 256 "$APP_PATH/Contents/MacOS/Teagram" "$FORK_EXE" > "$EVIDENCE_DIR/test-copy-hashes.txt"; then
 	fail "test app copy" "could not hash artifact and isolated test copy"
 fi
-shasum -a 256 "$APP_PATH/Contents/MacOS/Telegramd" > "$EVIDENCE_DIR/artifact-source-hash-before.txt"
+shasum -a 256 "$APP_PATH/Contents/MacOS/Teagram" > "$EVIDENCE_DIR/artifact-source-hash-before.txt"
 HOME_ROOT="$RUN_ROOT/home"
 export HOME="$HOME_ROOT"
 SUPPORT_ROOT="$HOME_ROOT/Library/Application Support"
 OLD="$SUPPORT_ROOT/Telegram Desktop"
-NEW="$SUPPORT_ROOT/Telegramd"
+NEW="$SUPPORT_ROOT/Teagram"
 PORTABLE_ROOT="$FORK_APP/Contents/MacOS/TelegramForcePortable"
 HOSTILE_WORKDIR="$PORTABLE_ROOT"
 PORTABLE_CANARY="$PORTABLE_ROOT/tdata/alpha"
@@ -2343,7 +2343,7 @@ printf 'MAIN701_LOG_CANARY\n' > "$OLD/log-canary.txt"
 printf 'MAIN701_PORTABLE_CANARY\n' > "$PORTABLE_CANARY"
 printf '%s\n' "$HOSTILE_WORKDIR" > "$EVIDENCE_DIR/hostile-workdir.txt"
 if [ -e "$NEW" ]; then
-	fail "fresh Telegramd namespace" "pre-existing path=$NEW"
+	fail "fresh Teagram namespace" "pre-existing path=$NEW"
 fi
 
 CANARIES=(
@@ -2426,12 +2426,12 @@ wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints.txt" "official e
 TARGET_TRACE_DIR="$EVIDENCE_DIR/fs_usage-pid"
 TARGET_EXEC_DIR="$EVIDENCE_DIR/fs_usage-exec"
 TARGET_FORK_DIR="$EVIDENCE_DIR/fs_usage-fork"
-TARGET_OBSERVER_FILE="$EVIDENCE_DIR/telegramd-observers.txt"
+TARGET_OBSERVER_FILE="$EVIDENCE_DIR/teagram-observers.txt"
 mkdir -p "$TARGET_TRACE_DIR" "$TARGET_EXEC_DIR" "$TARGET_FORK_DIR"
 : > "$TARGET_OBSERVER_FILE"
 : > "$EVIDENCE_DIR/observer-commands.txt"
 : > "$EVIDENCE_DIR/lifecycle-observer-status.txt"
-launch_suspended "$EVIDENCE_DIR/telegramd.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
+launch_suspended "$EVIDENCE_DIR/teagram.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
 FORK_PID="$LAUNCHED_PID"
 LAUNCHED_PID=""
 start_pid_tracking
@@ -2439,47 +2439,47 @@ if ! wait_for_observer "$FORK_PID" 10; then
 	unavailable "PID-filtered lifecycle observer did not attach to primary pid=$FORK_PID"
 fi
 if ! kill -CONT "$FORK_PID"; then
-	fail "Telegramd launch resume" "could not resume pid=$FORK_PID"
+	fail "Teagram launch resume" "could not resume pid=$FORK_PID"
 fi
-wait_for_process "$FORK_PID" 30 || fail "Telegramd process lifetime" "pid=$FORK_PID did not stay alive"
-printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/telegramd-pid.txt"
+wait_for_process "$FORK_PID" 30 || fail "Teagram process lifetime" "pid=$FORK_PID did not stay alive"
+printf '%s\n' "$FORK_PID" > "$EVIDENCE_DIR/teagram-pid.txt"
 if ! wait_for_file "$NEW/tdata" 60; then
-	fail "Telegramd namespace creation" "missing path=$NEW/tdata"
+	fail "Teagram namespace creation" "missing path=$NEW/tdata"
 fi
-if ! WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-working-dir.log")"; then
-	fail "Telegramd startup log" "working-directory record did not appear"
+if ! WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/teagram-working-dir.log")"; then
+	fail "Teagram startup log" "working-directory record did not appear"
 fi
-record "captured Telegramd startup log path=$WORKING_LOG"
-assert_grep "Telegramd startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-working-dir.log"
-process_command "$FORK_PID" > "$EVIDENCE_DIR/telegramd-command.txt"
+record "captured Teagram startup log path=$WORKING_LOG"
+assert_grep "Teagram startup log" "Working dir: $NEW" "$EVIDENCE_DIR/teagram-working-dir.log"
+process_command "$FORK_PID" > "$EVIDENCE_DIR/teagram-command.txt"
 
 NEW_HASH="$(printf '%s' "$NEW" | md5 -q)"
 capture_endpoints "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints.txt" "official endpoint"
-wait_for_endpoint "$NEW_HASH" "$EVIDENCE_DIR/telegramd-endpoints.txt" "Telegramd endpoint" 30
+wait_for_endpoint "$NEW_HASH" "$EVIDENCE_DIR/teagram-endpoints.txt" "Teagram endpoint" 30
 assert_nonempty "official endpoint" "$EVIDENCE_DIR/official-endpoints.txt"
-assert_nonempty "Telegramd endpoint" "$EVIDENCE_DIR/telegramd-endpoints.txt"
+assert_nonempty "Teagram endpoint" "$EVIDENCE_DIR/teagram-endpoints.txt"
 official_endpoint="$(head -n 1 "$EVIDENCE_DIR/official-endpoints.txt")"
-telegramd_endpoint="$(head -n 1 "$EVIDENCE_DIR/telegramd-endpoints.txt")"
-assert_not_equal "endpoint independence" "$official_endpoint" "$telegramd_endpoint"
+teagram_endpoint="$(head -n 1 "$EVIDENCE_DIR/teagram-endpoints.txt")"
+assert_not_equal "endpoint independence" "$official_endpoint" "$teagram_endpoint"
 
-if ! focus_application_process "$FORK_PID" "$EVIDENCE_DIR/telegramd-activate.txt" 30; then
-	unavailable "System Events could not focus the Telegramd process"
+if ! focus_application_process "$FORK_PID" "$EVIDENCE_DIR/teagram-activate.txt" 30; then
+	unavailable "System Events could not focus the Teagram process"
 fi
 if ! wait_for_frontmost_bundle \
 	"$FORK_PID" \
 	"$bundle_identifier" \
 	"$EVIDENCE_DIR/frontmost-after.txt" \
-	"$EVIDENCE_DIR/telegramd-activate.txt" \
+	"$EVIDENCE_DIR/teagram-activate.txt" \
 	30; then
-	unavailable "System Events could not settle the Telegramd process as frontmost"
+	unavailable "System Events could not settle the Teagram process as frontmost"
 fi
 FRONTMOST_AFTER="$(cat "$EVIDENCE_DIR/frontmost-after.txt")"
-assert_equal "Telegramd launch focus" "$bundle_identifier" "$FRONTMOST_AFTER"
+assert_equal "Teagram launch focus" "$bundle_identifier" "$FRONTMOST_AFTER"
 assert_alive "official coexistence" "$OFFICIAL_PID"
 official_command="$(process_command "$OFFICIAL_PID")"
 assert_equal "official command stability" "$OFFICIAL_EXE -noupdate -debug -workdir $OLD" "$official_command"
 
-launch_suspended "$EVIDENCE_DIR/telegramd-second.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
+launch_suspended "$EVIDENCE_DIR/teagram-second.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
 SECOND_PID="$LAUNCHED_PID"
 LAUNCHED_PID=""
 add_pid_root "$SECOND_PID"
@@ -2501,14 +2501,14 @@ fi
 assert_alive "second launch official coexistence" "$OFFICIAL_PID"
 assert_alive "second launch primary process" "$FORK_PID"
 assert_live_fork_process_count "second launch process count" 1
-cp "$EVIDENCE_DIR/telegramd-live-pids.txt" "$EVIDENCE_DIR/telegramd-live-pids-after-second.txt"
-cp "$EVIDENCE_DIR/telegramd-process-count.txt" "$EVIDENCE_DIR/telegramd-process-count-after-second.txt"
+cp "$EVIDENCE_DIR/teagram-live-pids.txt" "$EVIDENCE_DIR/teagram-live-pids-after-second.txt"
+cp "$EVIDENCE_DIR/teagram-process-count.txt" "$EVIDENCE_DIR/teagram-process-count-after-second.txt"
 
 if ! request_filesystem_observer "$FORK_PID"; then
 	unavailable "PID-filtered filesystem observer could not resume primary pid=$FORK_PID"
 fi
 
-launch_suspended "$EVIDENCE_DIR/telegramd-quit.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR" -quit
+launch_suspended "$EVIDENCE_DIR/teagram-quit.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR" -quit
 QUIT_PID="$LAUNCHED_PID"
 LAUNCHED_PID=""
 add_pid_root "$QUIT_PID"
@@ -2525,11 +2525,11 @@ if ! wait "$QUIT_PID"; then
 	fail "quit result" "pid=$QUIT_PID returned failure"
 fi
 if ! wait_for_exit "$FORK_PID" 40; then
-	fail "Telegramd quit lifecycle" "primary pid=$FORK_PID did not exit within 40s"
+	fail "Teagram quit lifecycle" "primary pid=$FORK_PID did not exit within 40s"
 fi
 assert_alive "official survives quit" "$OFFICIAL_PID"
 
-launch_suspended "$EVIDENCE_DIR/telegramd-relaunch.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
+launch_suspended "$EVIDENCE_DIR/teagram-relaunch.log" -noupdate -debug -workdir "$HOSTILE_WORKDIR"
 RELAUNCH_PID="$LAUNCHED_PID"
 LAUNCHED_PID=""
 add_pid_root "$RELAUNCH_PID"
@@ -2537,41 +2537,41 @@ if ! wait_for_observer "$RELAUNCH_PID" 10; then
 	unavailable "PID-filtered lifecycle observer did not attach to relaunch pid=$RELAUNCH_PID"
 fi
 if ! kill -CONT "$RELAUNCH_PID"; then
-	fail "Telegramd relaunch resume" "could not resume pid=$RELAUNCH_PID"
+	fail "Teagram relaunch resume" "could not resume pid=$RELAUNCH_PID"
 fi
-wait_for_process "$RELAUNCH_PID" 30 || fail "Telegramd relaunch process lifetime" "pid=$RELAUNCH_PID did not stay alive"
+wait_for_process "$RELAUNCH_PID" 30 || fail "Teagram relaunch process lifetime" "pid=$RELAUNCH_PID did not stay alive"
 if ! wait_for_file "$NEW/tdata" 60; then
-	fail "Telegramd relaunch namespace" "missing path=$NEW/tdata"
+	fail "Teagram relaunch namespace" "missing path=$NEW/tdata"
 fi
-if ! RELAUNCH_WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log")"; then
-	fail "Telegramd relaunch startup log" "working-directory record did not appear"
+if ! RELAUNCH_WORKING_LOG="$(capture_working_log "$NEW" "$EVIDENCE_DIR/teagram-relaunch-working-dir.log")"; then
+	fail "Teagram relaunch startup log" "working-directory record did not appear"
 fi
-record "captured Telegramd relaunch startup log path=$RELAUNCH_WORKING_LOG"
-assert_grep "Telegramd relaunch startup log" "Working dir: $NEW" "$EVIDENCE_DIR/telegramd-relaunch-working-dir.log"
+record "captured Teagram relaunch startup log path=$RELAUNCH_WORKING_LOG"
+assert_grep "Teagram relaunch startup log" "Working dir: $NEW" "$EVIDENCE_DIR/teagram-relaunch-working-dir.log"
 wait_for_endpoint "$OLD_HASH" "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt" "official relaunch endpoint" 30
-wait_for_endpoint "$NEW_HASH" "$EVIDENCE_DIR/telegramd-endpoints-after-relaunch.txt" "Telegramd relaunch endpoint" 30
+wait_for_endpoint "$NEW_HASH" "$EVIDENCE_DIR/teagram-endpoints-after-relaunch.txt" "Teagram relaunch endpoint" 30
 assert_nonempty "official relaunch endpoint" "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt"
-assert_nonempty "Telegramd relaunch endpoint" "$EVIDENCE_DIR/telegramd-endpoints-after-relaunch.txt"
+assert_nonempty "Teagram relaunch endpoint" "$EVIDENCE_DIR/teagram-endpoints-after-relaunch.txt"
 official_relaunch_endpoint="$(head -n 1 "$EVIDENCE_DIR/official-endpoints-after-relaunch.txt")"
-telegramd_relaunch_endpoint="$(head -n 1 "$EVIDENCE_DIR/telegramd-endpoints-after-relaunch.txt")"
-assert_not_equal "relaunch endpoint independence" "$official_relaunch_endpoint" "$telegramd_relaunch_endpoint"
+teagram_relaunch_endpoint="$(head -n 1 "$EVIDENCE_DIR/teagram-endpoints-after-relaunch.txt")"
+assert_not_equal "relaunch endpoint independence" "$official_relaunch_endpoint" "$teagram_relaunch_endpoint"
 if ! wait_for_frontmost_bundle \
 	"$RELAUNCH_PID" \
 	"$bundle_identifier" \
 	"$EVIDENCE_DIR/frontmost-relaunch.txt" \
-	"$EVIDENCE_DIR/telegramd-activate.txt" \
+	"$EVIDENCE_DIR/teagram-activate.txt" \
 	30; then
-	unavailable "System Events could not settle the Telegramd relaunch process as frontmost"
+	unavailable "System Events could not settle the Teagram relaunch process as frontmost"
 fi
 FRONTMOST_RELAUNCH="$(cat "$EVIDENCE_DIR/frontmost-relaunch.txt")"
-assert_equal "Telegramd relaunch focus" "$bundle_identifier" "$FRONTMOST_RELAUNCH"
+assert_equal "Teagram relaunch focus" "$bundle_identifier" "$FRONTMOST_RELAUNCH"
 assert_alive "official survives relaunch" "$OFFICIAL_PID"
 relaunch_official_command="$(process_command "$OFFICIAL_PID")"
 assert_equal "official relaunch command stability" "$OFFICIAL_EXE -noupdate -debug -workdir $OLD" "$relaunch_official_command"
-assert_alive "Telegramd relaunch process" "$RELAUNCH_PID"
+assert_alive "Teagram relaunch process" "$RELAUNCH_PID"
 assert_live_fork_process_count "relaunch process count" 1
-cp "$EVIDENCE_DIR/telegramd-live-pids.txt" "$EVIDENCE_DIR/telegramd-live-pids-after-relaunch.txt"
-cp "$EVIDENCE_DIR/telegramd-process-count.txt" "$EVIDENCE_DIR/telegramd-process-count-after-relaunch.txt"
+cp "$EVIDENCE_DIR/teagram-live-pids.txt" "$EVIDENCE_DIR/teagram-live-pids-after-relaunch.txt"
+cp "$EVIDENCE_DIR/teagram-process-count.txt" "$EVIDENCE_DIR/teagram-process-count-after-relaunch.txt"
 if ! ps -axo pid=,ppid=,command= > "$EVIDENCE_DIR/process-table.txt"; then
 	fail "relaunch process table" "ps failed"
 fi
@@ -2586,15 +2586,15 @@ if [ -e "$EVIDENCE_DIR/pid-tracking-failure.txt" ]; then
 	unavailable "pid tracker reported incomplete observer coverage"
 fi
 awk 'NR == FNR { roots[$1] = 1; next } !($1 in roots) { print }' \
-	"$PID_ROOTS_FILE" "$PID_FILE" > "$EVIDENCE_DIR/telegramd-descendants.txt"
+	"$PID_ROOTS_FILE" "$PID_FILE" > "$EVIDENCE_DIR/teagram-descendants.txt"
 check_process_observer_coverage
 assemble_pid_trace
 parser_status=0
-python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/telegramd-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt" "$FORK_ONLY_PID_FILE" || parser_status=$?
+python3 "$PARSER" "$TRACE" "$OLD" "$EVIDENCE_DIR/teagram-pids.txt" "$EVIDENCE_DIR/fs_usage-report.txt" "$FORK_ONLY_PID_FILE" || parser_status=$?
 case "$parser_status" in
 	0) ;;
 	2) unavailable "filesystem observer PID attribution is incomplete; see fs_usage-report.txt" ;;
-	*) fail "Telegramd official-namespace isolation" "filesystem observer reported a violation or ambiguous event" ;;
+	*) fail "Teagram official-namespace isolation" "filesystem observer reported a violation or ambiguous event" ;;
 esac
 
 if ! for canary in "${CANARIES[@]}"; do
@@ -2614,7 +2614,7 @@ fi
 if [ -e "$SOURCE_PORTABLE_ROOT" ]; then
 	fail "artifact portable fixture isolation" "test fixture leaked into uploaded app path=$SOURCE_PORTABLE_ROOT"
 fi
-shasum -a 256 "$APP_PATH/Contents/MacOS/Telegramd" > "$EVIDENCE_DIR/artifact-source-hash-after.txt"
+shasum -a 256 "$APP_PATH/Contents/MacOS/Teagram" > "$EVIDENCE_DIR/artifact-source-hash-after.txt"
 if ! cmp "$EVIDENCE_DIR/artifact-source-hash-before.txt" "$EVIDENCE_DIR/artifact-source-hash-after.txt"; then
 	fail "artifact source integrity" "uploaded executable changed during isolation gate"
 fi

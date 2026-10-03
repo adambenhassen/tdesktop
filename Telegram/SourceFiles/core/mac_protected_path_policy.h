@@ -83,8 +83,8 @@ struct HomeRoots {
 	QByteArray foundation;
 };
 
-[[nodiscard]] QByteArray TelegramdProfileRoot(const HomeRoots &homes,
-											  bool appSandboxed);
+[[nodiscard]] QByteArray TeagramProfileRoot(const HomeRoots &homes,
+											bool appSandboxed);
 
 struct RefusalRecord {
 	Operation operation = Operation::Open;

@@ -336,7 +336,7 @@ private:
 
 } // namespace
 
-// The discovered key must match the fingerprint telegramd logs at startup,
+// The discovered key must match the fingerprint the server logs at startup,
 // so client and server have to agree on this number exactly. Getting it wrong
 // is invisible at compile time and shows up only as an auth-key exchange that
 // never completes.

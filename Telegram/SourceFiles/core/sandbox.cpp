@@ -138,7 +138,7 @@ int Sandbox::start() {
 			return 1;
 		}
 		const auto lockPath = MacProtectedPath::IntegrationTestActive()
-								  ? ipcDirectory + u"/Telegramd-lock-"_q
+								  ? ipcDirectory + u"/Teagram-lock-"_q
 										+ QString::fromLatin1(h.left(16))
 								  : ipcDirectory + '/' + h + '-' + cGUIDStr();
 		if (MacProtectedPath::IntegrationTestActive()) {

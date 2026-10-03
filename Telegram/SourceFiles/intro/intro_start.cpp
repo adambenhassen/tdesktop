@@ -24,8 +24,8 @@ StartWidget::StartWidget(
 	not_null<Data*> data)
 : Step(parent, account, data, true) {
 	setMouseTracking(true);
-	setTitleText(rpl::single(u"Telegramd"_q));
-	setDescriptionText(tr::lng_intro_telegramd_about());
+	setTitleText(rpl::single(u"Teagram"_q));
+	setDescriptionText(tr::lng_intro_teagram_about());
 	show();
 }
 

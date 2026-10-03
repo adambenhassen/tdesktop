@@ -417,7 +417,7 @@ void start() {
 
 	LogsData = new LogsDataFields();
 	if (cWorkingDir().isEmpty()) {
-#ifdef TDESKTOP_TELEGRAMD
+#ifdef TDESKTOP_TEAGRAM
 		cForceWorkingDir(psAppDataPath());
 #elif (!defined Q_OS_WIN && !defined _DEBUG) || defined Q_OS_WINRT || defined OS_WIN_STORE || defined OS_MAC_STORE
 		cForceWorkingDir(psAppDataPath());

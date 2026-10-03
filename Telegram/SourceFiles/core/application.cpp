@@ -476,13 +476,13 @@ void Application::run() {
 }
 
 void Application::autoRegisterUrlScheme() {
-#ifdef TDESKTOP_TELEGRAMD
+#ifdef TDESKTOP_TEAGRAM
 	return;
-#else // TDESKTOP_TELEGRAMD
+#else  // TDESKTOP_TEAGRAM
 	if (!OptionSkipUrlSchemeRegister.value()) {
 		InvokeQueued(this, [] { RegisterUrlScheme(); });
 	}
-#endif // TDESKTOP_TELEGRAMD
+#endif // TDESKTOP_TEAGRAM
 }
 
 void Application::showAccount(not_null<Main::Account*> account) {
@@ -2007,9 +2007,9 @@ void Application::startShortcuts() {
 }
 
 void Application::RegisterUrlScheme() {
-#ifdef TDESKTOP_TELEGRAMD
+#ifdef TDESKTOP_TEAGRAM
 	return;
-#else // TDESKTOP_TELEGRAMD
+#else  // TDESKTOP_TEAGRAM
 	const auto arguments = Launcher::Instance().customWorkingDir()
 		? u"-workdir \"%1\""_q.arg(cWorkingDir())
 		: QString();
@@ -2035,7 +2035,7 @@ void Application::RegisterUrlScheme() {
 		.displayAppName = AppName.utf16(),
 		.displayAppDescription = AppName.utf16(),
 	});
-#endif // TDESKTOP_TELEGRAMD
+#endif // TDESKTOP_TEAGRAM
 }
 
 bool IsAppLaunched() {

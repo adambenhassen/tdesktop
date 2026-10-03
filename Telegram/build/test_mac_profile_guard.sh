@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-	echo "usage: $0 <Telegramd executable>" >&2
+	echo "usage: $0 <Teagram executable>" >&2
 	exit 2
 fi
 
@@ -16,23 +16,23 @@ APP="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
 APP_BUNDLE="$(cd "$(dirname "$APP")/../.." && pwd -P)"
 TEST_TMP_BASE="${TDESKTOP_MAC_PROFILE_TEST_TMP_BASE:-/tmp}"
 if [[ ! -x "$APP" ]]; then
-	echo "Telegramd executable is not executable: $APP" >&2
+	echo "Teagram executable is not executable: $APP" >&2
 	exit 2
 fi
 IPC_DIRECTORY="/tmp"
-TEST_HOME="$(mktemp -d "$TEST_TMP_BASE/telegramd-profile-test.XXXXXX")"
+TEST_HOME="$(mktemp -d "$TEST_TMP_BASE/teagram-profile-test.XXXXXX")"
 TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
 IPC_SEARCH_DIRECTORY="$(cd "$IPC_DIRECTORY" 2>/dev/null && pwd -P || printf '%s' "$IPC_DIRECTORY")"
 
-PROFILE="$TEST_HOME/Library/Application Support/Telegramd"
+PROFILE="$TEST_HOME/Library/Application Support/Teagram"
 HOSTILE_HOME="$TEST_HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram"
 REFUSAL_LOG="$TEST_HOME/refusal.log"
 START_LOG="$TEST_HOME/start.log"
 LOCK_SUFFIX="$(printf '%s' "$APP_BUNDLE" | md5 -q | cut -c1-16)"
 SOCKET_SUFFIX="$(printf '%s' "$PROFILE" | md5 -q | cut -c1-16)"
-LOCK_NAME="Telegramd-lock-$LOCK_SUFFIX"
+LOCK_NAME="Teagram-lock-$LOCK_SUFFIX"
 LOCK_PATH="$IPC_DIRECTORY/$LOCK_NAME"
-SOCKET_PATH="$IPC_DIRECTORY/Telegramd-$SOCKET_SUFFIX"
+SOCKET_PATH="$IPC_DIRECTORY/Teagram-$SOCKET_SUFFIX"
 MAC_SOCKET_PATH_LIMIT=103
 SOCKET_PATH_BYTES="$(LC_ALL=C printf '%s' "$SOCKET_PATH" | wc -c | tr -d '[:space:]')"
 FIRST_PID=""
@@ -82,7 +82,7 @@ run_spoiler_cache_symlink_case() {
 	local case_name="$1"
 	local link_name="$2"
 	local case_home="$TEST_HOME/$case_name"
-	local PROFILE="$case_home/Library/Application Support/Telegramd"
+	local PROFILE="$case_home/Library/Application Support/Teagram"
 	local fixture="$case_home/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/SyntheticSpoilerCache"
 	local fixture_is_file=false
 	local fixture_contents='synthetic protected cache bytes'
@@ -90,7 +90,7 @@ run_spoiler_cache_symlink_case() {
 	local quit_log="$case_home/quit.log"
 	local LOCK_NAME="$LOCK_NAME"
 	local IPC_SEARCH_DIRECTORY="$IPC_SEARCH_DIRECTORY"
-	local SOCKET_PATH="/tmp/Telegramd-$(printf '%s' "$PROFILE" | md5 -q | cut -c1-16)"
+	local SOCKET_PATH="/tmp/Teagram-$(printf '%s' "$PROFILE" | md5 -q | cut -c1-16)"
 	local socket_bytes
 	local PROFILE_READY=false
 	local IPC_SELECTION_READY=false
@@ -247,7 +247,7 @@ cleanup() {
 			;;
 		*)
 			mkdir -p "$TEST_TMP_BASE"
-			cp -R "$TEST_HOME" "$TEST_TMP_BASE/telegramd-profile-test-failure" \
+			cp -R "$TEST_HOME" "$TEST_TMP_BASE/teagram-profile-test-failure" \
 				2>/dev/null || true
 			;;
 		esac
@@ -270,7 +270,7 @@ REFUSAL_STATUS=$?
 set -e
 
 if [[ "$REFUSAL_STATUS" -eq 0 ]]; then
-	echo "hostile HOME unexpectedly started Telegramd." >&2
+	echo "hostile HOME unexpectedly started Teagram." >&2
 	cat "$REFUSAL_LOG" >&2
 	exit 1
 fi

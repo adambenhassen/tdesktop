@@ -50,7 +50,7 @@ endif()
 include(cmake/variables.cmake)
 if (APPLE AND build_macstore)
     message(FATAL_ERROR
-        "Mac App Store builds are unsupported by Telegramd. Configure a non-store macOS build.")
+        "Mac App Store builds are unsupported by Teagram. Configure a non-store macOS build.")
 endif()
 include(cmake/nice_target_sources.cmake)
 include(cmake/target_compile_options_if_exists.cmake)

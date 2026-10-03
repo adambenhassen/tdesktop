@@ -49,7 +49,7 @@ struct ComputedState {
 	bool addContactDisabled = false;
 	bool newGroupDisabled = false;
 	bool newChannelDisabled = false;
-	bool showTelegramDisabled = false;
+	bool showTeagramDisabled = false;
 	Ui::MarkdownEnabledState markdown;
 
 	friend inline bool operator==(
@@ -109,7 +109,7 @@ private:
 	QAction *_addContact = nullptr;
 	QAction *_newGroup = nullptr;
 	QAction *_newChannel = nullptr;
-	QAction *_showTelegram = nullptr;
+	QAction *_showTeagram = nullptr;
 	QAction *_fullScreen = nullptr;
 	QAction *_emoji = nullptr;
 	QAction *_bold = nullptr;
@@ -193,8 +193,8 @@ void Manager::retranslate() {
 	if (_newChannel) {
 		_newChannel->setText(tr::lng_mac_menu_new_channel(tr::now));
 	}
-	if (_showTelegram) {
-		_showTelegram->setText(tr::lng_mac_menu_show(tr::now));
+	if (_showTeagram) {
+		_showTeagram->setText(tr::lng_mac_menu_show(tr::now));
 	}
 	if (_fullScreen) {
 		_fullScreen->setText(tr::lng_mac_menu_fullscreen(tr::now));
@@ -308,7 +308,7 @@ void Manager::recomputeState() {
 		.addContactDisabled = inactive,
 		.newGroupDisabled = inactive || support,
 		.newChannelDisabled = inactive || support,
-		.showTelegramDisabled = widget->isActive(),
+		.showTeagramDisabled = widget->isActive(),
 		.markdown = markdownState,
 	};
 	if (_lastState && *_lastState == next) {
@@ -330,7 +330,7 @@ void Manager::recomputeState() {
 	ForceDisabled(_addContact, next.addContactDisabled);
 	ForceDisabled(_newGroup, next.newGroupDisabled);
 	ForceDisabled(_newChannel, next.newChannelDisabled);
-	ForceDisabled(_showTelegram, next.showTelegramDisabled);
+	ForceDisabled(_showTeagram, next.showTeagramDisabled);
 
 	const auto disabled = [&](const QString &tag) {
 		return !markdownState.enabledForTag(tag);
@@ -588,14 +588,11 @@ void Manager::buildWindowMenu(QMenu *window) {
 			std::move(callback));
 	}
 	window->addSeparator();
-	_showTelegram = window->addAction(
-		u"Show Telegram"_q,
-		receiver,
-		[this] {
-			if (const auto w = resolveActiveWindow()) {
-				w->widget()->showFromTray();
-			}
-		});
+	_showTeagram = window->addAction(u"Show Teagram"_q, receiver, [this] {
+		if (const auto w = resolveActiveWindow()) {
+			w->widget()->showFromTray();
+		}
+	});
 }
 
 void Manager::buildMenu() {
@@ -626,12 +623,10 @@ void Manager::destroy() {
 	_lifetime.destroy();
 	_menuBar.reset();
 	_languageBound = false;
-	_logout = _undo = _redo = _cut = _copy = _paste = _delete
-		= _selectAll = _contacts = _addContact = _newGroup
-		= _newChannel = _showTelegram = _fullScreen = _emoji
-		= _bold = _italic = _underline
-		= _strikeOut = _blockquote = _monospace = _clearFormat
-		= nullptr;
+	_logout = _undo = _redo = _cut = _copy = _paste = _delete = _selectAll
+		= _contacts = _addContact = _newGroup = _newChannel = _showTeagram
+		= _fullScreen = _emoji = _bold = _italic = _underline = _strikeOut
+		= _blockquote = _monospace = _clearFormat = nullptr;
 	_pasteboard = nullptr;
 	_pasteboardChangeCount = -1;
 	_pasteboardHasText = false;

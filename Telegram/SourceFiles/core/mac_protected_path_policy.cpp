@@ -464,7 +464,7 @@ bool PairResolution::allowed() const {
 	return first.allowed() && second.allowed();
 }
 
-QByteArray TelegramdProfileRoot(const HomeRoots &homes, bool appSandboxed) {
+QByteArray TeagramProfileRoot(const HomeRoots &homes, bool appSandboxed) {
 	auto result = appSandboxed ? homes.foundation : homes.accountDatabase;
 	if (result.isEmpty()) {
 		return {};
@@ -475,7 +475,7 @@ QByteArray TelegramdProfileRoot(const HomeRoots &homes, bool appSandboxed) {
 	if (!result.endsWith('/')) {
 		result.append('/');
 	}
-	result.append("Library/Application Support/Telegramd");
+	result.append("Library/Application Support/Teagram");
 	return result;
 }
 
