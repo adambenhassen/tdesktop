@@ -565,9 +565,7 @@ void ApplyChatUpdate(
 		chat->invitedByMe.clear();
 		chat->admins.clear();
 		chat->memberRanks.clear();
-		if (chat->usesCustomServer()) {
-			chat->setAdminRights(ChatAdminRights());
-		}
+		chat->setAdminRights(ChatAdminRights());
 		const auto selfUserId = session->userId();
 		const auto toParticipant = [](
 				const auto &data,

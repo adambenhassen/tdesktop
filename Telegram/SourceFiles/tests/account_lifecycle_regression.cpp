@@ -1214,6 +1214,62 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			"official basic-group admin lost its moderation rights or gained creator-only powers");
 	}
 
+	const auto fullListDemotionChatId = ChatId(1057);
+	const auto fullListDemotionChat = stock->session().data().chat(
+		fullListDemotionChatId);
+	const auto fullListDemotionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*fullListDemotionChat));
+	stock->session().api().processFullPeer(
+		fullListDemotionPeer,
+		RegressionChatFullReply(
+			fullListDemotionChatId,
+			1,
+			u"+10000000001"_q,
+			UserId(2),
+			true));
+	if (!fullListDemotionChat->admins.contains(self)
+		|| !fullListDemotionChat->canEditPermissions()
+		|| !fullListDemotionChat->canDeleteMessages()
+		|| !fullListDemotionChat->canBanMembers()
+		|| !fullListDemotionChat->canHaveInviteLink()) {
+		return FailChatParticipantsRegression(
+			"full-list demotion fixture did not start with admin moderation rights");
+	}
+	Data::ApplyChatUpdate(
+		fullListDemotionChat,
+		MTP_chatParticipants(
+			MTP_long(fullListDemotionChatId.bare),
+			MTP_vector<MTPChatParticipant>({
+				MTP_chatParticipantCreator(
+					MTP_flags(MTPDchatParticipantCreator::Flags()),
+					MTP_long(UserId(2).bare),
+					MTP_string(QString())),
+				MTP_chatParticipant(
+					MTP_flags(MTPDchatParticipant::Flags()),
+					MTP_long(selfId.bare),
+					MTP_long(UserId(2).bare),
+					MTP_int(0),
+					MTP_string(QString())),
+				MTP_chatParticipant(
+					MTP_flags(MTPDchatParticipant::Flags()),
+					MTP_long(UserId(9).bare),
+					MTP_long(selfId.bare),
+					MTP_int(0),
+					MTP_string(QString())),
+			}),
+			MTP_int(2)).c_chatParticipants());
+	if (!HasExpectedParticipants(fullListDemotionChat, UserId(2))
+		|| fullListDemotionChat->admins.contains(self)
+		|| fullListDemotionChat->adminRights() != ChatAdminRights()
+		|| fullListDemotionChat->canEditPermissions()
+		|| fullListDemotionChat->canDeleteMessages()
+		|| fullListDemotionChat->canBanMembers()
+		|| fullListDemotionChat->canHaveInviteLink()
+		|| fullListDemotionChat->canAddAdmins()) {
+		return FailChatParticipantsRegression(
+			"normal-server full-list demotion retained admin rights or moderation controls");
+	}
+
 	const auto customAdminActionChat = pinned->session().data().chat(
 		adminActionChatId);
 	const auto customAdminActionPeer = not_null<PeerData*>(
