@@ -1190,9 +1190,12 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			UserId(2)));
 
 	const auto adminActionChatId = ChatId(1054);
+	const auto self = stock->session().user();
 	const auto adminActionChat = stock->session().data().chat(adminActionChatId);
 	const auto adminActionPeer = not_null<PeerData*>(
 		static_cast<PeerData*>(&*adminActionChat));
+	adminActionChat->setAdminRights(
+		adminActionChat->defaultAdminRights(self).flags);
 	stock->session().api().processFullPeer(
 		adminActionPeer,
 		RegressionChatFullReply(
@@ -1201,22 +1204,42 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		u"+10000000001"_q,
 			UserId(2),
 			true));
-	const auto self = stock->session().user();
 	if (!HasExpectedParticipants(adminActionChat, UserId(2))
 		|| !adminActionChat->admins.contains(self)
-		|| adminActionChat->hasAdminRights()
-		|| adminActionChat->canEditPermissions()
-		|| adminActionChat->canDeleteMessages()
-		|| adminActionChat->canBanMembers()
-		|| adminActionChat->canHaveInviteLink()
-		|| (adminActionChat->canEditInformation()
-			!= memberActionChat->canEditInformation())
-		|| (adminActionChat->canAddMembers()
-			!= memberActionChat->canAddMembers())
-		|| (adminActionChat->canAddAdmins()
-			!= memberActionChat->canAddAdmins())) {
+		|| !adminActionChat->hasAdminRights()
+		|| !adminActionChat->canEditPermissions()
+		|| !adminActionChat->canDeleteMessages()
+		|| !adminActionChat->canBanMembers()
+		|| !adminActionChat->canHaveInviteLink()
+		|| adminActionChat->canAddAdmins()) {
 		return FailChatParticipantsRegression(
-			"basic-group admin role widened member permissions instead of staying display-only");
+			"official basic-group admin lost its moderation rights or gained creator-only powers");
+	}
+
+	const auto customAdminActionChat = pinned->session().data().chat(
+		adminActionChatId);
+	const auto customAdminActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*customAdminActionChat));
+	customAdminActionChat->setAdminRights(
+		customAdminActionChat->defaultAdminRights(self).flags);
+	pinned->session().api().processFullPeer(
+		customAdminActionPeer,
+		RegressionChatFullReply(
+			adminActionChatId,
+			1,
+			u"+10000000001"_q,
+			UserId(2),
+			true));
+	if (!HasExpectedParticipants(customAdminActionChat, UserId(2))
+		|| !customAdminActionChat->admins.contains(self)
+		|| customAdminActionChat->hasAdminRights()
+		|| customAdminActionChat->canEditPermissions()
+		|| customAdminActionChat->canDeleteMessages()
+		|| customAdminActionChat->canBanMembers()
+		|| customAdminActionChat->canHaveInviteLink()
+		|| customAdminActionChat->canAddAdmins()) {
+		return FailChatParticipantsRegression(
+			"custom-server basic-group admin gained rights or creator-only powers");
 	}
 
 	const auto liveAdminChatId = ChatId(1055);
@@ -1228,8 +1251,10 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		RegressionChatFullReply(
 			liveAdminChatId,
 			1,
-		u"+10000000001"_q,
+			u"+10000000001"_q,
 			UserId(2)));
+	liveAdminChat->setAdminRights(
+		liveAdminChat->defaultAdminRights(self).flags);
 	Data::ApplyChatUpdate(
 		liveAdminChat,
 		MTP_updateChatParticipantAdmin(
@@ -1238,13 +1263,14 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			MTP_boolTrue(),
 			MTP_int(2)).c_updateChatParticipantAdmin());
 	if (!liveAdminChat->admins.contains(self)
-		|| liveAdminChat->hasAdminRights()
-		|| liveAdminChat->canEditPermissions()
-		|| liveAdminChat->canDeleteMessages()
-		|| liveAdminChat->canBanMembers()
-		|| liveAdminChat->canHaveInviteLink()) {
+		|| !liveAdminChat->hasAdminRights()
+		|| !liveAdminChat->canEditPermissions()
+		|| !liveAdminChat->canDeleteMessages()
+		|| !liveAdminChat->canBanMembers()
+		|| !liveAdminChat->canHaveInviteLink()
+		|| liveAdminChat->canAddAdmins()) {
 		return FailChatParticipantsRegression(
-			"incremental basic-group admin update granted extra permissions");
+			"incremental official basic-group promotion lost admin rights or granted creator-only powers");
 	}
 	Data::ApplyChatUpdate(
 		liveAdminChat,
@@ -1257,6 +1283,50 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		|| liveAdminChat->hasAdminRights()) {
 		return FailChatParticipantsRegression(
 			"incremental basic-group demotion did not clear admin display state");
+	}
+
+	const auto customLiveAdminChatId = ChatId(1056);
+	const auto customLiveAdminChat = pinned->session().data().chat(
+		customLiveAdminChatId);
+	const auto customLiveAdminPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*customLiveAdminChat));
+	pinned->session().api().processFullPeer(
+		customLiveAdminPeer,
+		RegressionChatFullReply(
+			customLiveAdminChatId,
+			1,
+			u"+10000000001"_q,
+			UserId(2)));
+	customLiveAdminChat->setAdminRights(
+		customLiveAdminChat->defaultAdminRights(self).flags);
+	Data::ApplyChatUpdate(
+		customLiveAdminChat,
+		MTP_updateChatParticipantAdmin(
+			MTP_long(customLiveAdminChatId.bare),
+			MTP_long(selfId.bare),
+			MTP_boolTrue(),
+			MTP_int(2)).c_updateChatParticipantAdmin());
+	if (!customLiveAdminChat->admins.contains(self)
+		|| customLiveAdminChat->hasAdminRights()
+		|| customLiveAdminChat->canEditPermissions()
+		|| customLiveAdminChat->canDeleteMessages()
+		|| customLiveAdminChat->canBanMembers()
+		|| customLiveAdminChat->canHaveInviteLink()
+		|| customLiveAdminChat->canAddAdmins()) {
+		return FailChatParticipantsRegression(
+			"incremental custom-server promotion gained admin rights or creator-only powers");
+	}
+	Data::ApplyChatUpdate(
+		customLiveAdminChat,
+		MTP_updateChatParticipantAdmin(
+			MTP_long(customLiveAdminChatId.bare),
+			MTP_long(selfId.bare),
+			MTP_boolFalse(),
+			MTP_int(3)).c_updateChatParticipantAdmin());
+	if (customLiveAdminChat->admins.contains(self)
+		|| customLiveAdminChat->hasAdminRights()) {
+		return FailChatParticipantsRegression(
+			"incremental custom-server demotion did not clear admin display state");
 	}
 	if (!pinnedActionChat->usesCustomServer()
 		|| pinnedActionChat->isDeactivated()

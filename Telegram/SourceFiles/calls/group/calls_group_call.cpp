@@ -264,7 +264,9 @@ GroupCall::VideoTrack::VideoTrack(
 			: chat->admins.contains(user)
 			? Data::details::BasicChatRole::Admin
 			: Data::details::BasicChatRole::Member;
-		return Data::details::CanManageBasicChatCall(role);
+		return Data::details::CanManageBasicChatCall(
+			role,
+			chat->usesCustomServer());
 	} else if (const auto group = peer->asChannel()) {
 		if (const auto mgInfo = group->mgInfo.get()) {
 			if (mgInfo->creator == user) {

@@ -31,8 +31,10 @@ enum class BasicChatRole {
 }
 
 [[nodiscard]] inline constexpr bool CanManageBasicChatCall(
-		BasicChatRole role) {
-	return role == BasicChatRole::Creator;
+		BasicChatRole role,
+		bool customServer) {
+	return (role == BasicChatRole::Creator)
+		|| (!customServer && (role == BasicChatRole::Admin));
 }
 
 struct ChatParticipantInfo {

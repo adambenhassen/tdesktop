@@ -45,10 +45,13 @@ TEST_CASE(BasicGroupAdminPromotionRequiresCreatorMembership) {
 	CHECK(!CanAddBasicChatAdmins(true, false));
 }
 
-TEST_CASE(BasicGroupAdminRoleDoesNotGrantCallManagement) {
-	CHECK(CanManageBasicChatCall(BasicChatRole::Creator));
-	CHECK(!CanManageBasicChatCall(BasicChatRole::Admin));
-	CHECK(!CanManageBasicChatCall(BasicChatRole::Member));
+TEST_CASE(BasicGroupCallManagementRespectsServerAdminRights) {
+	CHECK(CanManageBasicChatCall(BasicChatRole::Creator, false));
+	CHECK(CanManageBasicChatCall(BasicChatRole::Creator, true));
+	CHECK(CanManageBasicChatCall(BasicChatRole::Admin, false));
+	CHECK(!CanManageBasicChatCall(BasicChatRole::Admin, true));
+	CHECK(!CanManageBasicChatCall(BasicChatRole::Member, false));
+	CHECK(!CanManageBasicChatCall(BasicChatRole::Member, true));
 }
 
 TEST_CASE(PinnedPhoneFreeSelfMemberKeepsGroupParticipants) {

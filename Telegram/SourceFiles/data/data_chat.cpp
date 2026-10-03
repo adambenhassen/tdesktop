@@ -425,10 +425,11 @@ void ApplyChatUpdate(
 		chat->invalidateParticipants();
 		return;
 	}
-	if (user->isSelf()) {
+	const auto isAdmin = mtpIsTrue(update.vis_admin());
+	if (user->isSelf() && (!isAdmin || chat->usesCustomServer())) {
 		chat->setAdminRights(ChatAdminRights());
 	}
-	if (mtpIsTrue(update.vis_admin())) {
+	if (isAdmin) {
 		if (chat->noParticipantInfo()) {
 			session->api().requestFullPeer(chat);
 		} else {
@@ -562,7 +563,9 @@ void ApplyChatUpdate(
 		chat->invitedByMe.clear();
 		chat->admins.clear();
 		chat->memberRanks.clear();
-		chat->setAdminRights(ChatAdminRights());
+		if (chat->usesCustomServer()) {
+			chat->setAdminRights(ChatAdminRights());
+		}
 		const auto selfUserId = session->userId();
 		const auto toParticipant = [](
 				const auto &data,
@@ -620,7 +623,7 @@ void ApplyChatUpdate(
 				chat->creator = participant.userId;
 			} else if (participant.admin) {
 				chat->admins.emplace(user);
-				if (user->isSelf()) {
+				if (user->isSelf() && chat->usesCustomServer()) {
 					chat->setAdminRights(ChatAdminRights());
 				}
 			}
