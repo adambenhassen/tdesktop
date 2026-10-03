@@ -1109,6 +1109,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_clear_payment_info_confirm" = "Delete your shipping info and instruct all payment providers to remove your saved credit cards? Note that Telegram never stores your credit card data.";
 
 "lng_settings_theme_settings" = "Theme settings";
+"lng_settings_teagram_icon" = "Teagram app icon";
+"lng_settings_teagram_icon_mug" = "Mug";
+"lng_settings_teagram_icon_t" = "T";
 "lng_settings_theme_name_color" = "Your name color";
 "lng_settings_auto_night_mode" = "Auto-night mode";
 "lng_settings_auto_night_mode_off" = "Off";

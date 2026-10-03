@@ -166,6 +166,11 @@ settingsNavigationBandSkip: 4px;
 settingsSendType: settingsCheckbox;
 settingsSendTypePadding: margins(22px, 5px, 10px, 5px);
 settingsSendTypeSkip: 5px;
+teagramAppIconTitle: FlatLabel(defaultFlatLabel) {
+    minWidth: 100px;
+}
+teagramAppIconTitlePadding: margins(22px, 9px, 66px, 1px);
+teagramAppIconPreviewSize: size(88px, 88px);
 
 settingsBackgroundThumb: 76px;
 settingsThumbSkip: 16px;
