@@ -89,13 +89,13 @@ TEST_CASE(TelegramdProfileRootUsesTrustedHomeSource) {
 		.accountDatabase = "/Users/alice",
 		.environment = "/Users/alice/Library/Group Containers/group.telegramd",
 		.foundation
-		= "/Users/alice/Library/Containers/com.teagramhq.telegramd/Data"};
+		= "/Users/alice/Library/Containers/com.adambenhassen.telegramd/Data"};
 	CHECK_EQ(TelegramdProfileRoot(homes, false),
 			 QByteArray("/Users/alice/Library/Application Support/Telegramd"));
 	CHECK_EQ(
 		TelegramdProfileRoot(homes, true),
 		QByteArray(
-			"/Users/alice/Library/Containers/com.teagramhq.telegramd/Data/"
+			"/Users/alice/Library/Containers/com.adambenhassen.telegramd/Data/"
 			"Library/Application Support/Telegramd"));
 }
 
@@ -178,7 +178,7 @@ TEST_CASE(AllProtectedRootsUseComponentMatching) {
 		"/Users/alice/Library/Application Support/Telegram Desktop.bak/tdata/x",
 		"/Users/alice/Library/Containers/com.example.other/Data/x",
 		"/Users/alice/Library/Group Containers/Signal/tdata/x",
-		"/Users/alice/Library/Preferences/com.teagramhq.telegramd.plist",
+		"/Users/alice/Library/Preferences/com.adambenhassen.telegramd.plist",
 	};
 	for (const auto &path : allowedPaths) {
 		CHECK(policy.Classify(path) == ProtectedClass::None);
