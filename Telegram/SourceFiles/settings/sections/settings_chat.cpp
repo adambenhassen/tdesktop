@@ -999,11 +999,17 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 				tr::lng_settings_teagram_icon(tr::now),
 				st::teagramAppIconTitle),
 			st::teagramAppIconTitlePadding);
-		auto scroll = object_ptr<Ui::ScrollArea>(
-			inner,
+		auto holder = object_ptr<Ui::RpWidget>(inner);
+		holder->setFixedHeight(st::teagramAppIconScrollHeight);
+		const auto holderRaw = inner->add(
+			std::move(holder),
+			st::settingsSendTypePadding);
+		const auto scrollRaw = new Ui::ScrollArea(
+			holderRaw,
 			st::teagramAppIconScroll);
-		scroll->setFixedHeight(st::teagramAppIconScrollHeight);
-		const auto scrollRaw = scroll.data();
+		holderRaw->widthValue() | rpl::on_next([=](int width) {
+			scrollRaw->resize(width, st::teagramAppIconScrollHeight);
+		}, holderRaw->lifetime());
 		auto row = object_ptr<QWidget>(scrollRaw);
 		const auto rowRaw = row.data();
 		auto rowLayout = new QHBoxLayout(rowRaw);
@@ -1043,7 +1049,6 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 		rowRaw->adjustSize();
 		rowRaw->setFixedSize(rowLayout->sizeHint());
 		scrollRaw->setOwnedWidget(std::move(row));
-		inner->add(std::move(scroll), st::settingsSendTypePadding);
 		group->setChangedCallback([=](int value) {
 			if (value < 0 || value >= Core::kTeagramIconChoiceCount) {
 				return;
