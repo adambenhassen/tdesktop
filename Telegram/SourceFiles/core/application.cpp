@@ -1974,12 +1974,14 @@ void Application::refreshApplicationIcon(Main::Session *session) {
 	const auto support = session && session->supportMode();
 	Shortcuts::ToggleSupportShortcuts(support);
 	auto icon = Window::CreateIcon(session, Platform::IsMac());
+#if defined Q_OS_MAC && !defined OS_MAC_STORE
 	if constexpr (Platform::IsMac()) {
 		if (!support
 			&& (ReadTeagramIconChoice(settings()) == TeagramIconChoice::T)) {
 			icon = QIcon(u":/gui/art/teagram-app-icon-t.png"_q);
 		}
 	}
+#endif // Q_OS_MAC && !OS_MAC_STORE
 	Platform::SetApplicationIcon(icon);
 }
 

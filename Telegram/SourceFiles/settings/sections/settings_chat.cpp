@@ -875,7 +875,7 @@ void BuildThemeSettingsSection(SectionBuilder &builder) {
 	});
 }
 
-#if defined Q_OS_MAC
+#if defined Q_OS_MAC && !defined OS_MAC_STORE
 class TeagramIconPreview final : public Ui::RpWidget {
 public:
 	TeagramIconPreview(
@@ -954,7 +954,7 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 		};
 	});
 }
-#endif // Q_OS_MAC
+#endif // Q_OS_MAC && !OS_MAC_STORE
 
 void BuildCloudThemesSection(SectionBuilder &builder) {
 	const auto controller = builder.controller();
@@ -1389,9 +1389,9 @@ void BuildSupportSection(SectionBuilder &builder) {
 void BuildChatSectionContent(SectionBuilder &builder) {
 	BuildThemeOptionsSection(builder);
 	BuildThemeSettingsSection(builder);
-#if defined Q_OS_MAC
+#if defined Q_OS_MAC && !defined OS_MAC_STORE
 	BuildTeagramIconSection(builder);
-#endif // Q_OS_MAC
+#endif // Q_OS_MAC && !OS_MAC_STORE
 	BuildCloudThemesSection(builder);
 	BuildChatBackgroundSection(builder);
 	BuildChatListQuickActionSection(builder);
