@@ -67,6 +67,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/teagram_icon_choice.h"
 #include "data/data_session.h"
 #include "data/data_cloud_themes.h"
 #include "data/data_file_origin.h"
@@ -89,6 +90,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 
 #include <QAction>
+#include <QtGui/QImage>
+#include <QtGui/QPixmap>
+#include <QtWidgets/QLabel>
 
 namespace Settings {
 namespace {
@@ -865,6 +869,69 @@ void BuildThemeSettingsSection(SectionBuilder &builder) {
 	});
 }
 
+#if defined Q_OS_MAC
+void BuildTeagramIconSection(SectionBuilder &builder) {
+	builder.add([](const WidgetContext &ctx) {
+		const auto selected = Core::ReadTeagramIconChoice(
+			Core::App().settings());
+		const auto group = std::make_shared<Ui::RadiobuttonGroup>(
+			(selected == Core::TeagramIconChoice::T) ? 1 : 0);
+		auto wrap = object_ptr<Ui::VerticalLayout>(ctx.container.get());
+		const auto inner = wrap.data();
+		inner->add(
+			object_ptr<Ui::FlatLabel>(
+				inner,
+				tr::lng_settings_teagram_icon(tr::now),
+				st::teagramAppIconTitle),
+			st::teagramAppIconTitlePadding);
+		const auto addChoice = [&](
+				int value,
+				const QString &title,
+				const QString &path) {
+			auto preview = object_ptr<QLabel>(inner);
+			preview->setAlignment(Qt::AlignCenter);
+			preview->setAccessibleName(title);
+			preview->setFixedSize(st::teagramAppIconPreviewSize);
+			preview->setPixmap(QPixmap::fromImage(QImage(path).scaled(
+				st::teagramAppIconPreviewSize,
+				Qt::KeepAspectRatio,
+				Qt::SmoothTransformation)));
+			inner->add(std::move(preview), st::settingsSendTypePadding);
+			inner->add(
+				object_ptr<Ui::Radiobutton>(
+					inner,
+					group,
+					value,
+					title,
+					st::settingsSendType),
+				st::settingsSendTypePadding);
+		};
+		addChoice(
+			0,
+			tr::lng_settings_teagram_icon_mug(tr::now),
+			u":/gui/art/teagram-icon-1024.png"_q);
+		addChoice(
+			1,
+			tr::lng_settings_teagram_icon_t(tr::now),
+			u":/gui/art/teagram-app-icon-t.png"_q);
+		group->setChangedCallback([=](int value) {
+			Core::WriteTeagramIconChoice(
+				Core::App().settings(),
+				value ? Core::TeagramIconChoice::T
+					: Core::TeagramIconChoice::Mug);
+			Core::App().refreshApplicationIcon();
+		});
+		return SectionBuilder::WidgetToAdd{ .widget = std::move(wrap) };
+	}, [] {
+		return SearchEntry{
+			.id = u"chat/teagram-app-icon"_q,
+			.title = tr::lng_settings_teagram_icon(tr::now),
+			.keywords = { u"teagram"_q, u"icon"_q, u"mug"_q },
+		};
+	});
+}
+#endif // Q_OS_MAC
+
 void BuildCloudThemesSection(SectionBuilder &builder) {
 	const auto controller = builder.controller();
 	const auto highlights = builder.highlights();
@@ -1298,6 +1365,9 @@ void BuildSupportSection(SectionBuilder &builder) {
 void BuildChatSectionContent(SectionBuilder &builder) {
 	BuildThemeOptionsSection(builder);
 	BuildThemeSettingsSection(builder);
+#if defined Q_OS_MAC
+	BuildTeagramIconSection(builder);
+#endif // Q_OS_MAC
 	BuildCloudThemesSection(builder);
 	BuildChatBackgroundSection(builder);
 	BuildChatListQuickActionSection(builder);

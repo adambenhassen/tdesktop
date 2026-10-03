@@ -239,6 +239,7 @@ paths.extend(
 	root / f'Telegram/Resources/art/teagram-icon-{size}.png'
 	for size in sizes
 )
+paths.append(root / 'Telegram/Resources/art/teagram-app-icon-t.png')
 paths.append(root / 'Telegram/Resources/art/icon_round512@2x.png')
 
 for path in paths:

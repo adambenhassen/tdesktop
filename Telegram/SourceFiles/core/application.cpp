@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/unixtime.h"
 #include "core/core_settings.h"
+#include "core/teagram_icon_choice.h"
 #include "core/update_checker.h"
 #include "core/shortcuts.h"
 #include "core/sandbox.h"
@@ -101,6 +102,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QIcon>
 #include <QtGui/QScreen>
 
 #include <ksandbox.h>
@@ -415,6 +417,7 @@ void Application::run() {
 	DEBUG_LOG(("Application Info: window created..."));
 
 	startDomain();
+	refreshApplicationIcon();
 
 	if (qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")) {
 		regressionResult |= RunSignupControlsRegression();
@@ -1939,9 +1942,14 @@ void Application::refreshApplicationIcon() {
 void Application::refreshApplicationIcon(Main::Session *session) {
 	const auto support = session && session->supportMode();
 	Shortcuts::ToggleSupportShortcuts(support);
-	Platform::SetApplicationIcon(Window::CreateIcon(
-		session,
-		Platform::IsMac()));
+	auto icon = Window::CreateIcon(session, Platform::IsMac());
+	if constexpr (Platform::IsMac()) {
+		if (!support
+			&& (ReadTeagramIconChoice(settings()) == TeagramIconChoice::T)) {
+			icon = QIcon(u":/gui/art/teagram-app-icon-t.png"_q);
+		}
+	}
+	Platform::SetApplicationIcon(icon);
 }
 
 void Application::startShortcuts() {

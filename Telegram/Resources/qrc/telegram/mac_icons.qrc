@@ -1,5 +1,7 @@
 <RCC>
   <qresource prefix="/gui">
     <file alias="art/icon_round512@2x.png">../../art/icon_round512@2x.png</file>
+    <file alias="art/teagram-icon-1024.png">../../art/teagram-icon-1024.png</file>
+    <file alias="art/teagram-app-icon-t.png">../../art/teagram-app-icon-t.png</file>
   </qresource>
 </RCC>
