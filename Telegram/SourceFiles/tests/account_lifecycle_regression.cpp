@@ -9,7 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "core/mac_protected_path_runtime.h"
+#include "core/teagram_icon_choice.h"
 #include "crl/crl_on_main.h"
 #include "crl/crl_semaphore.h"
 #include "data/data_chat.h"
@@ -406,6 +408,27 @@ RegressionOtherServerKey() {
 		"Account lifecycle regression failed: %s\n",
 		reason);
 	return 1;
+}
+
+[[nodiscard]] bool TeagramIconChoicePersistsAcrossSettingsReload() {
+	auto settings = Core::Settings();
+	if (Core::ReadTeagramIconChoice(settings)
+		!= Core::TeagramIconChoice::Mug) {
+		return false;
+	}
+	for (const auto choice : {
+			Core::TeagramIconChoice::T,
+			Core::TeagramIconChoice::Mug,
+		}) {
+		Core::WriteTeagramIconChoice(settings, choice);
+		auto reloaded = Core::Settings();
+		reloaded.addFromSerialized(settings.serialize());
+		if (Core::ReadTeagramIconChoice(reloaded) != choice) {
+			return false;
+		}
+	}
+	std::fprintf(stderr, "Teagram icon choice persistence regression passed.\n");
+	return true;
 }
 
 [[nodiscard]] MTPUser RegressionUser(
@@ -1300,6 +1323,10 @@ StartChatParticipantsRegression(Main::Domain &domain,
 }
 
 [[nodiscard]] int StartAccountLifecycleRegression(Fn<void(int)> done) {
+	if (!TeagramIconChoicePersistsAcrossSettingsReload()) {
+		return FailAccountLifecycleRegression(
+			"Teagram icon choice did not survive settings serialization");
+	}
 	const auto failureVariable = QByteArray(
 		"TDESKTOP_FAIL_MTP_AUTHORIZATION_WRITE");
 	const auto failWrites = gsl::finally([&] {

@@ -62,9 +62,6 @@ target_precompile_headers(test_unit PRIVATE
 
 nice_target_sources(test_unit ${src_loc}
 PRIVATE
-    # The persistence test exercises the same settings serialization as the app.
-    core/core_settings.cpp
-    core/core_settings_proxy.cpp
     core/local_url_conversion.cpp
     # Compiled in the application target only, so the test links it
     # directly: the code under test is the shipped code.
@@ -97,7 +94,6 @@ PRIVATE
     tests/unit/server_discovery_tests.cpp
     tests/unit/server_enrollment_tests.cpp
     tests/unit/storage_domain_restart_support.cpp
-    tests/unit/teagram_icon_choice_tests.cpp
     tests/unit/update_policy_tests.cpp
     tests/unit/username_check_state_tests.cpp
     tests/unit/unit_test.cpp
@@ -124,7 +120,6 @@ PRIVATE
     desktop-app::lib_crl
     desktop-app::lib_storage
     desktop-app::lib_ui
-    desktop-app::lib_spellcheck
     desktop-app::lib_webview
     desktop-app::lib_tl
     desktop-app::external_qt
