@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 MODE="${2:-all}"
 PLIST_FILE="$ROOT/Telegram/Telegram.plist"
+CMAKE_FILE="$ROOT/Telegram/CMakeLists.txt"
 ISOLATION_FILE="$ROOT/Telegram/build/mac_isolation_test.sh"
 PARSER_FILE="$ROOT/Telegram/build/check_mac_fs_usage.py"
 
@@ -19,7 +20,9 @@ esac
 
 if [ "$MODE" != observer ]; then
 	test -f "$PLIST_FILE"
-	python3 - "$PLIST_FILE" <<'PY'
+	test -f "$CMAKE_FILE"
+	python3 - "$PLIST_FILE" "$CMAKE_FILE" <<'PY'
+import pathlib
 import sys
 import xml.etree.ElementTree as ElementTree
 
@@ -43,6 +46,8 @@ assert all(
     for element in root.iter('string')
     for value in [element.text]
 )
+cmake = pathlib.Path(sys.argv[2]).read_text(encoding='utf-8')
+assert cmake.count('set(bundle_identifier "com.teagramhq.desktop")') == 2
 PY
 fi
 

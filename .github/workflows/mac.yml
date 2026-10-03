@@ -278,7 +278,7 @@ jobs:
           plutil -p "$plist" | tee evidence/plist.txt
           test "$(plutil -extract CFBundleExecutable raw -o - "$plist")" = Telegramd
           test "$(plutil -extract CFBundleName raw -o - "$plist")" = Telegramd
-          test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = com.adambenhassen.telegramd
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = com.teagramhq.desktop
           if plutil -extract CFBundleURLTypes xml1 -o - "$plist" >/dev/null 2>&1; then
             echo "CFBundleURLTypes must be absent from $plist"
             exit 1
