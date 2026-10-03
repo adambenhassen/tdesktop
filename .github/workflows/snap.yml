@@ -11,7 +11,7 @@ jobs:
     name: Ubuntu
     # This fork cannot schedule a depot label, and a build that queues forever
     # is not a build.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     env:
       UPLOAD_ARTIFACT: "true"

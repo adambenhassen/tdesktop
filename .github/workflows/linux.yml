@@ -47,7 +47,7 @@ jobs:
 
   linux-changes:
     name: Detect Linux changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       required: ${{ steps.filter.outputs.required }}
 
@@ -71,7 +71,7 @@ jobs:
     name: Linux build and unit tests
     needs: linux-changes
     if: needs.linux-changes.outputs.required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     strategy:
       matrix:
@@ -367,7 +367,7 @@ jobs:
       - linux-changes
       - linux-build
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Report Rocky Linux 8 result.
