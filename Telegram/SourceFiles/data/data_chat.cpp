@@ -426,8 +426,10 @@ void ApplyChatUpdate(
 		return;
 	}
 	const auto isAdmin = mtpIsTrue(update.vis_admin());
-	if (user->isSelf() && (!isAdmin || chat->usesCustomServer())) {
-		chat->setAdminRights(ChatAdminRights());
+	if (user->isSelf()) {
+		chat->setAdminRights(isAdmin && !chat->usesCustomServer()
+			? chat->defaultAdminRights(user).flags
+			: ChatAdminRights());
 	}
 	if (isAdmin) {
 		if (chat->noParticipantInfo()) {
@@ -623,8 +625,10 @@ void ApplyChatUpdate(
 				chat->creator = participant.userId;
 			} else if (participant.admin) {
 				chat->admins.emplace(user);
-				if (user->isSelf() && chat->usesCustomServer()) {
-					chat->setAdminRights(ChatAdminRights());
+				if (user->isSelf()) {
+					chat->setAdminRights(chat->usesCustomServer()
+						? ChatAdminRights()
+						: chat->defaultAdminRights(user).flags);
 				}
 			}
 			if (!participant.rank.isEmpty()) {

@@ -1194,8 +1194,6 @@ StartChatParticipantsRegression(Main::Domain &domain,
 	const auto adminActionChat = stock->session().data().chat(adminActionChatId);
 	const auto adminActionPeer = not_null<PeerData*>(
 		static_cast<PeerData*>(&*adminActionChat));
-	adminActionChat->setAdminRights(
-		adminActionChat->defaultAdminRights(self).flags);
 	stock->session().api().processFullPeer(
 		adminActionPeer,
 		RegressionChatFullReply(
@@ -1253,8 +1251,6 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			1,
 			u"+10000000001"_q,
 			UserId(2)));
-	liveAdminChat->setAdminRights(
-		liveAdminChat->defaultAdminRights(self).flags);
 	Data::ApplyChatUpdate(
 		liveAdminChat,
 		MTP_updateChatParticipantAdmin(
