@@ -944,12 +944,20 @@ void DownloadManager::resolveRequestsFinished(
 		const auto media = item ? item->media() : nullptr;
 		const auto document = media ? media->document() : nullptr;
 		const auto photo = media ? media->photo() : nullptr;
-		if (i->download.type == DownloadType::Document
-			&& (!document || document->id != i->download.objectId)) {
-			generateEntry(session, *i);
-		} else if (i->download.type == DownloadType::Photo
-			&& (!photo || photo->id != i->download.objectId)) {
-			generateEntry(session, *i);
+		const auto generate =
+			(i->download.type == DownloadType::Document
+				&& (!document || document->id != i->download.objectId))
+			|| (i->download.type == DownloadType::Photo
+				&& (!photo || photo->id != i->download.objectId));
+		if (generate) {
+			details::GenerateAndNotifyLoadedEntry(
+				*i,
+				[=](DownloadedId &entry) {
+					generateEntry(session, entry);
+				},
+				[=](const DownloadedId *entry) {
+					_loadedAdded.fire(entry);
+				});
 		} else {
 			i->object = std::make_unique<DownloadObject>(DownloadObject{
 				.item = item,
@@ -957,8 +965,8 @@ void DownloadManager::resolveRequestsFinished(
 				.photo = photo,
 			});
 			_loaded.emplace(item);
+			_loadedAdded.fire(&*i);
 		}
-		_loadedAdded.fire(&*i);
 	}
 	crl::on_main(session, [=] {
 		resolve(session, sessionData(session));

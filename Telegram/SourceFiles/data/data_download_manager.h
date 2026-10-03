@@ -65,6 +65,21 @@ struct DownloadedId {
 	std::unique_ptr<DownloadObject> object;
 };
 
+namespace details {
+
+template <typename Generate, typename Notify>
+void GenerateAndNotifyLoadedEntry(
+		DownloadedId &entry,
+		Generate &&generate,
+		Notify &&notify) {
+	generate(entry);
+	if (entry.object) {
+		notify(&entry);
+	}
+}
+
+} // namespace details
+
 struct DownloadingId {
 	DownloadObject object;
 	DownloadDate started = 0;
