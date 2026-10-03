@@ -401,28 +401,152 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Full chat info session regression.
+        id: lifecycle-regression
         run: |
+          set -Eeuo pipefail
           regression_root="$RUNNER_TEMP/tdesktop-chat-participants"
           regression_home="$regression_root/home"
           regression_work="$regression_root/work"
-          regression_logs="$regression_root/logs"
+          diagnostics="$regression_root/diagnostics"
+          application_logs="$diagnostics/application"
+          symbols="$regression_root/symbols/Telegramd.app.dSYM"
           executable="$GITHUB_WORKSPACE/$REPO_NAME/build/Telegramd.app/Contents/MacOS/Telegramd"
-          mkdir -p "$regression_home" "$regression_work" "$regression_logs"
+          mkdir -p "$regression_home" "$regression_work" "$diagnostics" "$application_logs/DebugLogs" "$(dirname "$symbols")"
           test -x "$executable"
-          if ! env \
+
+          {
+            printf 'Built SHA: %s\n' "$GITHUB_SHA"
+            printf 'Environment: ALSOFT_DRIVERS=null TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1\n'
+            printf 'HOME: %s\nWorkdir: %s\n' "$regression_home" "$regression_work"
+            printf 'Runner: %s (%s)\n' "$RUNNER_NAME" "$RUNNER_OS"
+            sw_vers
+            uname -a
+            xcodebuild -version
+            printf 'Executable SHA-256: %s\n' "$(shasum -a 256 "$executable" | awk '{print $1}')"
+            dwarfdump --uuid "$executable"
+          } > "$diagnostics/metadata.txt" 2>&1
+
+          dsym_status=0
+          dsymutil "$executable" -o "$symbols" > "$diagnostics/dsymutil.log" 2>&1 || dsym_status=$?
+          symbol_file=""
+          printf 'dsymutil exit: %s\n' "$dsym_status" >> "$diagnostics/metadata.txt"
+          dsym_file="$symbols/Contents/Resources/DWARF/Telegramd"
+          if [ "$dsym_status" -eq 0 ] && [ -f "$dsym_file" ]; then
+            binary_uuid_status=0
+            symbol_uuid_status=0
+            binary_uuid="$(dwarfdump --uuid "$executable" | awk '{print $2, $3}')" || binary_uuid_status=$?
+            symbol_uuid="$(dwarfdump --uuid "$dsym_file" | awk '{print $2, $3}')" || symbol_uuid_status=$?
+            printf 'dSYM UUID: %s\n' "$symbol_uuid" >> "$diagnostics/metadata.txt"
+            if [ "$binary_uuid_status" -eq 0 ] \
+                && [ "$symbol_uuid_status" -eq 0 ] \
+                && [ -n "$binary_uuid" ] \
+                && [ "$binary_uuid" = "$symbol_uuid" ]; then
+              symbol_file="$dsym_file"
+              echo "dSYM UUID matches executable." >> "$diagnostics/metadata.txt"
+            else
+              echo "dSYM UUID does not match executable or could not be read." >> "$diagnostics/metadata.txt"
+            fi
+          else
+            echo "Matching dSYM was not generated; inspect dsymutil.log and retain compiler debug information for Telegramd." >> "$diagnostics/metadata.txt"
+          fi
+
+          set +e
+          env \
             HOME="$regression_home" \
             ALSOFT_DRIVERS=null \
             TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
-            arch -arm64 "$executable" \
-              -noupdate -debug -workdir "$regression_work" \
-              > "$regression_logs/stdout.log" \
-              2> "$regression_logs/stderr.log"; then
-            cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
+            python3 - "$executable" "$regression_work" \
+              "$diagnostics/stdout.log" "$diagnostics/stderr.log" \
+              "$diagnostics/lldb.log" "$symbol_file" <<'PY'
+          import os
+          import shlex
+          import signal
+          import subprocess
+          import sys
+
+          executable, workdir, stdout_path, stderr_path, log_path, symbol_file = sys.argv[1:]
+          command = ["arch", "-arm64", "lldb", "--batch"]
+          if symbol_file:
+              command.extend(["-o", f"target symbols add {shlex.quote(symbol_file)}"])
+          command.extend([
+              "-o",
+              "process launch "
+              f"-o {shlex.quote(stdout_path)} "
+              f"-e {shlex.quote(stderr_path)} "
+              f"-- -noupdate -debug -workdir {shlex.quote(workdir)}",
+              "-k", "thread backtrace all",
+              "-k", "frame info",
+              "-k", "register read",
+              "--", executable,
+          ])
+
+          with open(log_path, "w", encoding="utf-8") as log:
+              process = subprocess.Popen(
+                  command,
+                  stdout=log,
+                  stderr=subprocess.STDOUT,
+                  env=os.environ.copy(),
+                  start_new_session=True,
+              )
+              try:
+                  status = process.wait(timeout=180)
+              except subprocess.TimeoutExpired:
+                  try:
+                      os.killpg(process.pid, signal.SIGTERM)
+                  except ProcessLookupError:
+                      pass
+                  try:
+                      process.wait(timeout=5)
+                  except subprocess.TimeoutExpired:
+                      try:
+                          os.killpg(process.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      process.wait()
+                  log.write("Debugger exceeded its 180-second bound.\n")
+                  status = 124
+
+          sys.exit(status)
+          PY
+          debugger_status=$?
+          set -e
+
+          for relative_log in log.txt DebugLogs/log.txt DebugLogs/mtp.txt DebugLogs/last_openal_log.txt; do
+            if [ -f "$regression_work/$relative_log" ]; then
+              cp "$regression_work/$relative_log" "$application_logs/$relative_log"
+            else
+              printf 'Not generated: %s\n' "$relative_log" >> "$diagnostics/missing-application-logs.txt"
+            fi
+          done
+          printf 'LLDB exit: %s\n' "$debugger_status" >> "$diagnostics/metadata.txt"
+          symbolized_frame="$(awk '/Telegramd.* at .*:[0-9]+/ { print; exit }' "$diagnostics/lldb.log")"
+          if [ -n "$symbolized_frame" ]; then
+            printf 'Symbolized application frame: %s\n' "$symbolized_frame" >> "$diagnostics/metadata.txt"
+          elif [ -n "$symbol_file" ]; then
+            echo "No Telegramd source line was emitted despite a matching dSYM; retain full LLDB log and dSYM line-table/source-map data is still needed for attribution." >> "$diagnostics/metadata.txt"
+          else
+            echo "Application frame remains unsymbolized; a matching Telegramd dSYM with source line tables is the remaining prerequisite for function/source attribution." >> "$diagnostics/metadata.txt"
+          fi
+
+          if grep -Eq 'EXC_(BAD_ACCESS|BREAKPOINT|CRASH)|SIG(SEGV|ABRT|BUS)' "$diagnostics/lldb.log"; then
+            echo "Full chat info session regression crashed under the null audio backend on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
+          if [ "$debugger_status" -ne 0 ] || ! grep -F 'exited with status = 0' "$diagnostics/lldb.log" >/dev/null; then
+            echo "Debugger did not observe a clean lifecycle regression exit; inspect the retained diagnostics artifact."
+            exit 1
+          fi
           echo "Full chat info session regression passed on $GITHUB_SHA."
           echo "Full chat info session regression passed on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lifecycle regression diagnostics.
+        if: ${{ always() && steps.lifecycle-regression.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lifecycle-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/tdesktop-chat-participants/diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Report compiler cache hits.
         id: ccache-stats
