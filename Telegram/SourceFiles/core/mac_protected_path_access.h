@@ -9,9 +9,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/mac_protected_path_runtime.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QUrl>
 
 #include <functional>
+#include <optional>
 #include <utility>
 
 namespace Core::MacProtectedPath {
@@ -57,6 +61,54 @@ class ScopedExternalPathCheckerForTesting final {
 	}
 #endif // TDESKTOP_UNIT_TESTS
 	return CheckExternalPath(operation, path, callsite);
+}
+
+[[nodiscard]] inline std::optional<QString> LocalFilePathFromUrl(
+		const QString &url) {
+	const auto parsed = QUrl(url);
+	return parsed.isLocalFile()
+		? std::make_optional(parsed.toLocalFile())
+		: std::nullopt;
+}
+
+template <typename Dispatch>
+[[nodiscard]] bool DispatchExternalPathIfAllowed(
+		Operation operation,
+		const QString &path,
+		const char *callsite,
+		Dispatch &&dispatch) {
+	if (!CheckExternalPathForUse(operation, path, callsite)) {
+		return false;
+	}
+	std::forward<Dispatch>(dispatch)();
+	return true;
+}
+
+template <typename Dispatch>
+[[nodiscard]] bool DispatchCustomAppIconIfAllowed(
+		const QString &source,
+		const char *callsite,
+		Dispatch &&dispatch) {
+	const auto check = [&](Operation operation, const QString &path) {
+		return CheckExternalPathForUse(operation, path, callsite);
+	};
+	if (!source.isEmpty() && !check(Operation::Read, source)) {
+		return false;
+	}
+	const auto bundle = QDir::cleanPath(
+		QCoreApplication::applicationDirPath() + u"/../.."_q);
+	const auto icon = bundle + u"/Icon\r"_q;
+	const auto temporary = QDir::tempPath();
+	if (!check(Operation::Read, bundle)
+		|| !check(Operation::Write, bundle)
+		|| !check(Operation::Read, icon)
+		|| !check(Operation::Write, icon)
+		|| !check(Operation::OpenDir, temporary)
+		|| !check(Operation::Write, temporary)) {
+		return false;
+	}
+	std::forward<Dispatch>(dispatch)();
+	return true;
 }
 
 class PersistedExternalPath final {

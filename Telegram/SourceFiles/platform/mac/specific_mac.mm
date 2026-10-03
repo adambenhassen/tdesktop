@@ -230,7 +230,13 @@ void OpenSystemSettingsForPermission(PermissionType type) {
 bool OpenSystemSettings(SystemSettingsType type) {
 	switch (type) {
 	case SystemSettingsType::Audio:
-		[[NSWorkspace sharedWorkspace] openFile:@"/System/Library/PreferencePanes/Sound.prefPane"];
+		if (Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Open,
+				u"/System/Library/PreferencePanes/Sound.prefPane"_q,
+				Q_FUNC_INFO)) {
+			[[NSWorkspace sharedWorkspace]
+				openFile:@"/System/Library/PreferencePanes/Sound.prefPane"];
+		}
 		break;
 	}
 	return true;

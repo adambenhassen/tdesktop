@@ -271,8 +271,22 @@ bool InitializeProfile() {
 		ReportRefusal(create.refusal);
 		return false;
 	}
-	if (!QDir().mkpath(profilePath)) {
+	const auto temporaryPath = profilePath + u"/tdata/temp"_q;
+	const auto temporary
+		= policy.Resolve(Operation::Mkdir, QFile::encodeName(temporaryPath),
+						 homes.accountDatabase, u"profile.helper-temp"_q);
+	if (!temporary.allowed()) {
+		ReportRefusal(temporary.refusal);
+		return false;
+	}
+	if (!QDir().mkpath(profilePath) || !QDir().mkpath(temporaryPath)) {
 		ReportInvalidInitialization(u"profile.mkdir"_q);
+		return false;
+	}
+	if (!qputenv("TMPDIR", QFile::encodeName(temporaryPath))
+		|| QDir::cleanPath(QDir::tempPath())
+			!= QDir::cleanPath(temporaryPath)) {
+		ReportInvalidInitialization(u"profile.helper-temp"_q);
 		return false;
 	}
 

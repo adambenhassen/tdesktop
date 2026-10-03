@@ -1414,3 +1414,102 @@ TEST_CASE(DestructiveOperationsRefuseProtectedAncestors) {
 		{},
 		u"unit.ancestor.second"_q).allowed());
 }
+
+TEST_CASE(LocalFileUrlsExposeDecodedPathsForHandoffChecks) {
+	const auto local = LocalFilePathFromUrl(
+		u"file:///Users/alice/Library/Application%20Support/Telegram%20Desktop/tdata/x"_q);
+	CHECK(local.has_value());
+	if (local) {
+		CHECK_EQ(*local,
+			u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q);
+	}
+	CHECK(!LocalFilePathFromUrl(u"https://example.com/file"_q));
+}
+
+TEST_CASE(ExternalPathHandoffRefusesBeforeDispatchAndAllowsDownloads) {
+	auto checked = std::vector<QString>();
+	const auto checker = [&](Operation, const QString &path, const char *) {
+		checked.push_back(path);
+		return path == u"/Users/alice/Downloads/x"_q;
+	};
+	auto dispatches = 0;
+	{
+		ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(!DispatchExternalPathIfAllowed(
+			Operation::Open,
+			u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q,
+			"unit.os-handoff",
+			[&] { ++dispatches; }));
+		CHECK_EQ(dispatches, 0);
+		CHECK(DispatchExternalPathIfAllowed(
+			Operation::Open,
+			u"/Users/alice/Downloads/x"_q,
+			"unit.os-handoff",
+			[&] { ++dispatches; }));
+	}
+	CHECK_EQ(dispatches, 1);
+	CHECK_EQ(int(checked.size()), 2);
+}
+
+TEST_CASE(CustomIconSymlinkIntoProtectedPathNeverReachesHelper) {
+	auto fs = FakeFileSystem();
+	auto policy = TestPolicy(fs);
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	const auto source = QByteArray("/Users/alice/Downloads/icon.icns");
+	fs.entries.emplace(
+		source,
+		LstatResult{ .type = FileType::Symlink, .error = FileError::None });
+	fs.links.emplace(
+		source,
+		ReadlinkResult{
+			.target = "../Library/Application Support/Telegram Desktop/tdata/icon.icns",
+			.error = FileError::None });
+	const auto checker = CheckerFor(policy);
+	auto helpers = 0;
+	{
+		ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(!DispatchCustomAppIconIfAllowed(
+			QString::fromUtf8(source),
+			"unit.custom-icon.source",
+			[&] { ++helpers; }));
+	}
+	CHECK_EQ(helpers, 0);
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+}
+
+TEST_CASE(CustomIconProtectedDestinationAndTemporaryDirectoryStopHelper) {
+	for (const auto denyTemporaryDirectory : { false, true }) {
+		auto denied = false;
+		const auto checker = [&](Operation operation, const QString &path,
+								 const char *) {
+			if (denyTemporaryDirectory
+				&& path == QDir::tempPath()
+				&& operation == Operation::Write) {
+				denied = true;
+				return false;
+			}
+			if (!denyTemporaryDirectory
+				&& path.endsWith(u"/Icon\r"_q)
+				&& operation == Operation::Write) {
+				denied = true;
+				return false;
+			}
+			return true;
+		};
+		auto helpers = 0;
+		{
+			ScopedExternalPathCheckerForTesting scope(checker);
+			CHECK(!DispatchCustomAppIconIfAllowed(
+				QString(),
+				"unit.custom-icon.destination",
+				[&] { ++helpers; }));
+		}
+		CHECK(denied);
+		CHECK_EQ(helpers, 0);
+	}
+}
