@@ -126,7 +126,7 @@ LaunchState GlobalLaunchState/* = LaunchState::Running*/;
 #if defined Q_OS_MAC && !defined OS_MAC_STORE
 [[nodiscard]] QIcon CreateTeagramIcon(Core::TeagramIconChoice choice) {
 	const auto resource = Core::TeagramIconSvgResource(choice);
-	const auto renderer = QSvgRenderer(QString::fromLatin1(
+	auto renderer = QSvgRenderer(QString::fromLatin1(
 		resource.data(),
 		static_cast<qsizetype>(resource.size())));
 	constexpr auto sizes = std::array{
