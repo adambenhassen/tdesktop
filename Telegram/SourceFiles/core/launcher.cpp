@@ -367,7 +367,7 @@ void Launcher::init() {
 
 #ifdef TDESKTOP_TEAGRAM
 	QApplication::setApplicationName(u"Teagram"_q);
-#else // TDESKTOP_TEAGRAM
+#else  // TDESKTOP_TEAGRAM
 	QApplication::setApplicationName(u"TelegramDesktop"_q);
 #endif // TDESKTOP_TEAGRAM
 
@@ -513,7 +513,7 @@ void Launcher::writeInstallBetaVersionsSetting() {
 bool Launcher::checkPortableVersionFolder() {
 #ifdef TDESKTOP_TEAGRAM
 	return true;
-#else // TDESKTOP_TEAGRAM
+#else  // TDESKTOP_TEAGRAM
 	return CheckPortableVersionFolder();
 #endif // TDESKTOP_TEAGRAM
 }

@@ -212,7 +212,7 @@ void ReportInvalidInitialization(const QString &callsite) {
 } // namespace
 
 bool IntegrationTestActive() {
-#if defined(TDESKTOP_TEAGRAM)                                                 \
+#if defined(TDESKTOP_TEAGRAM)                                                  \
 	&& defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
 	return qEnvironmentVariable("TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST")
 		   == "1";

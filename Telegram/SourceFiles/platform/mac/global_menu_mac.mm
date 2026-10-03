@@ -588,14 +588,11 @@ void Manager::buildWindowMenu(QMenu *window) {
 			std::move(callback));
 	}
 	window->addSeparator();
-	_showTeagram = window->addAction(
-		u"Show Teagram"_q,
-		receiver,
-		[this] {
-			if (const auto w = resolveActiveWindow()) {
-				w->widget()->showFromTray();
-			}
-		});
+	_showTeagram = window->addAction(u"Show Teagram"_q, receiver, [this] {
+		if (const auto w = resolveActiveWindow()) {
+			w->widget()->showFromTray();
+		}
+	});
 }
 
 void Manager::buildMenu() {
@@ -626,12 +623,10 @@ void Manager::destroy() {
 	_lifetime.destroy();
 	_menuBar.reset();
 	_languageBound = false;
-	_logout = _undo = _redo = _cut = _copy = _paste = _delete
-		= _selectAll = _contacts = _addContact = _newGroup
-		= _newChannel = _showTeagram = _fullScreen = _emoji
-		= _bold = _italic = _underline
-		= _strikeOut = _blockquote = _monospace = _clearFormat
-		= nullptr;
+	_logout = _undo = _redo = _cut = _copy = _paste = _delete = _selectAll
+		= _contacts = _addContact = _newGroup = _newChannel = _showTeagram
+		= _fullScreen = _emoji = _bold = _italic = _underline = _strikeOut
+		= _blockquote = _monospace = _clearFormat = nullptr;
 	_pasteboard = nullptr;
 	_pasteboardChangeCount = -1;
 	_pasteboardHasText = false;

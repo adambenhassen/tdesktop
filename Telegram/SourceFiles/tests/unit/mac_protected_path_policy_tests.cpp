@@ -87,16 +87,16 @@ void AddDirectoryHierarchy(FakeFileSystem &fs, const QByteArray &path) {
 TEST_CASE(TeagramProfileRootUsesTrustedHomeSource) {
 	const auto homes = HomeRoots{
 		.accountDatabase = "/Users/alice",
-		.environment = "/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram",
+		.environment = "/Users/alice/Library/Group "
+					   "Containers/6N38VWS5BX.ru.keepcoder.Telegram",
 		.foundation
 		= "/Users/alice/Library/Containers/io.teagram.desktop/Data"};
 	CHECK_EQ(TeagramProfileRoot(homes, false),
 			 QByteArray("/Users/alice/Library/Application Support/Teagram"));
 	CHECK_EQ(
 		TeagramProfileRoot(homes, true),
-		QByteArray(
-			"/Users/alice/Library/Containers/io.teagram.desktop/Data/"
-			"Library/Application Support/Teagram"));
+		QByteArray("/Users/alice/Library/Containers/io.teagram.desktop/Data/"
+				   "Library/Application Support/Teagram"));
 }
 
 void CheckRefusedWithoutProtectedProbe(
@@ -148,25 +148,28 @@ TEST_CASE(GroupContainerRefusesBeforeProtectedProbe) {
 TEST_CASE(AllProtectedRootsUseComponentMatching) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);
-	const auto protectedPaths = std::vector<std::pair<QByteArray, ProtectedClass>>{
-		{ "/Users/alice/Library/Application Support/Telegram Desktop/tdata/x",
-			ProtectedClass::ApplicationSupport },
-		{ "/Users/alice/Library/Containers/org.telegram.desktop/Data/x",
-			ProtectedClass::Container },
-		{ "/Users/alice/Library/Containers/ru.keepcoder.Telegram/Data/x",
-			ProtectedClass::Container },
-		{ "/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata/x",
-			ProtectedClass::GroupContainer },
-		{ "/Users/alice/Library/Preferences/com.tdesktop.Telegram.plist",
-			ProtectedClass::BundleKeyed },
-		{ "/Users/alice/Library/Caches/org.telegram.desktop/data",
-			ProtectedClass::BundleKeyed },
-		{ "/Users/alice/Library/HTTPStorages/ru.keepcoder.Telegram.shared/data",
-			ProtectedClass::BundleKeyed },
-		{ "/Users/alice/Library/WebKit/com.tdesktop.Telegram/WebsiteData",
-			ProtectedClass::BundleKeyed },
-		{ "/Users/alice/Library/Saved Application State/org.telegram.desktop.savedState",
-			ProtectedClass::BundleKeyed },
+	const auto protectedPaths = std::vector<
+		std::pair<QByteArray, ProtectedClass>>{
+		{"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x",
+		 ProtectedClass::ApplicationSupport},
+		{"/Users/alice/Library/Containers/org.telegram.desktop/Data/x",
+		 ProtectedClass::Container},
+		{"/Users/alice/Library/Containers/ru.keepcoder.Telegram/Data/x",
+		 ProtectedClass::Container},
+		{"/Users/alice/Library/Group "
+		 "Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata/x",
+		 ProtectedClass::GroupContainer},
+		{"/Users/alice/Library/Preferences/com.tdesktop.Telegram.plist",
+		 ProtectedClass::BundleKeyed},
+		{"/Users/alice/Library/Caches/org.telegram.desktop/data",
+		 ProtectedClass::BundleKeyed},
+		{"/Users/alice/Library/HTTPStorages/ru.keepcoder.Telegram.shared/data",
+		 ProtectedClass::BundleKeyed},
+		{"/Users/alice/Library/WebKit/com.tdesktop.Telegram/WebsiteData",
+		 ProtectedClass::BundleKeyed},
+		{"/Users/alice/Library/Saved Application "
+		 "State/org.telegram.desktop.savedState",
+		 ProtectedClass::BundleKeyed},
 	};
 	for (const auto &[path, protectedClass] : protectedPaths) {
 		CHECK(policy.Classify(path) == protectedClass);
@@ -235,8 +238,9 @@ TEST_CASE(CaseNormalizationAndFirmlinkAliasesMatch) {
 	CHECK(unicodePolicy.Classify(decomposedPath.toUtf8())
 		== ProtectedClass::ApplicationSupport);
 
-	const auto firmlink = QByteArray(
-		"/System/Volumes/Data/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata");
+	const auto firmlink
+		= QByteArray("/System/Volumes/Data/Users/alice/Library/Group "
+					 "Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata");
 	CHECK(policy.Classify(firmlink) == ProtectedClass::GroupContainer);
 	CheckRefusedWithoutProtectedProbe(
 		policy,
@@ -397,15 +401,13 @@ TEST_CASE(RelativeInputsRequireAnAnchorAndResolveAgainstIt) {
 	const auto relative = policy.Resolve(
 		Operation::Stat,
 		"Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata",
-		"/Users/alice",
-		u"unit.relative"_q);
+		"/Users/alice", u"unit.relative"_q);
 	CHECK(!relative.allowed());
 	CHECK(relative.refusal.protectedClass == ProtectedClass::GroupContainer);
 
 	const auto withoutAnchor = policy.Resolve(
 		Operation::Stat,
-		"Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata",
-		{},
+		"Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata", {},
 		u"unit.relative.no-anchor"_q);
 	CHECK(!withoutAnchor.allowed());
 	CHECK(withoutAnchor.refusal.protectedClass == ProtectedClass::Invalid);
@@ -413,8 +415,7 @@ TEST_CASE(RelativeInputsRequireAnAnchorAndResolveAgainstIt) {
 	const auto relativeAnchor = policy.Resolve(
 		Operation::Stat,
 		"Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/tdata",
-		"relative/base",
-		u"unit.relative.bad-anchor"_q);
+		"relative/base", u"unit.relative.bad-anchor"_q);
 	CHECK(!relativeAnchor.allowed());
 	CHECK(relativeAnchor.refusal.protectedClass == ProtectedClass::Invalid);
 }
@@ -423,17 +424,16 @@ TEST_CASE(DotSegmentsAreResolvedBeforeFilesystemProbes) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);
 	for (const auto &directory : std::vector<QByteArray>{
-			 "/Users/alice/Library",
-			 "/Users/alice/Library/Application Support",
+			 "/Users/alice/Library", "/Users/alice/Library/Application Support",
 			 "/Users/alice/Library/Application Support/Teagram",
-			 "/Users/alice/Library/Application Support/Teagram/tdata" }) {
+			 "/Users/alice/Library/Application Support/Teagram/tdata"}) {
 		fs.entries[directory] = LstatResult{
 			.type = FileType::Directory,
 			.error = FileError::None };
 	}
-	const auto path = QByteArray(
-		"//Users/alice/./Library/Application Support/Teagram/../"
-		"Telegram Desktop/tdata");
+	const auto path
+		= QByteArray("//Users/alice/./Library/Application Support/Teagram/../"
+					 "Telegram Desktop/tdata");
 	CheckRefusedWithoutProtectedProbe(
 		policy,
 		fs,
@@ -443,13 +443,11 @@ TEST_CASE(DotSegmentsAreResolvedBeforeFilesystemProbes) {
 	ClearCalls(fs);
 	const auto allowed = policy.Resolve(
 		Operation::Open,
-		"/Users/alice/Library/Application Support/Teagram/./tdata/../x",
-		{},
+		"/Users/alice/Library/Application Support/Teagram/./tdata/../x", {},
 		u"unit.dot.allowed"_q);
 	CHECK(allowed.allowed());
-	CHECK_EQ(
-		allowed.resolvedPath,
-		QByteArray("/Users/alice/Library/Application Support/Teagram/x"));
+	CHECK_EQ(allowed.resolvedPath,
+			 QByteArray("/Users/alice/Library/Application Support/Teagram/x"));
 }
 
 TEST_CASE(DotDotAfterMissingComponentFailsClosed) {
@@ -460,8 +458,9 @@ TEST_CASE(DotDotAfterMissingComponentFailsClosed) {
 	fs.entries["/safe/link"] =
 		LstatResult{ .type = FileType::Symlink, .error = FileError::None };
 	fs.links["/safe/link"] = ReadlinkResult{
-		.target = "/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram",
-		.error = FileError::None };
+		.target = "/Users/alice/Library/Group "
+				  "Containers/6N38VWS5BX.ru.keepcoder.Telegram",
+		.error = FileError::None};
 
 	ClearCalls(fs);
 	const auto result = policy.Resolve(
@@ -502,8 +501,9 @@ TEST_CASE(SymlinkTargetsAreSplicedPhysically) {
 	fs.entries["/safe/relative"] =
 		LstatResult{ .type = FileType::Symlink, .error = FileError::None };
 	fs.links["/safe/relative"] = ReadlinkResult{
-		.target = "../Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram",
-		.error = FileError::None };
+		.target = "../Users/alice/Library/Group "
+				  "Containers/6N38VWS5BX.ru.keepcoder.Telegram",
+		.error = FileError::None};
 	CheckRefusedWithoutProtectedProbe(
 		policy,
 		fs,
@@ -774,30 +774,27 @@ TEST_CASE(RefusalRecordsAreRateLimitedWithoutPaths) {
 	auto now = qint64(100);
 	auto log = RefusalLog([&] { return now; });
 
-	const auto first = policy.Resolve(
-		Operation::Open,
-		"/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/x",
-		{},
-		u"unit.first"_q,
-		&log);
-	const auto second = policy.Resolve(
-		Operation::Open,
-		"/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/y",
-		{},
-		u"unit.second"_q,
-		&log);
+	const auto first
+		= policy.Resolve(Operation::Open,
+						 "/Users/alice/Library/Group "
+						 "Containers/6N38VWS5BX.ru.keepcoder.Telegram/x",
+						 {}, u"unit.first"_q, &log);
+	const auto second
+		= policy.Resolve(Operation::Open,
+						 "/Users/alice/Library/Group "
+						 "Containers/6N38VWS5BX.ru.keepcoder.Telegram/y",
+						 {}, u"unit.second"_q, &log);
 	CHECK(!first.allowed());
 	CHECK(!second.allowed());
 	CHECK_EQ(int(log.records().size()), 1);
 	CHECK_EQ(log.records().front().callsite, u"unit.first"_q);
 
 	now = 160;
-	const auto third = policy.Resolve(
-		Operation::Open,
-		"/Users/alice/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/z",
-		{},
-		u"unit.third"_q,
-		&log);
+	const auto third
+		= policy.Resolve(Operation::Open,
+						 "/Users/alice/Library/Group "
+						 "Containers/6N38VWS5BX.ru.keepcoder.Telegram/z",
+						 {}, u"unit.third"_q, &log);
 	CHECK(!third.allowed());
 	CHECK_EQ(int(log.records().size()), 2);
 	CHECK_EQ(log.records().back().callsite, u"unit.third"_q);
@@ -903,8 +900,8 @@ TEST_CASE(DestructiveOperationsRefuseProtectedAncestors) {
 			}
 		}
 	}
-	const auto allowed = QByteArray(
-		"/Users/alice/Library/Application Support/Teagram/x");
+	const auto allowed
+		= QByteArray("/Users/alice/Library/Application Support/Teagram/x");
 	CHECK(policy.Resolve(
 		Operation::Open,
 		"/Users/alice/Library/Group Containers",

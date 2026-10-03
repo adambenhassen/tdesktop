@@ -124,9 +124,8 @@ QString SingleInstanceLocalServerName(const QString &hash) {
 		return u"/tmp/"_q + hash + '-' + cGUIDStr();
 #else // OS_MAC_STORE
 		const auto directory = Core::MacProtectedPath::IpcDirectory();
-		return directory.isEmpty()
-				   ? QString()
-				   : directory + u"/Teagram-"_q + hash.left(16);
+		return directory.isEmpty() ? QString()
+								   : directory + u"/Teagram-"_q + hash.left(16);
 #endif // OS_MAC_STORE
 	}
 	return Core::MacProtectedPath::IpcDirectory() + u"/Teagram-"_q

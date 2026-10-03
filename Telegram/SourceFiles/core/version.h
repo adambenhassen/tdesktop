@@ -23,13 +23,13 @@ constexpr auto AppNameOld = "Telegram Win (Unofficial)"_cs;
 #ifdef TDESKTOP_TEAGRAM
 constexpr auto AppName = "Teagram"_cs;
 constexpr auto AppFile = "Teagram"_cs;
-#else // TDESKTOP_TEAGRAM
+#else  // TDESKTOP_TEAGRAM
 constexpr auto AppName = "Telegram Desktop"_cs;
 constexpr auto AppFile = "Telegram"_cs;
 #endif // TDESKTOP_TEAGRAM
 #ifdef TDESKTOP_TEAGRAM
 constexpr auto MacSupportDirectoryName = "Teagram"_cs;
-#else // TDESKTOP_TEAGRAM
+#else  // TDESKTOP_TEAGRAM
 constexpr auto MacSupportDirectoryName = AppName;
 #endif // TDESKTOP_TEAGRAM
 constexpr auto AppVersion = 7000009;

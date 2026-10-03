@@ -477,7 +477,7 @@ void Application::run() {
 void Application::autoRegisterUrlScheme() {
 #ifdef TDESKTOP_TEAGRAM
 	return;
-#else // TDESKTOP_TEAGRAM
+#else  // TDESKTOP_TEAGRAM
 	if (!OptionSkipUrlSchemeRegister.value()) {
 		InvokeQueued(this, [] { RegisterUrlScheme(); });
 	}
@@ -1978,7 +1978,7 @@ void Application::startShortcuts() {
 void Application::RegisterUrlScheme() {
 #ifdef TDESKTOP_TEAGRAM
 	return;
-#else // TDESKTOP_TEAGRAM
+#else  // TDESKTOP_TEAGRAM
 	const auto arguments = Launcher::Instance().customWorkingDir()
 		? u"-workdir \"%1\""_q.arg(cWorkingDir())
 		: QString();

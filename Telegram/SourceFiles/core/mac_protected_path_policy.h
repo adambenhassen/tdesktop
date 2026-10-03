@@ -84,7 +84,7 @@ struct HomeRoots {
 };
 
 [[nodiscard]] QByteArray TeagramProfileRoot(const HomeRoots &homes,
-											  bool appSandboxed);
+											bool appSandboxed);
 
 struct RefusalRecord {
 	Operation operation = Operation::Open;
