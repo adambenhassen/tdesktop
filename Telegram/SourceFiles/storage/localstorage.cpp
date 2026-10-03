@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/serialize_common.h"
 #include "storage/storage_account.h"
 #include "storage/details/storage_file_utilities.h"
+#include "storage/details/storage_theme_path.h"
 #include "storage/details/storage_settings_scheme.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
@@ -47,7 +48,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Local {
 namespace {
 
-constexpr auto kThemeFileSizeLimit = 5 * 1024 * 1024;
 constexpr auto kFileLoaderQueueStopTimeout = crl::time(5000);
 
 constexpr auto kSavedBackgroundFormat = QImage::Format_ARGB32_Premultiplied;
@@ -64,13 +64,6 @@ using Storage::FileKey;
 [[nodiscard]] bool CheckProfilePath(Operation operation, const QString &path,
 									const char *callsite) {
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
-}
-
-[[nodiscard]] bool CheckThemePath(Operation operation, const QString &path,
-								  const char *callsite) {
-	return path.startsWith(u":/"_q) || path.startsWith(u"qrc:/"_q)
-		   || Core::MacProtectedPath::PersistedExternalPath(path).allowed(
-			   operation, callsite);
 }
 
 using Database = Storage::Cache::Database;
@@ -963,52 +956,16 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 
 	auto ignoreCache = false;
 	if (!object.cloud.id) {
-		const auto relativePath
-			= object.pathRelative.isEmpty()
-					  || object.pathRelative.startsWith(u":/"_q)
-					  || object.pathRelative.startsWith(u"qrc:/"_q)
-				  ? object.pathRelative
-				  : QDir().absoluteFilePath(object.pathRelative);
-		const auto relativeAllowed
-			= object.pathRelative.isEmpty()
-			  || CheckThemePath(Operation::Read, relativePath,
-								"theme.persisted-relative-path");
-		const auto absoluteAllowed
-			= object.pathAbsolute.isEmpty()
-			  || CheckThemePath(Operation::Read, object.pathAbsolute,
-								"theme.persisted-absolute-path");
-		result.refusedPath = !relativeAllowed || !absoluteAllowed;
-		if (!result.refusedPath) {
-			auto file = QFile(relativePath);
-			if (object.pathRelative.isEmpty()) {
-				file.setFileName(object.pathAbsolute);
-			} else if (CheckThemePath(Operation::Stat, file.fileName(),
-									  "theme.persisted-relative-stat")
-					   && !file.exists()) {
-				file.setFileName(object.pathAbsolute);
-			}
-			if (!file.fileName().isEmpty()
-				&& CheckThemePath(Operation::Stat, file.fileName(),
-								  "theme.persisted-stat")
-				&& file.exists()
-				&& CheckThemePath(Operation::Read, file.fileName(),
-								  "theme.persisted-read")
-				&& file.open(QIODevice::ReadOnly)) {
-				if (file.size() > kThemeFileSizeLimit) {
-					LOG(("Error: theme file too large: %1 "
-						 "(should be less than 5 MB, got %2)")
-							.arg(file.fileName())
-							.arg(file.size()));
-					return {};
-				}
-				auto fileContent = file.readAll();
-				file.close();
-				if (object.content != fileContent) {
-					object.content = fileContent;
-					ignoreCache = true;
-				}
-			}
+		const auto pathLoad = LoadThemeFileContent(object);
+		result.refusedPath = pathLoad.refusedPath;
+		if (!pathLoad.tooLargePath.isEmpty()) {
+			LOG(("Error: theme file too large: %1 "
+				 "(should be less than 5 MB, got %2)")
+					.arg(pathLoad.tooLargePath)
+					.arg(pathLoad.tooLargeSize));
+			return {};
 		}
+		ignoreCache = pathLoad.contentChanged;
 	}
 	int32 cachePaletteChecksum = 0;
 	int32 cacheContentChecksum = 0;

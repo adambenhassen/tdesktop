@@ -203,31 +203,32 @@ QByteArray Settings::serialize() const {
 		end(_noWarningExtensions)
 	).join(' ');
 
-	auto size = Serialize::bytearraySize(themesAccentColors)
-		+ sizeof(qint32) // _adaptiveForWide
-		+ sizeof(qint32) // _moderateModeEnabled
-		+ sizeof(qint32) // _songVolume
-		+ sizeof(qint32) // _videoVolume
-		+ sizeof(qint32) // _askDownloadPath
-		+ Serialize::stringSize(_downloadPath.current())
-		+ Serialize::bytearraySize(_downloadPathBookmark)
-		+ sizeof(qint32) // legacy non-default voice speed
-		+ sizeof(qint32) // _soundNotify
-		+ sizeof(qint32) // _desktopNotify
-		+ sizeof(qint32) // _flashBounceNotify
-		+ sizeof(qint32) // _notifyView
-		+ sizeof(qint32) // _nativeNotifications
-		+ sizeof(qint32) // _notificationsCount
-		+ sizeof(qint32) // _notificationsCorner
-		+ sizeof(qint32) // _autoLock
-		+ Serialize::stringSize(QString()) // legacy call output device id
-		+ Serialize::stringSize(QString()) // legacy call input device id
-		+ sizeof(qint32) // _callOutputVolume
-		+ sizeof(qint32) // _callInputVolume
-		+ sizeof(qint32) // _callAudioDuckingEnabled
-		+ sizeof(qint32) // _lastSeenWarningSeen
-		+ sizeof(qint32); // _soundOverrides count
-	for (const auto &[key, value] : _soundOverrides) {
+	auto size
+		= Serialize::bytearraySize(themesAccentColors)
+		  + sizeof(qint32) // _adaptiveForWide
+		  + sizeof(qint32) // _moderateModeEnabled
+		  + sizeof(qint32) // _songVolume
+		  + sizeof(qint32) // _videoVolume
+		  + sizeof(qint32) // _askDownloadPath
+		  + Serialize::stringSize(_externalPaths.downloadPathStored())
+		  + Serialize::bytearraySize(_downloadPathBookmark)
+		  + sizeof(qint32)					 // legacy non-default voice speed
+		  + sizeof(qint32)					 // _soundNotify
+		  + sizeof(qint32)					 // _desktopNotify
+		  + sizeof(qint32)					 // _flashBounceNotify
+		  + sizeof(qint32)					 // _notifyView
+		  + sizeof(qint32)					 // _nativeNotifications
+		  + sizeof(qint32)					 // _notificationsCount
+		  + sizeof(qint32)					 // _notificationsCorner
+		  + sizeof(qint32)					 // _autoLock
+		  + Serialize::stringSize(QString()) // legacy call output device id
+		  + Serialize::stringSize(QString()) // legacy call input device id
+		  + sizeof(qint32)					 // _callOutputVolume
+		  + sizeof(qint32)					 // _callInputVolume
+		  + sizeof(qint32)					 // _callAudioDuckingEnabled
+		  + sizeof(qint32)					 // _lastSeenWarningSeen
+		  + sizeof(qint32);					 // _soundOverrides count
+	for (const auto &[key, value] : _externalPaths.soundOverrides()) {
 		size += Serialize::stringSize(key) + Serialize::stringSize(value);
 	}
 	size += sizeof(qint32) // _sendFilesWay
@@ -355,34 +356,27 @@ QByteArray Settings::serialize() const {
 	{
 		QDataStream stream(&result, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
-		stream
-			<< themesAccentColors
-			<< qint32(_adaptiveForWide.current() ? 1 : 0)
-			<< qint32(_moderateModeEnabled ? 1 : 0)
-			<< qint32(qRound(_songVolume.current() * 1e6))
-			<< qint32(qRound(_videoVolume.current() * 1e6))
-			<< qint32(_askDownloadPath ? 1 : 0)
-			<< _downloadPath.current()
-			<< _downloadPathBookmark
-			<< qint32(1)
-			<< qint32(_soundNotify ? 1 : 0)
-			<< qint32(_desktopNotify ? 1 : 0)
-			<< qint32(_flashBounceNotify ? 1 : 0)
-			<< static_cast<qint32>(_notifyView)
-			<< qint32(_nativeNotifications ? (*_nativeNotifications ? 1 : 2) : 0)
-			<< qint32(_notificationsCount)
-			<< static_cast<qint32>(_notificationsCorner)
-			<< qint32(_autoLock)
-			<< QString() // legacy call output device id
-			<< QString() // legacy call input device id
-			<< qint32(_callOutputVolume)
-			<< qint32(_callInputVolume)
-			<< qint32(_callAudioDuckingEnabled ? 1 : 0)
-			<< qint32(_lastSeenWarningSeen ? 1 : 0)
-			<< qint32(_soundOverrides.size());
-		for (const auto &[key, value] : _soundOverrides) {
-			stream << key << value;
-		}
+		stream << themesAccentColors
+			   << qint32(_adaptiveForWide.current() ? 1 : 0)
+			   << qint32(_moderateModeEnabled ? 1 : 0)
+			   << qint32(qRound(_songVolume.current() * 1e6))
+			   << qint32(qRound(_videoVolume.current() * 1e6))
+			   << qint32(_askDownloadPath ? 1 : 0);
+		_externalPaths.serializeDownloadPath(stream);
+		stream << _downloadPathBookmark << qint32(1)
+			   << qint32(_soundNotify ? 1 : 0) << qint32(_desktopNotify ? 1 : 0)
+			   << qint32(_flashBounceNotify ? 1 : 0)
+			   << static_cast<qint32>(_notifyView)
+			   << qint32(_nativeNotifications ? (*_nativeNotifications ? 1 : 2)
+											  : 0)
+			   << qint32(_notificationsCount)
+			   << static_cast<qint32>(_notificationsCorner) << qint32(_autoLock)
+			   << QString() // legacy call output device id
+			   << QString() // legacy call input device id
+			   << qint32(_callOutputVolume) << qint32(_callInputVolume)
+			   << qint32(_callAudioDuckingEnabled ? 1 : 0)
+			   << qint32(_lastSeenWarningSeen ? 1 : 0);
+		_externalPaths.serializeSoundOverrides(stream);
 		stream
 			<< qint32(_sendFilesWay.serialize())
 			<< qint32(_sendSubmitWay.current())
@@ -546,7 +540,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	qint32 songVolume = qint32(qRound(_songVolume.current() * 1e6));
 	qint32 videoVolume = qint32(qRound(_videoVolume.current() * 1e6));
 	qint32 askDownloadPath = _askDownloadPath ? 1 : 0;
-	QString downloadPath = _downloadPath.current();
+	QString downloadPath = _externalPaths.downloadPathStored();
 	QByteArray downloadPathBookmark = _downloadPathBookmark;
 	qint32 nonDefaultVoicePlaybackSpeed = 1;
 	qint32 soundNotify = _soundNotify ? 1 : 0;
@@ -671,39 +665,19 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 
 	stream >> themesAccentColors;
 	if (!stream.atEnd()) {
-		stream
-			>> adaptiveForWide
-			>> moderateModeEnabled
-			>> songVolume
-			>> videoVolume
-			>> askDownloadPath
-			>> downloadPath
-			>> downloadPathBookmark
-			>> nonDefaultVoicePlaybackSpeed
-			>> soundNotify
-			>> desktopNotify
-			>> flashBounceNotify
-			>> notifyView
-			>> nativeNotifications
-			>> notificationsCount
-			>> notificationsCorner
-			>> autoLock
-			>> legacyCallPlaybackDeviceId
-			>> legacyCallCaptureDeviceId
-			>> callOutputVolume
-			>> callInputVolume
-			>> callAudioDuckingEnabled
-			>> lastSeenWarningSeen
+		stream >> adaptiveForWide >> moderateModeEnabled >> songVolume
+			>> videoVolume >> askDownloadPath;
+		downloadPath = SettingsExternalPaths::ReadDownloadPath(stream);
+		stream >> downloadPathBookmark >> nonDefaultVoicePlaybackSpeed
+			>> soundNotify >> desktopNotify >> flashBounceNotify >> notifyView
+			>> nativeNotifications >> notificationsCount >> notificationsCorner
+			>> autoLock >> legacyCallPlaybackDeviceId
+			>> legacyCallCaptureDeviceId >> callOutputVolume >> callInputVolume
+			>> callAudioDuckingEnabled >> lastSeenWarningSeen
 			>> soundOverridesCount;
 		if (stream.status() == QDataStream::Ok) {
-			for (auto i = 0; i != soundOverridesCount; ++i) {
-				QString key, value;
-				stream >> key >> value;
-				(void)MacProtectedPath::PersistedExternalPath(value).allowed(
-					MacProtectedPath::Operation::Read,
-					"settings.sound-override.load");
-				soundOverrides.emplace(key, value);
-			}
+			soundOverrides = SettingsExternalPaths::ReadSoundOverrides(
+				stream, soundOverridesCount);
 		}
 		stream
 			>> sendFilesWay
@@ -1067,17 +1041,12 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	} else if (!_proxy.setFromSerialized(proxy)) {
 		return;
 	}
-	if (downloadPath != FileDialog::Tmp()) {
-		(void)MacProtectedPath::PersistedExternalPath(downloadPath)
-			.allowed(MacProtectedPath::Operation::OpenDir,
-					 "settings.download-path.load");
-	}
 	_adaptiveForWide = (adaptiveForWide == 1);
 	_moderateModeEnabled = (moderateModeEnabled == 1);
 	_songVolume = std::clamp(songVolume / 1e6, 0., 1.);
 	_videoVolume = std::clamp(videoVolume / 1e6, 0., 1.);
 	_askDownloadPath = (askDownloadPath == 1);
-	_downloadPath = downloadPath;
+	_externalPaths.setDownloadPathFromSerialized(downloadPath);
 	_downloadPathBookmark = downloadPathBookmark;
 	_soundNotify = (soundNotify == 1);
 	_desktopNotify = (desktopNotify == 1);
@@ -1120,7 +1089,8 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	_callInputVolume = callInputVolume;
 	_callAudioDuckingEnabled = (callAudioDuckingEnabled == 1);
 	_lastSeenWarningSeen = (lastSeenWarningSeen == 1);
-	_soundOverrides = std::move(soundOverrides);
+	_externalPaths.restoreSoundOverridesFromSerialized(
+		std::move(soundOverrides));
 	_sendFilesWay = Ui::SendFilesWay::FromSerialized(sendFilesWay).value_or(_sendFilesWay);
 	auto uncheckedSendSubmitWay = static_cast<Ui::InputSubmitSettings>(sendSubmitWay);
 	switch (uncheckedSendSubmitWay) {
@@ -1359,47 +1329,22 @@ void Settings::writePrefImpl<bool>(std::string_view key, bool value) {
 }
 
 QString Settings::getSoundPath(const QString &key) const {
-	auto it = _soundOverrides.find(key);
-	if (it != _soundOverrides.end()
-		&& MacProtectedPath::PersistedExternalPath(it->second)
-			   .allowed(MacProtectedPath::Operation::Read,
-						"settings.sound-override")) {
-		return it->second;
-	}
-	return u":/sounds/"_q + key + u".mp3"_q;
+	return _externalPaths.getSoundPath(key);
 }
 
 void Settings::setSoundOverride(const QString &key, const QString &path) {
-	if (MacProtectedPath::PersistedExternalPath(path).allowed(
-			MacProtectedPath::Operation::Read, "settings.sound-override.set")) {
-		_soundOverrides.emplace(key, path);
-	}
+	_externalPaths.setSoundOverride(key, path);
 }
 
 void Settings::setSoundOverrideFromSerialized(const QString &key,
 											  const QString &path) {
-	(void)MacProtectedPath::PersistedExternalPath(path).allowed(
-		MacProtectedPath::Operation::Read,
-		"settings.sound-override.legacy-load");
-	_soundOverrides.emplace(key, path);
+	_externalPaths.setSoundOverrideFromSerialized(key, path);
 }
 
-QString Settings::downloadPath() const {
-	const auto path = _downloadPath.current();
-	if (path.isEmpty() || path == FileDialog::Tmp()) {
-		return path;
-	}
-	return MacProtectedPath::PersistedExternalPath(path).forUse(
-		MacProtectedPath::Operation::OpenDir, "settings.download-path");
-}
+QString Settings::downloadPath() const { return _externalPaths.downloadPath(); }
 
 void Settings::setDownloadPath(const QString &value) {
-	if (value == FileDialog::Tmp()
-		|| MacProtectedPath::PersistedExternalPath(value).allowed(
-			MacProtectedPath::Operation::OpenDir,
-			"settings.download-path.set")) {
-		_downloadPath = value;
-	}
+	_externalPaths.setDownloadPath(value);
 }
 
 void Settings::setTabbedSelectorSectionEnabled(bool enabled) {
@@ -1710,7 +1655,7 @@ void Settings::resetOnLastLogout() {
 	_videoVolume = kDefaultVolume;
 
 	_askDownloadPath = false;
-	_downloadPath = QString();
+	_externalPaths.reset();
 	_downloadPathBookmark = QByteArray();
 
 	_soundNotify = true;
@@ -1749,7 +1694,6 @@ void Settings::resetOnLastLogout() {
 	_lastSeenWarningSeen = false;
 	_sendFilesWay = Ui::SendFilesWay();
 	//_sendSubmitWay = Ui::InputSubmitSettings::Enter;
-	_soundOverrides = {};
 
 	_noWarningExtensions.clear();
 	_ipRevealWarning = true;

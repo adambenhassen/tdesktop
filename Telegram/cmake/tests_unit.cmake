@@ -69,6 +69,7 @@ PRIVATE
     core/hash_sha.cpp
     core/hash_md5.cpp
     core/mac_protected_path_policy.cpp
+    core/file_location.cpp
     data/data_peer_id.cpp
     data/data_pts_waiter.cpp
     intro/intro_server_discovery.cpp
@@ -106,6 +107,7 @@ if(APPLE)
     nice_target_sources(test_unit ${src_loc}
     PRIVATE
         tests/unit/mac_protected_path_runtime_stub.cpp
+        tests/unit/mac_file_bookmark_stub.cpp
     )
 endif()
 

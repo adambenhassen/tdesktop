@@ -7,8 +7,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "core/core_settings_external_paths.h"
+#include "core/file_location.h"
 #include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_policy.h"
+#include "storage/details/storage_theme_path.h"
 
 #include <QtCore/QDataStream>
 #include <QtCore/QDir>
@@ -452,93 +455,364 @@ TEST_CASE(InitialWorkingDirectoryAnchorsExternalArguments) {
 			"/Users/alice/Library/Application Support/Telegramd/uploads/x"));
 }
 
-TEST_CASE(PersistedConsumerPathsSurviveRestartWhenAllowed) {
-	auto fs = FakeFileSystem();
-	const auto policy = TestPolicy(fs);
-	const auto cases = std::vector<std::pair<Operation, const char *>>{
-		{Operation::OpenDir, "settings.download-path"},
-		{Operation::Read, "settings.sound-override"},
-		{Operation::Read, "theme.persisted-absolute-path"},
-		{Operation::Read, "file-location.name"},
+namespace {
+
+[[nodiscard]] auto CheckerFor(MacProtectedPathPolicy &policy) {
+	return [&policy](Operation operation, const QString &path,
+					 const char *callsite) {
+		return policy
+			.Resolve(operation, QFile::encodeName(path), {},
+					 QString::fromUtf8(callsite))
+			.allowed();
 	};
-	const auto allowedPath = u"/Users/alice/Downloads/consumer-path"_q;
-	const auto check
-		= [&](Operation operation, const QString &path, const char *callsite) {
-			  return policy
-				  .Resolve(operation, QFile::encodeName(path), {},
-						   QString::fromUtf8(callsite))
-				  .allowed();
-		  };
-	for (const auto &[operation, callsite] : cases) {
-		auto serialized = QByteArray();
-		{
-			auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
-			stream << allowedPath;
+}
+
+void WriteFile(const QString &path, const QByteArray &content) {
+	auto file = QFile(path);
+	CHECK(file.open(QIODevice::WriteOnly));
+	CHECK_EQ(file.write(content), content.size());
+}
+
+void ReadSettingsExternalPaths(const QByteArray &serialized,
+							   Core::SettingsExternalPaths &settings) {
+	QDataStream stream(serialized);
+	stream.setVersion(QDataStream::Qt_5_1);
+	const auto downloadPath
+		= Core::SettingsExternalPaths::ReadDownloadPath(stream);
+	auto count = qint32();
+	stream >> count;
+	auto sounds
+		= Core::SettingsExternalPaths::ReadSoundOverrides(stream, count);
+	CHECK(stream.status() == QDataStream::Ok);
+	settings.setDownloadPathFromSerialized(downloadPath);
+	settings.restoreSoundOverridesFromSerialized(std::move(sounds));
+}
+
+[[nodiscard]] QByteArray
+SerializeSettingsExternalPaths(const Core::SettingsExternalPaths &settings) {
+	auto result = QByteArray();
+	QDataStream stream(&result, QIODevice::WriteOnly);
+	stream.setVersion(QDataStream::Qt_5_1);
+	settings.serializeDownloadPath(stream);
+	settings.serializeSoundOverrides(stream);
+	return result;
+}
+
+void ReplaceWithProtectedTarget(FakeFileSystem &fs, const QString &parent,
+								const QString &replacement,
+								const QByteArray &syntheticProtectedTarget) {
+	const auto backup = parent + u"-allowed-backup"_q;
+	CHECK(QDir().rename(parent, backup));
+	CHECK(QFile::link(replacement, parent));
+	const auto encoded = QFile::encodeName(parent);
+	fs.entries[encoded] = {
+		.type = FileType::Symlink,
+		.error = FileError::None,
+	};
+	fs.links[encoded] = {
+		.target = syntheticProtectedTarget,
+		.error = FileError::None,
+	};
+}
+
+} // namespace
+
+TEST_CASE(SettingsExternalPathsSurviveAllowedRestartAndRecheckSymlinks) {
+	auto temporary = QTemporaryDir();
+	CHECK(temporary.isValid());
+	const auto parent = temporary.filePath(u"external"_q);
+	const auto downloads = parent + u"/downloads"_q;
+	const auto sound = parent + u"/notification.mp3"_q;
+	const auto replacement
+		= temporary.filePath(u"synthetic-protected-fixture"_q);
+	CHECK(QDir().mkpath(downloads));
+	CHECK(QDir().mkpath(replacement + u"/downloads"_q));
+	WriteFile(sound, "allowed sound bytes");
+	WriteFile(replacement + u"/notification.mp3"_q,
+			  "synthetic protected sound bytes");
+
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, QFile::encodeName(temporary.path()));
+	AddDirectoryHierarchy(fs, QFile::encodeName(downloads));
+	fs.entries.emplace(QFile::encodeName(sound), LstatResult{
+													 .type = FileType::Regular,
+													 .error = FileError::None,
+												 });
+	auto policy = TestPolicy(fs);
+	auto checker = CheckerFor(policy);
+	const auto allowedDownloadPath = downloads;
+	const auto allowedSoundPath = sound;
+	Core::SettingsExternalPaths original;
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		original.setDownloadPath(allowedDownloadPath);
+		original.setSoundOverride(u"notification"_q, allowedSoundPath);
+		CHECK_EQ(original.downloadPath(), allowedDownloadPath);
+		CHECK_EQ(original.getSoundPath(u"notification"_q), allowedSoundPath);
+	}
+
+	const auto serialized = SerializeSettingsExternalPaths(original);
+	auto restarted = Core::SettingsExternalPaths();
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		ReadSettingsExternalPaths(serialized, restarted);
+		CHECK_EQ(restarted.downloadPath(), allowedDownloadPath);
+		CHECK_EQ(restarted.getSoundPath(u"notification"_q), allowedSoundPath);
+	}
+
+	const auto protectedTarget = QByteArray(
+		"/Users/alice/Library/Containers/org.telegram.desktop/Data/fixture");
+	ReplaceWithProtectedTarget(fs, parent, replacement, protectedTarget);
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(restarted.downloadPath().isEmpty());
+		CHECK_EQ(restarted.getSoundPath(u"notification"_q),
+				 u":/sounds/notification.mp3"_q);
+		CHECK_EQ(restarted.downloadPathStored(), allowedDownloadPath);
+		const auto sound = restarted.soundOverrides().find(u"notification"_q);
+		CHECK(sound != restarted.soundOverrides().end());
+		if (sound != restarted.soundOverrides().end()) {
+			CHECK_EQ(sound->second, allowedSoundPath);
 		}
-		auto restored = QString();
-		{
-			auto stream = QDataStream(serialized);
-			stream >> restored;
+		const auto afterRefusal = SerializeSettingsExternalPaths(restarted);
+		auto restartedAgain = Core::SettingsExternalPaths();
+		ReadSettingsExternalPaths(afterRefusal, restartedAgain);
+		CHECK_EQ(restartedAgain.downloadPathStored(), allowedDownloadPath);
+		const auto soundAgain
+			= restartedAgain.soundOverrides().find(u"notification"_q);
+		CHECK(soundAgain != restartedAgain.soundOverrides().end());
+		if (soundAgain != restartedAgain.soundOverrides().end()) {
+			CHECK_EQ(soundAgain->second, allowedSoundPath);
 		}
-		const auto persisted = PersistedExternalPath(restored);
-		CHECK_EQ(persisted.stored(), allowedPath);
-		CHECK(persisted.allowed(operation, callsite, check));
-		CHECK_EQ(persisted.forUse(operation, callsite, check), allowedPath);
+		CHECK(restartedAgain.downloadPath().isEmpty());
+		CHECK_EQ(restartedAgain.getSoundPath(u"notification"_q),
+				 u":/sounds/notification.mp3"_q);
 	}
 }
 
-TEST_CASE(RefusedPersistedConsumerPathsKeepTheirSerializedValues) {
+TEST_CASE(SettingsExternalPathsPreserveRefusedSerializedValues) {
 	auto fs = FakeFileSystem();
-	const auto policy = TestPolicy(fs);
-	const auto cases = std::vector<std::pair<Operation, const char *>>{
-		{Operation::OpenDir, "settings.download-path"},
-		{Operation::Read, "settings.sound-override"},
-		{Operation::Read, "theme.persisted-absolute-path"},
-		{Operation::Read, "file-location.name"},
-	};
-	const auto refusedPath
-		= u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/refused"_q;
-	const auto check
-		= [&](Operation operation, const QString &path, const char *callsite) {
-			  return policy
-				  .Resolve(operation, QFile::encodeName(path), {},
-						   QString::fromUtf8(callsite))
-				  .allowed();
-		  };
-	for (const auto &[operation, callsite] : cases) {
-		auto serialized = QByteArray();
-		{
-			auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
-			stream << refusedPath;
+	auto policy = TestPolicy(fs);
+	auto checker = CheckerFor(policy);
+	const auto refused
+		= QString::fromUtf8("/Users/alice/Library/Application Support/Telegram "
+							"Desktop/tdata/refused");
+	auto serialized = QByteArray();
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		auto loaded = Core::SettingsExternalPaths();
+		loaded.setDownloadPathFromSerialized(refused);
+		auto sounds = base::flat_map<QString, QString>();
+		sounds.emplace(u"notification"_q, refused);
+		loaded.restoreSoundOverridesFromSerialized(std::move(sounds));
+		CHECK(loaded.downloadPath().isEmpty());
+		CHECK_EQ(loaded.getSoundPath(u"notification"_q),
+				 u":/sounds/notification.mp3"_q);
+		CHECK_EQ(loaded.downloadPathStored(), refused);
+		const auto sound = loaded.soundOverrides().find(u"notification"_q);
+		CHECK(sound != loaded.soundOverrides().end());
+		if (sound != loaded.soundOverrides().end()) {
+			CHECK_EQ(sound->second, refused);
 		}
-		auto restored = QString();
-		{
-			auto stream = QDataStream(serialized);
-			stream >> restored;
-		}
-		const auto persisted = PersistedExternalPath(restored);
-		ClearCalls(fs);
-		CHECK(!persisted.allowed(operation, callsite, check));
-		CHECK(persisted.forUse(operation, callsite, check).isEmpty());
-		CHECK_EQ(persisted.stored(), refusedPath);
-		auto rewritten = QByteArray();
-		{
-			auto stream = QDataStream(&rewritten, QIODevice::WriteOnly);
-			stream << persisted.stored();
-		}
-		auto restoredAgain = QString();
-		{
-			auto stream = QDataStream(rewritten);
-			stream >> restoredAgain;
-		}
-		CHECK_EQ(restoredAgain, refusedPath);
-		for (const auto &call : fs.lstatCalls) {
-			CHECK(policy.Classify(call) == ProtectedClass::None);
-		}
-		for (const auto &call : fs.readlinkCalls) {
-			CHECK(policy.Classify(call) == ProtectedClass::None);
-		}
+		serialized = SerializeSettingsExternalPaths(loaded);
 	}
+	auto restarted = Core::SettingsExternalPaths();
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		ReadSettingsExternalPaths(serialized, restarted);
+		CHECK(restarted.downloadPath().isEmpty());
+		CHECK_EQ(restarted.downloadPathStored(), refused);
+		const auto sound = restarted.soundOverrides().find(u"notification"_q);
+		CHECK(sound != restarted.soundOverrides().end());
+		if (sound != restarted.soundOverrides().end()) {
+			CHECK_EQ(sound->second, refused);
+		}
+		CHECK_EQ(restarted.getSoundPath(u"notification"_q),
+				 u":/sounds/notification.mp3"_q);
+		CHECK_EQ(SerializeSettingsExternalPaths(restarted), serialized);
+	}
+}
+
+TEST_CASE(FileLocationSurvivesRestartAndRefusesReplacedSymlink) {
+	auto temporary = QTemporaryDir();
+	CHECK(temporary.isValid());
+	const auto parent = temporary.filePath(u"media"_q);
+	const auto filePath = parent + u"/photo.bin"_q;
+	const auto replacement
+		= temporary.filePath(u"synthetic-protected-fixture"_q);
+	CHECK(QDir().mkpath(parent));
+	CHECK(QDir().mkpath(replacement));
+	WriteFile(filePath, "allowed media bytes");
+	WriteFile(replacement + u"/photo.bin"_q, "synthetic protected media bytes");
+
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, QFile::encodeName(temporary.path()));
+	fs.entries.emplace(QFile::encodeName(filePath),
+					   LstatResult{
+						   .type = FileType::Regular,
+						   .error = FileError::None,
+					   });
+	auto policy = TestPolicy(fs);
+	auto checker = CheckerFor(policy);
+	QString storedPath;
+	auto restarted = Core::FileLocation();
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		auto beforeRestart = Core::FileLocation(filePath);
+		CHECK_EQ(beforeRestart.name(), filePath);
+		storedPath = beforeRestart.serializedName();
+	}
+	auto serialized = QByteArray();
+	{
+		QDataStream stream(&serialized, QIODevice::WriteOnly);
+		stream << storedPath;
+	}
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		auto restartedPath = QString();
+		QDataStream stream(serialized);
+		stream >> restartedPath;
+		restarted = Core::FileLocation(restartedPath);
+		CHECK_EQ(restarted.name(), filePath);
+		CHECK(restarted.check());
+		CHECK_EQ(restarted.serializedName(), filePath);
+	}
+
+	ReplaceWithProtectedTarget(
+		fs, parent, replacement,
+		"/Users/alice/Library/Group Containers/telegramd/fixture");
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(restarted.name().isEmpty());
+		CHECK(!restarted.check());
+		CHECK_EQ(restarted.serializedName(), filePath);
+		auto restartedPath = QString();
+		QDataStream stream(serialized);
+		stream >> restartedPath;
+		auto replaced = Core::FileLocation(restartedPath);
+		CHECK(replaced.name().isEmpty());
+		CHECK(replaced.pathRefused());
+		CHECK_EQ(replaced.serializedName(), filePath);
+		CHECK_EQ(replaced.fname, filePath);
+	}
+	auto sentinel = QFile(replacement + u"/photo.bin"_q);
+	CHECK(sentinel.open(QIODevice::ReadOnly));
+	CHECK_EQ(sentinel.readAll(), QByteArray("synthetic protected media bytes"));
+}
+
+TEST_CASE(PersistedThemeRechecksPathAfterRestartAndSymlinkReplacement) {
+	auto temporary = QTemporaryDir();
+	CHECK(temporary.isValid());
+	const auto parent = temporary.filePath(u"themes"_q);
+	const auto themePath = parent + u"/theme.tdesktop-theme"_q;
+	const auto replacement
+		= temporary.filePath(u"synthetic-protected-fixture"_q);
+	CHECK(QDir().mkpath(parent));
+	CHECK(QDir().mkpath(replacement));
+	WriteFile(themePath, "allowed theme bytes");
+	WriteFile(replacement + u"/theme.tdesktop-theme"_q,
+			  "synthetic protected theme bytes");
+
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, QFile::encodeName(temporary.path()));
+	fs.entries.emplace(QFile::encodeName(themePath),
+					   LstatResult{
+						   .type = FileType::Regular,
+						   .error = FileError::None,
+					   });
+	auto policy = TestPolicy(fs);
+	auto checker = CheckerFor(policy);
+	auto serialized = QByteArray();
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		auto original = Window::Theme::Object();
+		original.content = "serialized theme bytes";
+		original.pathAbsolute = themePath;
+		auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
+		stream.setVersion(QDataStream::Qt_5_1);
+		stream << original.content << QStringLiteral("special://new_tag")
+			   << original.pathAbsolute << original.pathRelative
+			   << original.cloud.id << original.cloud.accessHash
+			   << original.cloud.slug << original.cloud.title
+			   << original.cloud.documentId << qint32(0);
+	}
+	const auto loadAfterRestart = [&] {
+		auto restored = Window::Theme::Object();
+		auto tag = QString();
+		auto field1 = qint32();
+		QDataStream stream(serialized);
+		stream.setVersion(QDataStream::Qt_5_1);
+		stream >> restored.content >> tag >> restored.pathAbsolute;
+		if (tag == QStringLiteral("special://new_tag")) {
+			stream >> restored.pathRelative >> restored.cloud.id
+				>> restored.cloud.accessHash >> restored.cloud.slug
+				>> restored.cloud.title >> restored.cloud.documentId >> field1;
+		} else {
+			restored.pathRelative = tag;
+		}
+		CHECK(stream.status() == QDataStream::Ok);
+		return Storage::details::LoadThemeFileContent(restored);
+	};
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		const auto loaded = loadAfterRestart();
+		CHECK(!loaded.refusedPath);
+		CHECK(loaded.contentChanged);
+	}
+
+	ReplaceWithProtectedTarget(
+		fs, parent, replacement,
+		"/Users/alice/Library/Application Support/Telegram Desktop/themes");
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		const auto refused = loadAfterRestart();
+		CHECK(refused.refusedPath);
+		CHECK(!refused.contentChanged);
+	}
+	auto sentinel = QFile(replacement + u"/theme.tdesktop-theme"_q);
+	CHECK(sentinel.open(QIODevice::ReadOnly));
+	CHECK_EQ(sentinel.readAll(), QByteArray("synthetic protected theme bytes"));
+}
+
+TEST_CASE(CancelledDownloadDoesNotUnlinkReplacedProtectedTarget) {
+	auto temporary = QTemporaryDir();
+	CHECK(temporary.isValid());
+	const auto parent = temporary.filePath(u"download"_q);
+	const auto destination = parent + u"/partial.bin"_q;
+	const auto replacement
+		= temporary.filePath(u"synthetic-protected-fixture"_q);
+	CHECK(QDir().mkpath(parent));
+	CHECK(QDir().mkpath(replacement));
+	WriteFile(replacement + u"/partial.bin"_q, "synthetic protected target");
+
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, QFile::encodeName(temporary.path()));
+	AddDirectoryHierarchy(fs, QFile::encodeName(parent));
+	fs.entries[QFile::encodeName(destination)] = {
+		.type = FileType::Regular,
+		.error = FileError::None,
+	};
+	auto policy = TestPolicy(fs);
+	auto checker = CheckerFor(policy);
+	auto output = QFile(destination);
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(OpenExternalFile(output, QIODevice::WriteOnly, Operation::Write,
+							   "file-loader.output-open"));
+		const auto partial = QByteArray("partial download bytes");
+		CHECK_EQ(output.write(partial), partial.size());
+	}
+	output.close();
+	ReplaceWithProtectedTarget(
+		fs, parent, replacement,
+		"/Users/alice/Library/Application Support/Telegram Desktop/downloads");
+	{
+		MacProtectedPath::ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(!RemoveExternalFile(output, "file-loader.cancel-remove"));
+	}
+	auto sentinel = QFile(replacement + u"/partial.bin"_q);
+	CHECK(sentinel.open(QIODevice::ReadOnly));
+	CHECK_EQ(sentinel.readAll(), QByteArray("synthetic protected target"));
 }
 
 TEST_CASE(QueuedUploadAndCacheDownloadRecheckPathsBeforeOpen) {

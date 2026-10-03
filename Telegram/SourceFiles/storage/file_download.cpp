@@ -350,7 +350,8 @@ void FileLoader::cancel(FailureReason fail) {
 	if (_fileIsOpen) {
 		_file.close();
 		_fileIsOpen = false;
-		_file.remove();
+		(void)Core::MacProtectedPath::RemoveExternalFile(
+			_file, "file-loader.cancel-remove");
 	}
 	_data = QByteArray();
 

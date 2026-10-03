@@ -11,9 +11,53 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QFile>
 
+#include <functional>
 #include <utility>
 
 namespace Core::MacProtectedPath {
+
+#ifdef TDESKTOP_UNIT_TESTS
+using ExternalPathChecker
+	= std::function<bool(Operation, const QString &, const char *)>;
+
+inline const ExternalPathChecker *&ExternalPathCheckerForTesting() {
+	static thread_local const ExternalPathChecker *checker = nullptr;
+	return checker;
+}
+
+class ScopedExternalPathCheckerForTesting final {
+  public:
+	explicit ScopedExternalPathCheckerForTesting(ExternalPathChecker checker)
+		: _checker(std::move(checker)),
+		  _previous(ExternalPathCheckerForTesting()) {
+		ExternalPathCheckerForTesting() = &_checker;
+	}
+
+	~ScopedExternalPathCheckerForTesting() {
+		ExternalPathCheckerForTesting() = _previous;
+	}
+
+	ScopedExternalPathCheckerForTesting(
+		const ScopedExternalPathCheckerForTesting &) = delete;
+	ScopedExternalPathCheckerForTesting &
+	operator=(const ScopedExternalPathCheckerForTesting &) = delete;
+
+  private:
+	ExternalPathChecker _checker;
+	const ExternalPathChecker *_previous = nullptr;
+};
+#endif // TDESKTOP_UNIT_TESTS
+
+[[nodiscard]] inline bool CheckExternalPathForUse(Operation operation,
+												  const QString &path,
+												  const char *callsite) {
+#ifdef TDESKTOP_UNIT_TESTS
+	if (const auto checker = ExternalPathCheckerForTesting()) {
+		return (*checker)(operation, path, callsite);
+	}
+#endif // TDESKTOP_UNIT_TESTS
+	return CheckExternalPath(operation, path, callsite);
+}
 
 class PersistedExternalPath final {
   public:
@@ -35,8 +79,8 @@ class PersistedExternalPath final {
 			operation, callsite,
 			[](Operation checkedOperation, const QString &checkedPath,
 			   const char *checkedCallsite) {
-				return CheckExternalPath(checkedOperation, checkedPath,
-										 checkedCallsite);
+				return CheckExternalPathForUse(checkedOperation, checkedPath,
+											   checkedCallsite);
 			});
 	}
 
@@ -76,8 +120,29 @@ template <typename Checker>
 		file, mode, operation, callsite,
 		[](Operation checkedOperation, const QString &checkedPath,
 		   const char *checkedCallsite) {
-			return CheckExternalPath(checkedOperation, checkedPath,
-									 checkedCallsite);
+			return CheckExternalPathForUse(checkedOperation, checkedPath,
+										   checkedCallsite);
+		});
+}
+
+template <typename Checker>
+[[nodiscard]] bool RemoveExternalFile(QFile &file, const char *callsite,
+									  Checker &&checker) {
+	const auto path = file.fileName();
+	return !path.isEmpty()
+		   && PersistedExternalPath(path).allowed(
+			   Operation::Unlink, callsite, std::forward<Checker>(checker))
+		   && file.remove();
+}
+
+[[nodiscard]] inline bool RemoveExternalFile(QFile &file,
+											 const char *callsite) {
+	return RemoveExternalFile(
+		file, callsite,
+		[](Operation checkedOperation, const QString &checkedPath,
+		   const char *checkedCallsite) {
+			return CheckExternalPathForUse(checkedOperation, checkedPath,
+										   checkedCallsite);
 		});
 }
 
