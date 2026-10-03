@@ -372,6 +372,64 @@ if (( FAILURES > 0 )); then
 	exit 1
 fi
 
+SOCKET_TARGET="$TEST_HOME/Library/Application Support/Telegram Desktop/tdata/socket-x"
+mkdir -p "$(dirname "$SOCKET_TARGET")"
+python3 -c 'import pathlib, socket, sys; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1]); s.sendall(("OPEN:" + pathlib.Path(sys.argv[2]).as_uri() + ";").encode()); s.recv(256); s.close()' \
+	"$SOCKET_PATH" "$SOCKET_TARGET"
+if ! grep -F -q \
+	"class=application-support callsite=sandbox.open" "$START_LOG"; then
+	echo "single-instance OPEN command was not refused before dispatch." >&2
+	cat "$START_LOG" >&2
+	exit 1
+fi
+if grep -F -q "$TEST_HOME/Library/Application Support/Telegram Desktop" "$START_LOG"; then
+	echo "single-instance OPEN refusal disclosed the protected path." >&2
+	cat "$START_LOG" >&2
+	exit 1
+fi
+printf 'socket_open_protected_path_refusal=PASS class=application-support before-dispatch=1\n'
+
+ARGV_HOME="$TEST_HOME/argv-home"
+mkdir -p "$ARGV_HOME/uploads" \
+	"$ARGV_HOME/Library/Application Support/Telegram Desktop/tdata"
+ARGV_REFUSAL_LOG="$TEST_HOME/argv-refusal.log"
+set +e
+(cd "$ARGV_HOME" && env HOME="$ARGV_HOME" TMPDIR="$TEST_TMP_BASE" \
+	TDESKTOP_MAC_PROFILE_TEST_HOME="$ARGV_HOME" \
+	TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+	"$APP" -quit -- "./Library/Application Support/Telegram Desktop/tdata/x") >"$ARGV_REFUSAL_LOG" 2>&1
+ARGV_REFUSAL_STATUS=$?
+set -e
+if [[ "$ARGV_REFUSAL_STATUS" -ne 0 ]] \
+	|| ! grep -F -q "class=application-support callsite=launcher.argv" "$ARGV_REFUSAL_LOG"; then
+	echo "protected command-line path was not refused before dispatch." >&2
+	cat "$ARGV_REFUSAL_LOG" >&2
+	exit 1
+fi
+if grep -F -q "$ARGV_HOME/Library/Application Support/Telegram Desktop" "$ARGV_REFUSAL_LOG"; then
+	echo "command-line path refusal disclosed the protected path." >&2
+	cat "$ARGV_REFUSAL_LOG" >&2
+	exit 1
+fi
+printf 'argv_protected_path_refusal=PASS status=%s class=application-support before_dispatch=1\n' \
+	"$ARGV_REFUSAL_STATUS"
+
+ARGV_ALLOWED_LOG="$TEST_HOME/argv-allowed.log"
+set +e
+(cd "$ARGV_HOME" && env HOME="$ARGV_HOME" TMPDIR="$TEST_TMP_BASE" \
+	TDESKTOP_MAC_PROFILE_TEST_HOME="$ARGV_HOME" \
+	TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+	"$APP" -quit -- "./uploads/x") >"$ARGV_ALLOWED_LOG" 2>&1
+ARGV_ALLOWED_STATUS=$?
+set -e
+if [[ "$ARGV_ALLOWED_STATUS" -ne 0 ]] \
+	|| grep -F -q "callsite=launcher.argv" "$ARGV_ALLOWED_LOG"; then
+	echo "safe command-line path was refused or failed to dispatch." >&2
+	cat "$ARGV_ALLOWED_LOG" >&2
+	exit 1
+fi
+printf 'argv_profile_relative_path_allowed=PASS status=%s\n' "$ARGV_ALLOWED_STATUS"
+
 QUIT_LOG="$TEST_HOME/quit.log"
 set +e
 env HOME="$TEST_HOME" TMPDIR="$TEST_TMP_BASE" TDESKTOP_MAC_PROFILE_TEST_HOME="$TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" -quit >"$QUIT_LOG" 2>&1

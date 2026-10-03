@@ -815,7 +815,7 @@ void SessionSettings::addFromSerialized(const QByteArray &serialized) {
 	if (version < 2) {
 		app.setLastSeenWarningSeen(appLastSeenWarningSeen == 1);
 		for (const auto &[key, value] : appSoundOverrides) {
-			app.setSoundOverride(key, value);
+			app.setSoundOverrideFromSerialized(key, value);
 		}
 		if (const auto sendFilesWay = Ui::SendFilesWay::FromSerialized(appSendFilesWay)) {
 			app.setSendFilesWay(*sendFilesWay);

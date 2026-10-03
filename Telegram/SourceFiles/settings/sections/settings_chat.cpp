@@ -66,6 +66,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "core/file_utilities.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/core_settings.h"
 #include "data/data_session.h"
 #include "data/data_cloud_themes.h"
@@ -695,6 +696,12 @@ void ChooseFromFile(
 
 		if (!result.paths.isEmpty()) {
 			const auto filePath = result.paths.front();
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Read,
+					filePath,
+					"background.settings-file")) {
+				return;
+			}
 			const auto hasExtension = [&](QLatin1String extension) {
 				return filePath.endsWith(extension, Qt::CaseInsensitive);
 			};

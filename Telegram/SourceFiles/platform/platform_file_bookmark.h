@@ -20,6 +20,9 @@ public:
 	bool check() const {
 		return true;
 	}
+	bool rejected() const {
+		return false;
+	}
 	bool enable() const {
 		return true;
 	}

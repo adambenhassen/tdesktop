@@ -419,6 +419,40 @@ TEST_CASE(RelativeInputsRequireAnAnchorAndResolveAgainstIt) {
 	CHECK(relativeAnchor.refusal.protectedClass == ProtectedClass::Invalid);
 }
 
+TEST_CASE(InitialWorkingDirectoryAnchorsExternalArguments) {
+	auto fs = FakeFileSystem();
+	const auto policy = TestPolicy(fs);
+	const auto initialWorkingDirectory = QByteArray(
+		"/Users/alice/Library/Application Support/Telegramd");
+
+	const auto escapesToTelegramDesktop = policy.Resolve(
+		Operation::Open,
+		"../Telegram Desktop/tdata/x",
+		initialWorkingDirectory,
+		u"unit.launcher.argv"_q);
+	CHECK(!escapesToTelegramDesktop.allowed());
+	CHECK(escapesToTelegramDesktop.refusal.protectedClass
+		== ProtectedClass::ApplicationSupport);
+	CHECK(escapesToTelegramDesktop.resolvedPath.isEmpty());
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+
+	ClearCalls(fs);
+	const auto allowedUpload = policy.Resolve(
+		Operation::Open,
+		"./uploads/x",
+		initialWorkingDirectory,
+		u"unit.launcher.argv"_q);
+	CHECK(allowedUpload.allowed());
+	CHECK_EQ(allowedUpload.resolvedPath,
+		QByteArray(
+			"/Users/alice/Library/Application Support/Telegramd/uploads/x"));
+}
+
 TEST_CASE(DotSegmentsAreResolvedBeforeFilesystemProbes) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);

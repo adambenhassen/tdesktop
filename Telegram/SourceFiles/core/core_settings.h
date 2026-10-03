@@ -187,13 +187,12 @@ public:
 	void setAskDownloadPath(bool value) {
 		_askDownloadPath = value;
 	}
-	[[nodiscard]] QString downloadPath() const {
-		return _downloadPath.current();
-	}
+	[[nodiscard]] QString downloadPath() const;
 	[[nodiscard]] rpl::producer<QString> downloadPathValue() const {
 		return _downloadPath.value();
 	}
-	void setDownloadPath(const QString &value) {
+	void setDownloadPath(const QString &value);
+	void setDownloadPathFromSerialized(const QString &value) {
 		_downloadPath = value;
 	}
 	[[nodiscard]] QByteArray downloadPathBookmark() const {
@@ -422,9 +421,10 @@ public:
 	-> rpl::producer<Ui::InputSubmitSettings> {
 		return _sendSubmitWay.value();
 	}
-	void setSoundOverride(const QString &key, const QString &path) {
-		_soundOverrides.emplace(key, path);
-	}
+	void setSoundOverride(const QString &key, const QString &path);
+	void setSoundOverrideFromSerialized(
+		const QString &key,
+		const QString &path);
 	void clearSoundOverrides() {
 		_soundOverrides.clear();
 	}
@@ -1231,4 +1231,3 @@ private:
 };
 
 } // namespace Core
-

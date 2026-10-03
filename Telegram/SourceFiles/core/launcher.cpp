@@ -351,7 +351,10 @@ Launcher::Launcher(int argc, char *argv[])
 , _argv(argv)
 , _arguments(readArguments(_argc, _argv))
 , _baseIntegration(_argc, _argv)
-, _initialWorkingDir(QDir::currentPath() + '/') {
+, _initialWorkingDir([] {
+	const auto initial = MacProtectedPath::InitialWorkingDirectory();
+	return initial.isEmpty() ? (QDir::currentPath() + '/') : initial;
+}()) {
 	crl::toggle_fp_exceptions(true);
 
 	base::Integration::Set(&_baseIntegration);
@@ -669,7 +672,34 @@ void Launcher::processArguments() {
 
 	const auto startUrls = parseResult.value("--", {});
 	gStartUrls = startUrls | ranges::views::transform([&](const QString &url) {
-		return QUrl::fromUserInput(url, _initialWorkingDir);
+		const auto parsed = QUrl(url);
+		if (parsed.scheme() == u"file"_q) {
+			if (!parsed.isLocalFile()
+				|| !MacProtectedPath::CheckPathAt(
+					MacProtectedPath::Operation::Open,
+					parsed.toLocalFile(),
+					_initialWorkingDir,
+					"launcher.argv")) {
+				return QUrl();
+			}
+		} else if (parsed.scheme().isEmpty()
+			&& !MacProtectedPath::CheckPathAt(
+				MacProtectedPath::Operation::Open,
+				url,
+				_initialWorkingDir,
+				"launcher.argv")) {
+			return QUrl();
+		}
+		const auto converted = QUrl::fromUserInput(url, _initialWorkingDir);
+		if (converted.isLocalFile()
+			&& !MacProtectedPath::CheckPathAt(
+				MacProtectedPath::Operation::Open,
+				converted.toLocalFile(),
+				_initialWorkingDir,
+				"launcher.argv")) {
+			return QUrl();
+		}
+		return converted;
 	}) | ranges::views::filter(&QUrl::isValid) | ranges::to<QList<QUrl>>;
 
 	const auto scaleKey = parseResult.value("-scale", {});

@@ -65,6 +65,16 @@ using Storage::FileKey;
 	return Core::MacProtectedPath::CheckPath(operation, path, callsite);
 }
 
+[[nodiscard]] bool CheckThemePath(Operation operation, const QString &path,
+								  const char *callsite) {
+	return path.startsWith(u":/"_q)
+		|| path.startsWith(u"qrc:/"_q)
+		|| Core::MacProtectedPath::CheckExternalPath(
+			operation,
+			path,
+			callsite);
+}
+
 using Database = Storage::Cache::Database;
 
 QString _basePath, _userBasePath, _userDbPath;
@@ -955,32 +965,57 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 
 	auto ignoreCache = false;
 	if (!object.cloud.id) {
-		auto file = QFile(object.pathRelative);
-		if (!object.pathRelative.isEmpty()
-			&& !CheckProfilePath(Operation::Stat, file.fileName(),
-								 Q_FUNC_INFO)) {
-			return {};
-		}
-		if (object.pathRelative.isEmpty() || !file.exists()) {
-			file.setFileName(object.pathAbsolute);
-		}
-		if (!file.fileName().isEmpty()
-			&& CheckProfilePath(Operation::Stat, file.fileName(), Q_FUNC_INFO)
-			&& file.exists()
-			&& CheckProfilePath(Operation::Read, file.fileName(), Q_FUNC_INFO)
-			&& file.open(QIODevice::ReadOnly)) {
-			if (file.size() > kThemeFileSizeLimit) {
-				LOG(("Error: theme file too large: %1 "
-					"(should be less than 5 MB, got %2)"
-					).arg(file.fileName()
-					).arg(file.size()));
-				return {};
+		const auto relativePath = object.pathRelative.isEmpty()
+			|| object.pathRelative.startsWith(u":/"_q)
+			|| object.pathRelative.startsWith(u"qrc:/"_q)
+			? object.pathRelative
+			: QDir().absoluteFilePath(object.pathRelative);
+		const auto relativeAllowed = object.pathRelative.isEmpty()
+			|| CheckThemePath(
+				Operation::Read,
+				relativePath,
+				"theme.persisted-relative-path");
+		const auto absoluteAllowed = object.pathAbsolute.isEmpty()
+			|| CheckThemePath(
+				Operation::Read,
+				object.pathAbsolute,
+				"theme.persisted-absolute-path");
+		result.refusedPath = !relativeAllowed || !absoluteAllowed;
+		if (!result.refusedPath) {
+			auto file = QFile(relativePath);
+			if (object.pathRelative.isEmpty()) {
+				file.setFileName(object.pathAbsolute);
+			} else if (CheckThemePath(
+					Operation::Stat,
+					file.fileName(),
+					"theme.persisted-relative-stat")
+				&& !file.exists()) {
+				file.setFileName(object.pathAbsolute);
 			}
-			auto fileContent = file.readAll();
-			file.close();
-			if (object.content != fileContent) {
-				object.content = fileContent;
-				ignoreCache = true;
+			if (!file.fileName().isEmpty()
+				&& CheckThemePath(
+					Operation::Stat,
+					file.fileName(),
+					"theme.persisted-stat")
+				&& file.exists()
+				&& CheckThemePath(
+					Operation::Read,
+					file.fileName(),
+					"theme.persisted-read")
+				&& file.open(QIODevice::ReadOnly)) {
+				if (file.size() > kThemeFileSizeLimit) {
+					LOG(("Error: theme file too large: %1 "
+						"(should be less than 5 MB, got %2)"
+						).arg(file.fileName()
+						).arg(file.size()));
+					return {};
+				}
+				auto fileContent = file.readAll();
+				file.close();
+				if (object.content != fileContent) {
+					object.content = fileContent;
+					ignoreCache = true;
+				}
 			}
 		}
 	}
@@ -1068,8 +1103,13 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 	return result;
 }
 
-std::optional<QString> InitialLoadThemeUsingKey(FileKey key) {
+std::optional<QString> InitialLoadThemeUsingKey(FileKey key,
+											bool *refusedPath) {
 	auto read = readThemeUsingKey(key);
+	const auto blocked = read.refusedPath;
+	if (refusedPath) {
+		*refusedPath = blocked;
+	}
 	const auto result = read.object.pathAbsolute;
 	if (read.object.content.isEmpty()) {
 		DEBUG_LOG(("Theme: Could not read content for key: %1").arg(key));
@@ -1077,6 +1117,9 @@ std::optional<QString> InitialLoadThemeUsingKey(FileKey key) {
 	if (read.object.content.isEmpty()
 		|| !Window::Theme::Initialize(std::move(read))) {
 		DEBUG_LOG(("Theme: Could not initialized for key: %1").arg(key));
+		return std::nullopt;
+	}
+	if (blocked) {
 		return std::nullopt;
 	}
 	return result;
@@ -1204,25 +1247,29 @@ void InitialLoadTheme() {
 			Window::Theme::SetNightModeValue(false);
 		}
 		return;
-	} else if (const auto path = InitialLoadThemeUsingKey(key)) {
-		DEBUG_LOG(("Theme: loaded with result: %1").arg(*path));
-		if (_themeKeyLegacy) {
-			Window::Theme::SetNightModeValue(*path
-				== Window::Theme::NightThemePath());
-			(Window::Theme::IsNightMode()
-				? _themeKeyNight
-				: _themeKeyDay) = base::take(_themeKeyLegacy);
-			DEBUG_LOG(("Theme: now (night: %1), "
-				"key_legacy: %2, key_day: %3, key_night: %4 (path: %5)"
-				).arg(Logs::b(Window::Theme::IsNightMode())
-				).arg(_themeKeyLegacy
-				).arg(_themeKeyDay
-				).arg(_themeKeyNight
-				).arg(*path));
-		}
 	} else {
-		DEBUG_LOG(("Theme: could not load, clearing.."));
-		clearTheme();
+		auto refusedPath = false;
+		const auto path = InitialLoadThemeUsingKey(key, &refusedPath);
+		if (path) {
+			DEBUG_LOG(("Theme: loaded with result: %1").arg(*path));
+			if (_themeKeyLegacy) {
+				Window::Theme::SetNightModeValue(*path
+					== Window::Theme::NightThemePath());
+				(Window::Theme::IsNightMode()
+					? _themeKeyNight
+					: _themeKeyDay) = base::take(_themeKeyLegacy);
+				DEBUG_LOG(("Theme: now (night: %1), "
+					"key_legacy: %2, key_day: %3, key_night: %4 (path: %5)"
+					).arg(Logs::b(Window::Theme::IsNightMode())
+					).arg(_themeKeyLegacy
+					).arg(_themeKeyDay
+					).arg(_themeKeyNight
+					).arg(*path));
+			}
+		} else if (!refusedPath) {
+			DEBUG_LOG(("Theme: could not load, clearing.."));
+			clearTheme();
+		}
 	}
 }
 

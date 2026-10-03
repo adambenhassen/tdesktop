@@ -6,8 +6,12 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/launcher.h"
+#include "core/mac_protected_path_runtime.h"
 
 int main(int argc, char *argv[]) {
+	if (!Core::MacProtectedPath::InitializeProfile()) {
+		return 1;
+	}
 	const auto launcher = Core::Launcher::Create(argc, argv);
 	return launcher ? launcher->exec() : 1;
 }
