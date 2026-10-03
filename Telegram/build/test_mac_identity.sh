@@ -129,6 +129,136 @@ for identity in (
 PY
 fi
 
+if [ "$MODE" != observer ]; then
+	python3 - "$ROOT" <<'PY'
+import math
+import pathlib
+import struct
+import sys
+import zlib
+
+root = pathlib.Path(sys.argv[1])
+
+
+def paeth(left, above, upper_left):
+	guess = left + above - upper_left
+	left_distance = abs(guess - left)
+	above_distance = abs(guess - above)
+	upper_left_distance = abs(guess - upper_left)
+	if left_distance <= above_distance and left_distance <= upper_left_distance:
+		return left
+	if above_distance <= upper_left_distance:
+		return above
+	return upper_left
+
+
+def alpha_bounds(path):
+	data = path.read_bytes()
+	assert data[:8] == b'\x89PNG\r\n\x1a\n', f'{path}: not a PNG'
+	position = 8
+	width = height = None
+	compressed = []
+	while position < len(data):
+		length = struct.unpack_from('>I', data, position)[0]
+		kind = data[position + 4:position + 8]
+		chunk = data[position + 8:position + 8 + length]
+		position += length + 12
+		if kind == b'IHDR':
+			(
+				width,
+				height,
+				bit_depth,
+				color_type,
+				compression,
+				filter_method,
+				interlace,
+			) = struct.unpack('>IIBBBBB', chunk)
+			assert (
+				bit_depth,
+				color_type,
+				compression,
+				filter_method,
+				interlace,
+			) == (8, 6, 0, 0, 0), f'{path}: expected 8-bit RGBA PNG'
+		elif kind == b'IDAT':
+			compressed.append(chunk)
+		elif kind == b'IEND':
+			break
+	assert width and height, f'{path}: missing PNG dimensions'
+	stride = width * 4
+	raw = zlib.decompress(b''.join(compressed))
+	assert len(raw) == height * (stride + 1), f'{path}: invalid PNG data length'
+	previous = bytearray(width)
+	minimum_x = width
+	minimum_y = height
+	maximum_x = maximum_y = -1
+	for y in range(height):
+		start = y * (stride + 1)
+		filter_type = raw[start]
+		encoded = raw[start + 1:start + 1 + stride]
+		row = bytearray(width)
+		for x in range(width):
+			value = encoded[x * 4 + 3]
+			left = row[x - 1] if x else 0
+			above = previous[x]
+			upper_left = previous[x - 1] if x else 0
+			if filter_type == 0:
+				predictor = 0
+			elif filter_type == 1:
+				predictor = left
+			elif filter_type == 2:
+				predictor = above
+			elif filter_type == 3:
+				predictor = (left + above) // 2
+			elif filter_type == 4:
+				predictor = paeth(left, above, upper_left)
+			else:
+				raise AssertionError(f'{path}: unknown PNG filter {filter_type}')
+			row[x] = (value + predictor) & 255
+			if row[x]:
+				minimum_x = min(minimum_x, x)
+				minimum_y = min(minimum_y, y)
+				maximum_x = max(maximum_x, x)
+				maximum_y = max(maximum_y, y)
+		previous = row
+	assert maximum_x >= 0, f'{path}: image is fully transparent'
+	return width, height, (minimum_x, minimum_y, maximum_x + 1, maximum_y + 1)
+
+
+sizes = (16, 32, 64, 128, 256, 512, 1024)
+catalogs = (
+	root / 'Telegram/Telegram/Images.xcassets/Icon.iconset',
+	root / 'Telegram/Telegram/Images.xcassets/Icon.appiconset',
+)
+paths = []
+for catalog in catalogs:
+	images = sorted(catalog.glob('*.png'))
+	assert len(images) == 10, f'{catalog}: expected 10 icon slots, got {len(images)}'
+	paths.extend(images)
+paths.extend(
+	root / f'Telegram/Resources/art/teagram-icon-{size}.png'
+	for size in sizes
+)
+paths.append(root / 'Telegram/Resources/art/icon_round512@2x.png')
+
+for path in paths:
+	assert path.is_file(), f'missing macOS icon asset: {path}'
+	width, height, bounds = alpha_bounds(path)
+	assert width == height and width in sizes, f'{path}: unexpected dimensions {width}x{height}'
+	expected = (
+		math.floor(100 * width / 1024),
+		math.floor(100 * height / 1024),
+		math.ceil(924 * width / 1024),
+		math.ceil(924 * height / 1024),
+	)
+	tolerance = 0 if width == 1024 else 1
+	assert all(abs(actual - target) <= tolerance for actual, target in zip(bounds, expected)), (
+		f'{path}: alpha bounds {bounds}, expected {expected} '
+		f'(tolerance {tolerance}px)'
+	)
+PY
+fi
+
 if [ "$MODE" != identity ]; then
 	test -x "$ISOLATION_FILE"
 	test -x "$PARSER_FILE"
