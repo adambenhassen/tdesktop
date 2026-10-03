@@ -569,6 +569,20 @@ if ! grep -F -q \
 	echo "post-open authenticated cache regression did not report coverage." >&2
 	exit 1
 fi
-printf 'authenticated_cache_regression=PASS roots=2 cache_directory_symlinks=2 cache_file_symlinks=2 cleanup_initial_symlink=1 cleanup_worker_symlink=1\n'
+if ! grep -F -q \
+	"Authenticated refused download history regression passed: entry without a live message remained unpublished." \
+	"$AUTH_LOG"; then
+	cat "$AUTH_LOG" >&2
+	echo "refused download-history regression did not report coverage." >&2
+	exit 1
+fi
+if ! grep -F -q \
+	"Mac protected path refusal: operation=read class=group-container callsite=download-history.resolve" \
+	"$AUTH_LOG"; then
+	cat "$AUTH_LOG" >&2
+	echo "refused download-history fixture did not reach manager resolution." >&2
+	exit 1
+fi
+printf 'authenticated_cache_regression=PASS roots=2 cache_directory_symlinks=2 cache_file_symlinks=2 cleanup_initial_symlink=1 cleanup_worker_symlink=1 download_history=PASS\n'
 
 echo "profile, spoiler-cache, and non-store single-instance checks passed."
