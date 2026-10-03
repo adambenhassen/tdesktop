@@ -1063,7 +1063,6 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		return FailChatParticipantsRegression(
 			"could not create the pinned test session");
 	}
-	std::fprintf(stderr, "Feature gates: sessions ready.\n");
 	const auto capabilitiesMatch = [](const Main::Session &session,
 								  bool supported) {
 		return (session.callsSupported() == supported)
@@ -1076,25 +1075,18 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			&& (session.serverTranslationSupported() == supported);
 	};
 	auto &app = Core::App();
-	std::fprintf(stderr, "Feature gates: creating stock window.\n");
 	const auto stockWindow = app.ensureSeparateWindowFor(stock);
-	std::fprintf(stderr, "Feature gates: stock window created.\n");
 	const auto pinnedWindow = app.ensureSeparateWindowFor(pinned);
-	std::fprintf(stderr, "Feature gates: custom window created.\n");
 	const auto closeWindows = gsl::finally([&] {
-		std::fprintf(stderr, "Feature gates: closing test windows.\n");
 		if (stockWindow && app.separateWindowFor(stock) == stockWindow) {
 			app.closeWindow(stockWindow);
 		}
 		if (pinnedWindow && app.separateWindowFor(pinned) == pinnedWindow) {
 			app.closeWindow(pinnedWindow);
 		}
-		std::fprintf(stderr, "Feature gates: restoring stock account.\n");
 		domain.activate(stock);
-		std::fprintf(stderr, "Feature gates: windows closed.\n");
 	});
 	const auto windowsMatch = [&] {
-		std::fprintf(stderr, "Feature gates: checking window bindings.\n");
 		const auto stockController = stockWindow->sessionController();
 		const auto pinnedController = pinnedWindow->sessionController();
 		return (stockWindow != pinnedWindow)
@@ -1112,24 +1104,17 @@ StartChatParticipantsRegression(Main::Domain &domain,
 	const auto activateAndCheck = [&](bool customFirst) {
 		const auto first = customFirst ? pinned : stock;
 		const auto second = customFirst ? stock : pinned;
-		std::fprintf(
-			stderr,
-			"Feature gates: activate %s first.\n",
-			customFirst ? "custom" : "stock");
 		domain.activate(first);
-		std::fprintf(stderr, "Feature gates: first account active.\n");
 		if ((&domain.active() != first.get())
 			|| !capabilitiesMatch(first->session(), !customFirst)
 			|| !windowsMatch()) {
 			return false;
 		}
 		domain.activate(second);
-		std::fprintf(stderr, "Feature gates: second account active.\n");
 		return (&domain.active() == second.get())
 			&& capabilitiesMatch(second->session(), customFirst)
 			&& windowsMatch();
 	};
-	std::fprintf(stderr, "Feature gates: asserting windows and order.\n");
 	if (!stockWindow || !pinnedWindow || !windowsMatch()
 		|| !activateAndCheck(false)
 		|| !activateAndCheck(true)) {
@@ -1313,9 +1298,9 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		return FailAccountLifecycleRegression(
 			"application domain did not start");
 	}
-	if (Core::App().activePrimaryWindow()) {
+	if (!Core::App().activePrimaryWindow()) {
 		return FailAccountLifecycleRegression(
-			"application unexpectedly created a primary window");
+			"application did not create the primary window fixture");
 	}
 	if (domain.accounts().size() != 1
 		|| domain.accounts().front().account->sessionExists()) {

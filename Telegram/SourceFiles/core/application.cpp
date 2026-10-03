@@ -268,9 +268,12 @@ Application::~Application() {
 
 void Application::run() {
 #if defined(TDESKTOP_LIFECYCLE_REGRESSION)
-	const auto headlessRegression
-		= qEnvironmentVariableIsSet("TDESKTOP_SIGNUP_UI_REGRESSION")
-		|| qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION");
+	const auto authLifecycleRegression
+		= qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION");
+	const auto headlessRegression = qEnvironmentVariableIsSet(
+		"TDESKTOP_SIGNUP_UI_REGRESSION") || authLifecycleRegression;
+	const auto windowedApplication = !headlessRegression
+		|| authLifecycleRegression;
 	if (headlessRegression) {
 		// The regression exercises QWidget paths only. Keep unrelated GPU
 		// probing out of the headless process before its first RpWindow.
@@ -279,6 +282,7 @@ void Application::run() {
 #endif // TDESKTOP_LIFECYCLE_REGRESSION
 #if !defined(TDESKTOP_LIFECYCLE_REGRESSION)
 	constexpr auto headlessRegression = false;
+	constexpr auto windowedApplication = true;
 #endif // !TDESKTOP_LIFECYCLE_REGRESSION
 
 	// Depends on OpenSSL on macOS, so on ThirdParty::start().
@@ -326,7 +330,7 @@ void Application::run() {
 	startShortcuts();
 	startEmojiImageLoader();
 	startSystemDarkModeViewer();
-	if (!headlessRegression) {
+	if (windowedApplication) {
 		Media::Player::start(_audio.get());
 	}
 
@@ -365,7 +369,7 @@ void Application::run() {
 			= Core::CachedWebviewAvailability();
 	}
 
-	if (!headlessRegression) {
+	if (windowedApplication) {
 		_windows.emplace(nullptr, std::make_unique<Window::Controller>());
 		setLastActiveWindow(_windows.front().second.get());
 		_windowInSettings = _lastActivePrimaryWindow = _lastActiveWindow;
@@ -421,7 +425,6 @@ void Application::run() {
 	}
 
 	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
-		Media::Player::start(_audio.get());
 		Tests::RunAccountLifecycleRegression([=](int result) {
 			QCoreApplication::exit(regressionResult | result);
 		});

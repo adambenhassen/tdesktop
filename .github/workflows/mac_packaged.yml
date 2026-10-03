@@ -417,17 +417,6 @@ jobs:
               > "$regression_logs/stdout.log" \
               2> "$regression_logs/stderr.log"; then
             cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
-            regression_debug_home="$regression_root/debug-home"
-            regression_debug_work="$regression_root/debug-work"
-            mkdir -p "$regression_debug_home" "$regression_debug_work"
-            if ! env \
-              HOME="$regression_debug_home" \
-              TDESKTOP_AUTH_LIFECYCLE_REGRESSION=1 \
-              lldb --batch -o run -k 'thread backtrace all' -- \
-                "$executable" -noupdate -debug \
-                -workdir "$regression_debug_work"; then
-              echo "Debugger exited nonzero while collecting regression diagnostics."
-            fi
             exit 1
           fi
           cat "$regression_logs/stdout.log" "$regression_logs/stderr.log"
