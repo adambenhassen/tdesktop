@@ -25,11 +25,9 @@ namespace Core::MacProtectedPath {
 							 const char *callsite);
 
 [[nodiscard]] bool CheckPathAt(Operation operation, const QString &path,
-							   const QString &anchor,
-							   const char *callsite);
+							   const QString &anchor, const char *callsite);
 
-[[nodiscard]] bool CheckExternalPath(Operation operation,
-									 const QString &path,
+[[nodiscard]] bool CheckExternalPath(Operation operation, const QString &path,
 									 const char *callsite);
 
 [[nodiscard]] bool CheckCachePath(const QString &path, const char *callsite);
@@ -52,12 +50,12 @@ CheckCachePathForTesting(const QString &path, const char *callsite,
 [[nodiscard]] inline bool CheckPath(Operation, const QString &, const char *) {
 	return true;
 }
-[[nodiscard]] inline bool CheckPathAt(
-		Operation, const QString &, const QString &, const char *) {
+[[nodiscard]] inline bool CheckPathAt(Operation, const QString &,
+									  const QString &, const char *) {
 	return true;
 }
-[[nodiscard]] inline bool CheckExternalPath(
-		Operation, const QString &, const char *) {
+[[nodiscard]] inline bool CheckExternalPath(Operation, const QString &,
+											const char *) {
 	return true;
 }
 [[nodiscard]] inline bool CheckCachePath(const QString &, const char *) {

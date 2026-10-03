@@ -27,7 +27,6 @@ private:
 	Data *data = nullptr;
 #endif // OS_MAC_STORE
 	bool _rejected = false;
-
 };
 
 [[nodiscard]] QByteArray PathBookmark(const QString &path);

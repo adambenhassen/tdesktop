@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_settings.h"
 
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_runtime.h"
 #include "base/platform/base_platform_info.h"
 #include "calls/group/calls_group_common.h"
@@ -698,12 +699,9 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 			for (auto i = 0; i != soundOverridesCount; ++i) {
 				QString key, value;
 				stream >> key >> value;
-				if (!value.isEmpty()) {
-					(void)MacProtectedPath::CheckExternalPath(
-						MacProtectedPath::Operation::Read,
-						value,
-						"settings.sound-override.load");
-				}
+				(void)MacProtectedPath::PersistedExternalPath(value).allowed(
+					MacProtectedPath::Operation::Read,
+					"settings.sound-override.load");
 				soundOverrides.emplace(key, value);
 			}
 		}
@@ -1069,11 +1067,10 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	} else if (!_proxy.setFromSerialized(proxy)) {
 		return;
 	}
-	if (!downloadPath.isEmpty() && downloadPath != FileDialog::Tmp()) {
-		(void)MacProtectedPath::CheckExternalPath(
-			MacProtectedPath::Operation::OpenDir,
-			downloadPath,
-			"settings.download-path.load");
+	if (downloadPath != FileDialog::Tmp()) {
+		(void)MacProtectedPath::PersistedExternalPath(downloadPath)
+			.allowed(MacProtectedPath::Operation::OpenDir,
+					 "settings.download-path.load");
 	}
 	_adaptiveForWide = (adaptiveForWide == 1);
 	_moderateModeEnabled = (moderateModeEnabled == 1);
@@ -1364,34 +1361,26 @@ void Settings::writePrefImpl<bool>(std::string_view key, bool value) {
 QString Settings::getSoundPath(const QString &key) const {
 	auto it = _soundOverrides.find(key);
 	if (it != _soundOverrides.end()
-		&& (it->second.isEmpty()
-			|| MacProtectedPath::CheckExternalPath(
-				MacProtectedPath::Operation::Read,
-				it->second,
-				"settings.sound-override"))) {
+		&& MacProtectedPath::PersistedExternalPath(it->second)
+			   .allowed(MacProtectedPath::Operation::Read,
+						"settings.sound-override")) {
 		return it->second;
 	}
 	return u":/sounds/"_q + key + u".mp3"_q;
 }
 
 void Settings::setSoundOverride(const QString &key, const QString &path) {
-	if (path.isEmpty() || MacProtectedPath::CheckExternalPath(
-			MacProtectedPath::Operation::Read,
-			path,
-			"settings.sound-override.set")) {
+	if (MacProtectedPath::PersistedExternalPath(path).allowed(
+			MacProtectedPath::Operation::Read, "settings.sound-override.set")) {
 		_soundOverrides.emplace(key, path);
 	}
 }
 
-void Settings::setSoundOverrideFromSerialized(
-		const QString &key,
-		const QString &path) {
-	if (!path.isEmpty()) {
-		(void)MacProtectedPath::CheckExternalPath(
-			MacProtectedPath::Operation::Read,
-			path,
-			"settings.sound-override.legacy-load");
-	}
+void Settings::setSoundOverrideFromSerialized(const QString &key,
+											  const QString &path) {
+	(void)MacProtectedPath::PersistedExternalPath(path).allowed(
+		MacProtectedPath::Operation::Read,
+		"settings.sound-override.legacy-load");
 	_soundOverrides.emplace(key, path);
 }
 
@@ -1400,19 +1389,14 @@ QString Settings::downloadPath() const {
 	if (path.isEmpty() || path == FileDialog::Tmp()) {
 		return path;
 	}
-	return MacProtectedPath::CheckExternalPath(
-		MacProtectedPath::Operation::OpenDir,
-		path,
-		"settings.download-path")
-		? path
-		: QString();
+	return MacProtectedPath::PersistedExternalPath(path).forUse(
+		MacProtectedPath::Operation::OpenDir, "settings.download-path");
 }
 
 void Settings::setDownloadPath(const QString &value) {
-	if (value.isEmpty() || value == FileDialog::Tmp()
-		|| MacProtectedPath::CheckExternalPath(
+	if (value == FileDialog::Tmp()
+		|| MacProtectedPath::PersistedExternalPath(value).allowed(
 			MacProtectedPath::Operation::OpenDir,
-			value,
 			"settings.download-path.set")) {
 		_downloadPath = value;
 	}

@@ -287,8 +287,7 @@ PreparedLink ClassifiedLink(
 		return result;
 	}
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			state->request->sourcePath,
+			Core::MacProtectedPath::Operation::Stat, state->request->sourcePath,
 			"markdown.relative-link-source")) {
 		result.kind = PreparedLinkKind::RejectedRelative;
 		return result;

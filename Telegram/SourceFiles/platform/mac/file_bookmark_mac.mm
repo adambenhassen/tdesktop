@@ -47,8 +47,7 @@ FileBookmark::FileBookmark(const QByteArray &bookmark) {
 	if (!url) return;
 	const auto path = NS2QString([url path]);
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			path,
+			Core::MacProtectedPath::Operation::Read, path,
 			"file-bookmark.resolve")) {
 		_rejected = true;
 		return;
@@ -72,9 +71,7 @@ bool FileBookmark::check() const {
 	return false;
 }
 
-bool FileBookmark::rejected() const {
-	return _rejected;
-}
+bool FileBookmark::rejected() const { return _rejected; }
 
 bool FileBookmark::enable() const {
 #ifndef OS_MAC_STORE

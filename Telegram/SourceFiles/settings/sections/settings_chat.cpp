@@ -697,8 +697,7 @@ void ChooseFromFile(
 		if (!result.paths.isEmpty()) {
 			const auto filePath = result.paths.front();
 			if (!Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::Read,
-					filePath,
+					Core::MacProtectedPath::Operation::Read, filePath,
 					"background.settings-file")) {
 				return;
 			}

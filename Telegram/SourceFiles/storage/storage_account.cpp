@@ -994,7 +994,8 @@ void Account::writeLocations() {
 		quint32 size = 0;
 		for (auto i = _fileLocations.cbegin(), e = _fileLocations.cend(); i != e; ++i) {
 			// location + type + namelen + name
-			size += sizeof(quint64) * 2 + sizeof(quint32) + Serialize::stringSize(i.value().serializedName());
+			size += sizeof(quint64) * 2 + sizeof(quint32)
+					+ Serialize::stringSize(i.value().serializedName());
 			if (AppVersion > 9013) {
 				// bookmark
 				size += Serialize::bytearraySize(i.value().bookmark());
@@ -1022,7 +1023,9 @@ void Account::writeLocations() {
 		EncryptedDescriptor data(size);
 		auto legacyTypeField = 0;
 		for (auto i = _fileLocations.cbegin(); i != _fileLocations.cend(); ++i) {
-			data.stream << quint64(i.key().first) << quint64(i.key().second) << quint32(legacyTypeField) << i.value().serializedName();
+			data.stream << quint64(i.key().first) << quint64(i.key().second)
+						<< quint32(legacyTypeField)
+						<< i.value().serializedName();
 			if (AppVersion > 9013) {
 				data.stream << i.value().bookmark();
 			}
@@ -1892,8 +1895,7 @@ void Account::writeFileLocation(MediaKey location, const Core::FileLocation &loc
 	}
 	if (!local.inMediaCache()
 		&& !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			local.fname,
+			Core::MacProtectedPath::Operation::Read, local.fname,
 			"account.file-location.write")) {
 		return;
 	}
@@ -1927,8 +1929,7 @@ void Account::writeFileLocation(MediaKey location, const Core::FileLocation &loc
 		for (auto i = _fileLocations.find(location); (i != _fileLocations.end()) && (i.key() == location);) {
 			if (!i.value().inMediaCache()
 				&& !Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::Read,
-					i.value().fname,
+					Core::MacProtectedPath::Operation::Read, i.value().fname,
 					"account.file-location.cache-write")) {
 				return;
 			}
@@ -1965,9 +1966,8 @@ Core::FileLocation Account::readFileLocation(MediaKey location) {
 	for (auto i = _fileLocations.find(location); (i != _fileLocations.end()) && (i.key() == location);) {
 		if (!i.value().inMediaCache()
 			&& !Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				i.value().fname,
-			"account.file-location.read")) {
+				Core::MacProtectedPath::Operation::Read, i.value().fname,
+				"account.file-location.read")) {
 			return Core::FileLocation();
 		}
 		if (!i.value().inMediaCache() && i.value().pathRefused()) {
@@ -3103,8 +3103,7 @@ void Account::saveRecentSearchHashtags(const QString &text) {
 void Account::writeExportSettings(const Export::Settings &settings) {
 	if (!settings.path.isEmpty()) {
 		(void)Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			settings.path,
+			Core::MacProtectedPath::Operation::OpenDir, settings.path,
 			"export.settings-save");
 	}
 	const auto check = Export::Settings();
@@ -3226,8 +3225,7 @@ Export::Settings Account::readExportSettings() {
 	result.format = Export::Output::Format(format);
 	if (!path.isEmpty()) {
 		(void)Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			path,
+			Core::MacProtectedPath::Operation::OpenDir, path,
 			"export.settings-load");
 	}
 	result.path = path;

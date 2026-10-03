@@ -237,8 +237,7 @@ void BackgroundBox::chooseFromFile() {
 		}
 		if (!result.paths.isEmpty()
 			&& !Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				result.paths.front(),
+				Core::MacProtectedPath::Operation::Read, result.paths.front(),
 				"background.file")) {
 			return;
 		}

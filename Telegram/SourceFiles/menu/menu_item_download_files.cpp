@@ -92,20 +92,17 @@ void AddAction(
 			return;
 		}
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::OpenDir,
-				path,
+				Core::MacProtectedPath::Operation::OpenDir, path,
 				"downloads.menu-directory")
 			|| !Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Stat,
-				path,
+				Core::MacProtectedPath::Operation::Stat, path,
 				"downloads.menu-directory-stat")) {
 			return;
 		}
 		if (!QDir().exists(path)
 			&& (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Mkdir,
-				path,
-				"downloads.menu-directory-create")
+					Core::MacProtectedPath::Operation::Mkdir, path,
+					"downloads.menu-directory-create")
 				|| !QDir().mkpath(path))) {
 			return;
 		}
@@ -159,8 +156,7 @@ void AddAction(
 
 		const auto saveToFiles = [=] {
 			if (!Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::OpenDir,
-					path,
+					Core::MacProtectedPath::Operation::OpenDir, path,
 					"downloads.menu-directory-use")) {
 				return;
 			}
@@ -175,11 +171,9 @@ void AddAction(
 				lastPath = fullPath(i + 1);
 				if (!lastPath.isEmpty()
 					&& Core::MacProtectedPath::CheckExternalPath(
-						Core::MacProtectedPath::Operation::Write,
-						lastPath,
+						Core::MacProtectedPath::Operation::Write, lastPath,
 						"downloads.menu-image-target")
-					&& views[i]->saveToFile(lastPath)
-					&& dates[i] > 0) {
+					&& views[i]->saveToFile(lastPath) && dates[i] > 0) {
 					auto f = QFile(lastPath);
 					if (f.open(QIODevice::ReadWrite)) {
 						const auto when = base::unixtime::parse(dates[i]);

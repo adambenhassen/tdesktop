@@ -63,13 +63,10 @@ enum class FileType {
 		const QString &path,
 		QByteArray data,
 		FileType type) {
-	if (!path.isEmpty()
-		&& !path.startsWith(u":/"_q)
+	if (!path.isEmpty() && !path.startsWith(u":/"_q)
 		&& !path.startsWith(u"qrc:/"_q)
 		&& !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			path,
-			"media.thumbnail")) {
+			Core::MacProtectedPath::Operation::Read, path, "media.thumbnail")) {
 		return QImage();
 	}
 	if (type == FileType::Video || type == FileType::VideoSticker) {

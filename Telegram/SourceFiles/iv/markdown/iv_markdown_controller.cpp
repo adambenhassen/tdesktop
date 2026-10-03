@@ -163,8 +163,7 @@ struct ReadSource {
 		const QString &path,
 		const MarkdownParseLimits &limits) {
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			path,
+			Core::MacProtectedPath::Operation::Read, path,
 			"markdown.local-source")) {
 		return {};
 	}
@@ -228,10 +227,9 @@ struct ReadSource {
 
 [[nodiscard]] OpenTarget ParseOpenTarget(QString path) {
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			path,
+			Core::MacProtectedPath::Operation::Stat, path,
 			"markdown.open-target")) {
-		return { std::move(path), QString() };
+		return {std::move(path), QString()};
 	}
 	const auto direct = QFileInfo(path);
 	if (direct.exists()) {
@@ -246,10 +244,9 @@ struct ReadSource {
 		return { path, QString() };
 	}
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			candidate,
+			Core::MacProtectedPath::Operation::Stat, candidate,
 			"markdown.open-target-fragment")) {
-		return { std::move(path), QString() };
+		return {std::move(path), QString()};
 	}
 	const auto info = QFileInfo(candidate);
 	return info.exists()

@@ -99,8 +99,7 @@ void DocumentSaveClickHandler::Save(
 		const auto filepath = data->filepath(true);
 		if (!filepath.isEmpty()
 			&& !Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				filepath,
+				Core::MacProtectedPath::Operation::Read, filepath,
 				"document.save-source")) {
 			return;
 		}

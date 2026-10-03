@@ -66,9 +66,7 @@ Result File::reopen() {
 		return Result::Success();
 	}
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Write,
-			_path,
-			"export.output")) {
+			Core::MacProtectedPath::Operation::Write, _path, "export.output")) {
 		return Result(Result::Type::FatalError, QString());
 	}
 	_file.emplace(_path);
@@ -88,12 +86,10 @@ Result File::reopen() {
 	const auto dir = info.absoluteDir();
 	const auto directory = dir.absolutePath();
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			directory,
+			Core::MacProtectedPath::Operation::OpenDir, directory,
 			"export.output-directory")
 		|| !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			directory,
+			Core::MacProtectedPath::Operation::Stat, directory,
 			"export.output-directory-stat")) {
 		return Result(Result::Type::FatalError, QString());
 	}
@@ -101,17 +97,14 @@ Result File::reopen() {
 		return error();
 	}
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			directory,
+			Core::MacProtectedPath::Operation::Mkdir, directory,
 			"export.output-directory-create")) {
 		return Result(Result::Type::FatalError, QString());
 	}
 	if (!dir.mkpath(directory)) {
 		return error();
 	}
-	return _file->open(QIODevice::Append)
-		? Result::Success()
-		: error();
+	return _file->open(QIODevice::Append) ? Result::Success() : error();
 }
 
 Result File::error() const {
@@ -126,12 +119,10 @@ QString File::PrepareRelativePath(
 		const QString &folder,
 		const QString &suggested) {
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			folder,
+			Core::MacProtectedPath::Operation::OpenDir, folder,
 			"export.relative-path-directory")
 		|| !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			folder + suggested,
+			Core::MacProtectedPath::Operation::Stat, folder + suggested,
 			"export.relative-path-candidate")) {
 		return QString();
 	}
@@ -154,8 +145,7 @@ QString File::PrepareRelativePath(
 	while (true) {
 		const auto relativePath = relativePart(++attempt);
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Stat,
-				folder + relativePath,
+				Core::MacProtectedPath::Operation::Stat, folder + relativePath,
 				"export.relative-path-candidate")) {
 			return QString();
 		}
@@ -170,9 +160,7 @@ Result File::Copy(
 		const QString &path,
 		Stats *stats) {
 	if (!Core::MacProtectedPath::CheckPair(
-			Core::MacProtectedPath::Operation::Copy,
-			source,
-			path,
+			Core::MacProtectedPath::Operation::Copy, source, path,
 			"export.copy")) {
 		return Result(Result::Type::FatalError, QString());
 	}

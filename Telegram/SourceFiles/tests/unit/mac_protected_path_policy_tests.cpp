@@ -7,8 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tests/unit/unit_test.h"
 
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_policy.h"
 
+#include <QtCore/QDataStream>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -422,17 +424,15 @@ TEST_CASE(RelativeInputsRequireAnAnchorAndResolveAgainstIt) {
 TEST_CASE(InitialWorkingDirectoryAnchorsExternalArguments) {
 	auto fs = FakeFileSystem();
 	const auto policy = TestPolicy(fs);
-	const auto initialWorkingDirectory = QByteArray(
-		"/Users/alice/Library/Application Support/Telegramd");
+	const auto initialWorkingDirectory
+		= QByteArray("/Users/alice/Library/Application Support/Telegramd");
 
-	const auto escapesToTelegramDesktop = policy.Resolve(
-		Operation::Open,
-		"../Telegram Desktop/tdata/x",
-		initialWorkingDirectory,
-		u"unit.launcher.argv"_q);
+	const auto escapesToTelegramDesktop
+		= policy.Resolve(Operation::Open, "../Telegram Desktop/tdata/x",
+						 initialWorkingDirectory, u"unit.launcher.argv"_q);
 	CHECK(!escapesToTelegramDesktop.allowed());
 	CHECK(escapesToTelegramDesktop.refusal.protectedClass
-		== ProtectedClass::ApplicationSupport);
+		  == ProtectedClass::ApplicationSupport);
 	CHECK(escapesToTelegramDesktop.resolvedPath.isEmpty());
 	for (const auto &call : fs.lstatCalls) {
 		CHECK(policy.Classify(call) == ProtectedClass::None);
@@ -442,15 +442,167 @@ TEST_CASE(InitialWorkingDirectoryAnchorsExternalArguments) {
 	}
 
 	ClearCalls(fs);
-	const auto allowedUpload = policy.Resolve(
-		Operation::Open,
-		"./uploads/x",
-		initialWorkingDirectory,
-		u"unit.launcher.argv"_q);
+	const auto allowedUpload
+		= policy.Resolve(Operation::Open, "./uploads/x",
+						 initialWorkingDirectory, u"unit.launcher.argv"_q);
 	CHECK(allowedUpload.allowed());
-	CHECK_EQ(allowedUpload.resolvedPath,
+	CHECK_EQ(
+		allowedUpload.resolvedPath,
 		QByteArray(
 			"/Users/alice/Library/Application Support/Telegramd/uploads/x"));
+}
+
+TEST_CASE(PersistedConsumerPathsSurviveRestartWhenAllowed) {
+	auto fs = FakeFileSystem();
+	const auto policy = TestPolicy(fs);
+	const auto cases = std::vector<std::pair<Operation, const char *>>{
+		{Operation::OpenDir, "settings.download-path"},
+		{Operation::Read, "settings.sound-override"},
+		{Operation::Read, "theme.persisted-absolute-path"},
+		{Operation::Read, "file-location.name"},
+	};
+	const auto allowedPath = u"/Users/alice/Downloads/consumer-path"_q;
+	const auto check
+		= [&](Operation operation, const QString &path, const char *callsite) {
+			  return policy
+				  .Resolve(operation, QFile::encodeName(path), {},
+						   QString::fromUtf8(callsite))
+				  .allowed();
+		  };
+	for (const auto &[operation, callsite] : cases) {
+		auto serialized = QByteArray();
+		{
+			auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
+			stream << allowedPath;
+		}
+		auto restored = QString();
+		{
+			auto stream = QDataStream(serialized);
+			stream >> restored;
+		}
+		const auto persisted = PersistedExternalPath(restored);
+		CHECK_EQ(persisted.stored(), allowedPath);
+		CHECK(persisted.allowed(operation, callsite, check));
+		CHECK_EQ(persisted.forUse(operation, callsite, check), allowedPath);
+	}
+}
+
+TEST_CASE(RefusedPersistedConsumerPathsKeepTheirSerializedValues) {
+	auto fs = FakeFileSystem();
+	const auto policy = TestPolicy(fs);
+	const auto cases = std::vector<std::pair<Operation, const char *>>{
+		{Operation::OpenDir, "settings.download-path"},
+		{Operation::Read, "settings.sound-override"},
+		{Operation::Read, "theme.persisted-absolute-path"},
+		{Operation::Read, "file-location.name"},
+	};
+	const auto refusedPath
+		= u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/refused"_q;
+	const auto check
+		= [&](Operation operation, const QString &path, const char *callsite) {
+			  return policy
+				  .Resolve(operation, QFile::encodeName(path), {},
+						   QString::fromUtf8(callsite))
+				  .allowed();
+		  };
+	for (const auto &[operation, callsite] : cases) {
+		auto serialized = QByteArray();
+		{
+			auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
+			stream << refusedPath;
+		}
+		auto restored = QString();
+		{
+			auto stream = QDataStream(serialized);
+			stream >> restored;
+		}
+		const auto persisted = PersistedExternalPath(restored);
+		ClearCalls(fs);
+		CHECK(!persisted.allowed(operation, callsite, check));
+		CHECK(persisted.forUse(operation, callsite, check).isEmpty());
+		CHECK_EQ(persisted.stored(), refusedPath);
+		auto rewritten = QByteArray();
+		{
+			auto stream = QDataStream(&rewritten, QIODevice::WriteOnly);
+			stream << persisted.stored();
+		}
+		auto restoredAgain = QString();
+		{
+			auto stream = QDataStream(rewritten);
+			stream >> restoredAgain;
+		}
+		CHECK_EQ(restoredAgain, refusedPath);
+		for (const auto &call : fs.lstatCalls) {
+			CHECK(policy.Classify(call) == ProtectedClass::None);
+		}
+		for (const auto &call : fs.readlinkCalls) {
+			CHECK(policy.Classify(call) == ProtectedClass::None);
+		}
+	}
+}
+
+TEST_CASE(QueuedUploadAndCacheDownloadRecheckPathsBeforeOpen) {
+	auto temporary = QTemporaryDir();
+	CHECK(temporary.isValid());
+	const auto write = [](const QString &path, const QByteArray &content) {
+		auto file = QFile(path);
+		return file.open(QIODevice::WriteOnly)
+			   && file.write(content) == content.size();
+	};
+	const auto safeTarget = temporary.filePath(u"safe-target"_q);
+	const auto uploadPath = temporary.filePath(u"queued-upload"_q);
+	const auto downloadPath = temporary.filePath(u"cache-download"_q);
+	CHECK(write(safeTarget, "synthetic safe bytes"));
+	CHECK(write(uploadPath, "prepared upload bytes"));
+	CHECK(write(downloadPath, "prepared download bytes"));
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, QFile::encodeName(temporary.path()));
+	for (const auto &path : {uploadPath, downloadPath}) {
+		fs.entries.emplace(
+			QFile::encodeName(path),
+			LstatResult{.type = FileType::Regular, .error = FileError::None});
+	}
+	const auto policy = TestPolicy(fs);
+	const auto check
+		= [&](Operation operation, const QString &path, const char *callsite) {
+			  return policy
+				  .Resolve(operation, QFile::encodeName(path), {},
+						   QString::fromUtf8(callsite))
+				  .allowed();
+		  };
+	const auto protectedTarget
+		= u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/synthetic"_q;
+	CHECK(PersistedExternalPath(uploadPath)
+			  .allowed(Operation::Read, "file-upload.source-open", check));
+	CHECK(PersistedExternalPath(downloadPath)
+			  .allowed(Operation::Write, "file-loader.output-open", check));
+	for (const auto &path : {uploadPath, downloadPath}) {
+		CHECK(QFile::remove(path));
+		if (!QFile::link(safeTarget, path)) {
+			CHECK(false);
+			return;
+		}
+		const auto encoded = QFile::encodeName(path);
+		fs.entries[encoded] = {
+			.type = FileType::Symlink,
+			.error = FileError::None,
+		};
+		fs.links[encoded] = {
+			.target = QFile::encodeName(protectedTarget),
+			.error = FileError::None,
+		};
+	}
+	auto upload = QFile(uploadPath);
+	CHECK(!OpenExternalFile(upload, QIODevice::ReadOnly, Operation::Read,
+							"file-upload.source-open", check));
+	CHECK(!upload.isOpen());
+	auto download = QFile(downloadPath);
+	CHECK(!OpenExternalFile(download, QIODevice::WriteOnly, Operation::Write,
+							"file-loader.output-open", check));
+	CHECK(!download.isOpen());
+	auto safe = QFile(safeTarget);
+	CHECK(safe.open(QIODevice::ReadOnly));
+	CHECK_EQ(safe.readAll(), QByteArray("synthetic safe bytes"));
 }
 
 TEST_CASE(DotSegmentsAreResolvedBeforeFilesystemProbes) {

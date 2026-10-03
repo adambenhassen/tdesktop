@@ -937,8 +937,7 @@ bool ReadSetting(
 		if (!CheckStreamStatus(stream)) return false;
 #ifndef OS_WIN_STORE
 		const auto pathAllowed = Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			v,
+			Core::MacProtectedPath::Operation::OpenDir, v,
 			"settings.download-path.legacy-load");
 		if (!pathAllowed) {
 			Core::App().settings().setDownloadPathFromSerialized(v);
@@ -962,8 +961,7 @@ bool ReadSetting(
 
 #ifndef OS_WIN_STORE
 		const auto pathAllowed = Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			v,
+			Core::MacProtectedPath::Operation::OpenDir, v,
 			"settings.download-path.legacy-load");
 		if (!pathAllowed) {
 			Core::App().settings().setDownloadPathFromSerialized(v);
@@ -1116,8 +1114,7 @@ bool ReadSetting(
 		if (!CheckStreamStatus(stream)) return false;
 
 		(void)Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			path,
+			Core::MacProtectedPath::Operation::OpenDir, path,
 			"settings.dialog-last-path");
 		cSetDialogLastPath(path);
 	} break;

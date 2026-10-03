@@ -100,8 +100,7 @@ struct LocalMarkdownTarget {
 
 [[nodiscard]] LocalMarkdownTarget ParseLocalMarkdownTarget(QString path) {
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			path,
+			Core::MacProtectedPath::Operation::Stat, path,
 			"markdown.local-target")) {
 		return {
 			.key = path,
@@ -115,8 +114,7 @@ struct LocalMarkdownTarget {
 		const auto candidate = (hash > 0) ? sourcePath.mid(0, hash) : QString();
 		if (!candidate.isEmpty()
 			&& Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Stat,
-				candidate,
+				Core::MacProtectedPath::Operation::Stat, candidate,
 				"markdown.local-target-fragment")
 			&& QFileInfo(candidate).exists()) {
 			fragment = NormalizeLocalMarkdownFragment(sourcePath.mid(hash + 1));

@@ -89,8 +89,7 @@ bool ValidatePhotoEditorMediaDragData(not_null<const QMimeData*> data) {
 			using namespace Core;
 			const auto file = Platform::File::UrlToLocal(url);
 			if (!MacProtectedPath::CheckExternalPath(
-					MacProtectedPath::Operation::Read,
-					file,
+					MacProtectedPath::Operation::Read, file,
 					"media.drag-validation")) {
 				return false;
 			}
@@ -119,8 +118,7 @@ bool ValidateEditMediaDragData(
 			using namespace Core;
 			const auto file = Platform::File::UrlToLocal(url);
 			if (!MacProtectedPath::CheckExternalPath(
-					MacProtectedPath::Operation::Read,
-					file,
+					MacProtectedPath::Operation::Read, file,
 					"media.drag-edit-validation")) {
 				return false;
 			}
@@ -154,8 +152,7 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 		}
 		const auto file = Platform::File::UrlToLocal(url);
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				file,
+				Core::MacProtectedPath::Operation::Read, file,
 				"media.mime-state")) {
 			return MimeDataState::None;
 		}
@@ -223,8 +220,7 @@ PreparedList PrepareMediaList(
 	result.files.reserve(files.size());
 	for (const auto &file : files) {
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				file,
+				Core::MacProtectedPath::Operation::Read, file,
 				"media.prepare-list")) {
 			return {
 				PreparedList::Error::EmptyFile,
@@ -315,8 +311,7 @@ std::optional<PreparedList> PreparedFileFromFilesDialog(
 void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 	if (!file.path.isEmpty()) {
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				file.path,
+				Core::MacProtectedPath::Operation::Read, file.path,
 				"media.prepare-details")) {
 			file.path.clear();
 			file.size = 0;

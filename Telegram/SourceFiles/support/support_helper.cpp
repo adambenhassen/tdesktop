@@ -675,9 +675,7 @@ QString InterpretSendPath(
 		not_null<Window::SessionController*> window,
 		const QString &path) {
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			path,
-			"interpret.input")) {
+			Core::MacProtectedPath::Operation::Read, path, "interpret.input")) {
 		return "App Error: Could not open interpret file.";
 	}
 	QFile f(path);
@@ -712,8 +710,7 @@ QString InterpretSendPath(
 		} else if (line.startsWith(u"file: "_q)) {
 			const auto path = line.mid(u"file: "_q.size());
 			if (!Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::Read,
-					path,
+					Core::MacProtectedPath::Operation::Read, path,
 					"interpret.media-file")) {
 				return "App Error: Could not find interpret media file.";
 			} else if (!QFile(path).exists()) {

@@ -1085,12 +1085,10 @@ std::unique_ptr<Preview> PreviewFromFile(
 		const QByteArray &bytes,
 		const QString &filepath,
 		const Data::CloudTheme &cloud) {
-	if (!filepath.isEmpty()
-		&& !filepath.startsWith(u":/"_q)
+	if (!filepath.isEmpty() && !filepath.startsWith(u":/"_q)
 		&& !filepath.startsWith(u"qrc:/"_q)
 		&& !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			filepath,
+			Core::MacProtectedPath::Operation::Read, filepath,
 			"theme.preview")) {
 		return nullptr;
 	}

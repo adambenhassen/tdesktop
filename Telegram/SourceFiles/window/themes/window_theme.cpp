@@ -57,16 +57,11 @@ constexpr auto kBackgroundSizeLimit = 25 * 1024 * 1024;
 constexpr auto kNightThemeFile = ":/gui/night.tdesktop-theme"_cs;
 constexpr auto kDarkValueThreshold = 0.5;
 
-[[nodiscard]] bool CheckThemePath(
-		Core::MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
-	return path.startsWith(u":/"_q)
-		|| path.startsWith(u"qrc:/"_q)
-		|| Core::MacProtectedPath::CheckExternalPath(
-			operation,
-			path,
-			callsite);
+[[nodiscard]] bool CheckThemePath(Core::MacProtectedPath::Operation operation,
+								  const QString &path, const char *callsite) {
+	return path.startsWith(u":/"_q) || path.startsWith(u"qrc:/"_q)
+		   || Core::MacProtectedPath::CheckExternalPath(operation, path,
+														callsite);
 }
 
 struct Applying {
@@ -97,10 +92,8 @@ inline bool AreTestingTheme() {
 }
 
 QByteArray readThemeContent(const QString &path) {
-	if (!CheckThemePath(
-			Core::MacProtectedPath::Operation::Read,
-			path,
-			"theme.content")) {
+	if (!CheckThemePath(Core::MacProtectedPath::Operation::Read, path,
+						"theme.content")) {
 		return QByteArray();
 	}
 	QFile file(path);
@@ -440,9 +433,8 @@ bool InitializeFromSaved(Saved &&saved) {
 		if (saved.refusedPath) {
 			LOG(("Theme Error: Could not load refused saved theme."));
 		} else {
-			LOG(("Theme Error: Could not load theme from '%1' (%2)").arg(
-				saved.object.pathRelative,
-				saved.object.pathAbsolute));
+			LOG(("Theme Error: Could not load theme from '%1' (%2)")
+					.arg(saved.object.pathRelative, saved.object.pathAbsolute));
 		}
 		return false;
 	}
@@ -628,12 +620,9 @@ void ChatBackground::start() {
 
 void ChatBackground::refreshThemeWatcher() {
 	const auto path = _themeObject.pathAbsolute;
-	if (path.isEmpty()
-		|| editingTheme()
-		|| !CheckThemePath(
-			Core::MacProtectedPath::Operation::Stat,
-			path,
-			"theme.watcher")
+	if (path.isEmpty() || editingTheme()
+		|| !CheckThemePath(Core::MacProtectedPath::Operation::Stat, path,
+						   "theme.watcher")
 		|| !QFileInfo(path).isNativePath()) {
 		_themeWatcher = nullptr;
 	} else if (!_themeWatcher || !_themeWatcher->files().contains(path)) {
@@ -1341,10 +1330,8 @@ void Uninitialize() {
 bool Apply(
 		const QString &filepath,
 		const Data::CloudTheme &cloud) {
-	if (!CheckThemePath(
-			Core::MacProtectedPath::Operation::Read,
-			filepath,
-			"theme.apply")) {
+	if (!CheckThemePath(Core::MacProtectedPath::Operation::Read, filepath,
+						"theme.apply")) {
 		return false;
 	}
 	if (auto preview = PreviewFromFile(QByteArray(), filepath, cloud)) {
@@ -1365,10 +1352,8 @@ bool Apply(std::unique_ptr<Preview> preview) {
 
 void ApplyDefaultWithPath(const QString &themePath) {
 	if (!themePath.isEmpty()) {
-		if (!CheckThemePath(
-				Core::MacProtectedPath::Operation::Read,
-				themePath,
-				"theme.apply-default")) {
+		if (!CheckThemePath(Core::MacProtectedPath::Operation::Read, themePath,
+							"theme.apply-default")) {
 			return;
 		}
 		if (auto preview = PreviewFromFile(QByteArray(), themePath, {})) {

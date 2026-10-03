@@ -307,8 +307,7 @@ void RingtonesBox(
 				if (!result.paths.isEmpty()) {
 					if (!Core::MacProtectedPath::CheckExternalPath(
 							Core::MacProtectedPath::Operation::Read,
-							result.paths.front(),
-							"ringtones.upload")) {
+							result.paths.front(), "ringtones.upload")) {
 						return;
 					}
 					auto info = QFileInfo(result.paths.front());

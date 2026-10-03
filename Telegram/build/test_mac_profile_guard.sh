@@ -374,12 +374,65 @@ fi
 
 SOCKET_TARGET="$TEST_HOME/Library/Application Support/Telegram Desktop/tdata/socket-x"
 mkdir -p "$(dirname "$SOCKET_TARGET")"
-python3 -c 'import pathlib, socket, sys; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1]); s.sendall(("OPEN:" + pathlib.Path(sys.argv[2]).as_uri() + ";").encode()); s.recv(256); s.close()' \
-	"$SOCKET_PATH" "$SOCKET_TARGET"
-if ! grep -F -q \
-	"class=application-support callsite=sandbox.open" "$START_LOG"; then
+
+python3 - "$SOCKET_PATH" "$SOCKET_TARGET" <<'PY'
+import pathlib
+import socket
+import sys
+import time
+
+socket_path, target = sys.argv[1:]
+
+
+def request(command, deadline):
+	remaining = deadline - time.monotonic()
+	if remaining <= 0:
+		raise TimeoutError("request deadline expired")
+	with socket.socket(socket.AF_UNIX) as client:
+		client.settimeout(remaining)
+		client.connect(socket_path)
+		client.sendall(command.encode())
+		response = bytearray()
+		while b";" not in response:
+			chunk = client.recv(256)
+			if not chunk:
+				raise RuntimeError("socket closed before response")
+			response.extend(chunk)
+		if not response.startswith(b"RES:"):
+			raise RuntimeError(f"unexpected socket response: {response!r}")
+		return bytes(response)
+
+
+deadline = time.monotonic() + 30
+last_error = None
+while time.monotonic() < deadline:
+	try:
+		request("CMD:show;", min(deadline, time.monotonic() + 2))
+		break
+	except (OSError, TimeoutError, RuntimeError) as error:
+		last_error = error
+		time.sleep(0.1)
+else:
+	raise RuntimeError(
+		f"single-instance socket did not answer readiness probe: {last_error}")
+
+request(
+	"OPEN:" + pathlib.Path(target).as_uri() + ";",
+	time.monotonic() + 10)
+PY
+
+for ((attempt = 0; attempt < 50; ++attempt)); do
+	if has_start_record "class=application-support callsite=sandbox.open"; then
+		break
+	fi
+	sleep 0.1
+done
+if ! has_start_record "class=application-support callsite=sandbox.open"; then
 	echo "single-instance OPEN command was not refused before dispatch." >&2
 	cat "$START_LOG" >&2
+	if [[ -f "$PROFILE/log.txt" ]]; then
+		cat "$PROFILE/log.txt" >&2
+	fi
 	exit 1
 fi
 if grep -F -q "$TEST_HOME/Library/Application Support/Telegram Desktop" "$START_LOG"; then

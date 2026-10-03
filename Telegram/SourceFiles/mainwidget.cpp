@@ -3000,8 +3000,7 @@ void MainWidget::handleStartFiles(
 	auto guardedPaths = QStringList();
 	for (const auto &path : paths) {
 		if (Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Open,
-				path,
+				Core::MacProtectedPath::Operation::Open, path,
 				"main-widget.start-file")) {
 			guardedPaths.push_back(path);
 		}
@@ -3015,7 +3014,7 @@ void MainWidget::handleStartFiles(
 		}
 	}
 	if (!guardedPaths.isEmpty()) {
-		const auto chosen = [=](not_null<Data::Thread*> thread) {
+		const auto chosen = [=](not_null<Data::Thread *> thread) {
 			return sendPaths(thread, guardedPaths);
 		};
 		Window::ShowChooseRecipientBox(_controller, chosen);

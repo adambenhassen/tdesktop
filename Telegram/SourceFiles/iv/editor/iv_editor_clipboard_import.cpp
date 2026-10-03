@@ -180,8 +180,7 @@ constexpr auto kMaxCellLength = 4096;
 		const auto url = QUrl(source);
 		if (!url.isLocalFile()
 			|| !Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				url.toLocalFile(),
+				Core::MacProtectedPath::Operation::Read, url.toLocalFile(),
 				"markdown.clipboard-media")) {
 			return QString();
 		}
@@ -197,8 +196,7 @@ constexpr auto kMaxCellLength = 4096;
 	const auto decoded = QUrl::fromPercentEncoding(source.toUtf8());
 	const auto absolute = QDir(basePath).absoluteFilePath(decoded);
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			absolute,
+			Core::MacProtectedPath::Operation::Read, absolute,
 			"markdown.clipboard-relative-media")) {
 		return QString();
 	}
@@ -640,8 +638,7 @@ std::vector<RichPage::Block> ConvertImportedBlocks(
 	}
 	const auto path = urls.front().toLocalFile();
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			path,
+			Core::MacProtectedPath::Operation::Read, path,
 			"markdown.clipboard-html")) {
 		return QString();
 	}

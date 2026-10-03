@@ -422,9 +422,8 @@ public:
 		return _sendSubmitWay.value();
 	}
 	void setSoundOverride(const QString &key, const QString &path);
-	void setSoundOverrideFromSerialized(
-		const QString &key,
-		const QString &path);
+	void setSoundOverrideFromSerialized(const QString &key,
+										const QString &path);
 	void clearSoundOverrides() {
 		_soundOverrides.clear();
 	}

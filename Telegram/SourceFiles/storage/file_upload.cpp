@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/file_upload.h"
 
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_runtime.h"
 #include "api/api_editing.h"
 #include "api/api_send_progress.h"
@@ -343,8 +344,7 @@ void Uploader::upload(
 			const auto path = DocumentFileNameForSave(document);
 			if (!path.isEmpty()
 				&& Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::Write,
-					path,
+					Core::MacProtectedPath::Operation::Write, path,
 					"download.upload-target")) {
 				auto f = QFile(path);
 				if (f.open(QIODevice::WriteOnly)
@@ -459,7 +459,10 @@ QByteArray Uploader::readDocPart(not_null<Entry*> entry) {
 	} else if (!entry->docFile) {
 		const auto filepath = entry->file->filepath;
 		entry->docFile = std::make_unique<QFile>(filepath);
-		if (!entry->docFile->open(QIODevice::ReadOnly)) {
+		if (!Core::MacProtectedPath::OpenExternalFile(
+				*entry->docFile, QIODevice::ReadOnly,
+				Core::MacProtectedPath::Operation::Read,
+				"file-upload.source-open")) {
 			return QByteArray();
 		}
 	}

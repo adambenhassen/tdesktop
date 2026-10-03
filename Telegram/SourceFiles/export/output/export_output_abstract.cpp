@@ -22,20 +22,17 @@ namespace Output {
 
 QString NormalizePath(const Settings &settings) {
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			settings.path,
+			Core::MacProtectedPath::Operation::OpenDir, settings.path,
 			"export.normalize-directory")) {
 		return QString();
 	}
 	QDir folder(settings.path);
 	const auto path = folder.absolutePath();
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			path,
+			Core::MacProtectedPath::Operation::OpenDir, path,
 			"export.normalize-absolute-directory")
 		|| !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Stat,
-			path,
+			Core::MacProtectedPath::Operation::Stat, path,
 			"export.normalize-directory-stat")) {
 		return QString();
 	}
@@ -60,8 +57,7 @@ QString NormalizePath(const Settings &settings) {
 	while (true) {
 		const auto candidate = result + add(index);
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Stat,
-				candidate,
+				Core::MacProtectedPath::Operation::Stat, candidate,
 				"export.normalize-candidate-stat")) {
 			return QString();
 		} else if (!QDir(candidate).exists()) {

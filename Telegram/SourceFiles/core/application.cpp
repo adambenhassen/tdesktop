@@ -760,19 +760,19 @@ bool Application::eventFilter(QObject *object, QEvent *e) {
 
 	case QEvent::FileOpen: {
 		if (object == QCoreApplication::instance()) {
-			const auto event = static_cast<QFileOpenEvent*>(e);
+			const auto event = static_cast<QFileOpenEvent *>(e);
 			const auto url = event->url();
 			if (url.scheme() == u"file"_q && !url.isLocalFile()
 				&& MacProtectedPath::IntegrationTestActive()) {
 				return true;
 			}
-			const auto path = !event->file().isEmpty()
-				? event->file()
-				: (url.isLocalFile() ? url.toLocalFile() : QString());
+			const auto path
+				= !event->file().isEmpty()
+					  ? event->file()
+					  : (url.isLocalFile() ? url.toLocalFile() : QString());
 			if (!path.isEmpty()
 				&& !MacProtectedPath::CheckExternalPath(
-					MacProtectedPath::Operation::Open,
-					path,
+					MacProtectedPath::Operation::Open, path,
 					"application.file-open")) {
 				return true;
 			}
@@ -792,9 +792,7 @@ bool Application::eventFilter(QObject *object, QEvent *e) {
 					}
 				});
 			}
-			_urlsToOpen << url.toString(QUrl::FullyEncoded).mid(
-				0,
-				8192);
+			_urlsToOpen << url.toString(QUrl::FullyEncoded).mid(0, 8192);
 		}
 	} break;
 
@@ -1214,29 +1212,29 @@ void Application::checkStartUrls() {
 		return;
 	}
 	if (!Core::App().passcodeLocked()) {
-		cRefStartUrls() = ranges::views::all(
-			cRefStartUrls()
-		) | ranges::views::filter([&](const QUrl &url) {
-			if (url.scheme() == u"file"_q && !url.isLocalFile()
-				&& MacProtectedPath::IntegrationTestActive()) {
-				return false;
-			}
-			if (url.isLocalFile()
-				&& !MacProtectedPath::CheckExternalPath(
-					MacProtectedPath::Operation::Open,
-					url.toLocalFile(),
-					"application.start-url")) {
-				return false;
-			}
-			if (url.scheme() == u"tonsite"_q) {
-				iv().showTonSite(url.toString(), {});
-				return false;
-			} else if (_lastActivePrimaryWindow) {
-				const auto local = TryConvertUrlToLocal(url.toString());
-				return !openLocalUrl(local, {});
-			}
-			return true;
-		}) | ranges::to<QList<QUrl>>;
+		cRefStartUrls()
+			= ranges::views::all(cRefStartUrls())
+			  | ranges::views::filter([&](const QUrl &url) {
+					if (url.scheme() == u"file"_q && !url.isLocalFile()
+						&& MacProtectedPath::IntegrationTestActive()) {
+						return false;
+					}
+					if (url.isLocalFile()
+						&& !MacProtectedPath::CheckExternalPath(
+							MacProtectedPath::Operation::Open,
+							url.toLocalFile(), "application.start-url")) {
+						return false;
+					}
+					if (url.scheme() == u"tonsite"_q) {
+						iv().showTonSite(url.toString(), {});
+						return false;
+					} else if (_lastActivePrimaryWindow) {
+						const auto local = TryConvertUrlToLocal(url.toString());
+						return !openLocalUrl(local, {});
+					}
+					return true;
+				})
+			  | ranges::to<QList<QUrl>>;
 	}
 	if (!cRefStartUrls().isEmpty()
 		&& _lastActivePrimaryWindow
@@ -1249,8 +1247,7 @@ void Application::checkStartUrls() {
 			if (url.scheme() == u"interpret"_q) {
 				const auto path = url.path();
 				if (!MacProtectedPath::CheckExternalPath(
-						MacProtectedPath::Operation::Read,
-						path,
+						MacProtectedPath::Operation::Read, path,
 						"application.interpret-url")) {
 					return false;
 				}

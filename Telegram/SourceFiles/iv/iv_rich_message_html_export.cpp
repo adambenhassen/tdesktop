@@ -55,14 +55,9 @@ constexpr auto kProgressInterval = crl::time(300);
 constexpr auto kMaxFolderNameLength = 48;
 constexpr auto kMinBytesForDownloadsEntry = int64(10) * 1024 * 1024;
 
-[[nodiscard]] bool CheckExportPath(
-		Core::MacProtectedPath::Operation operation,
-		const QString &path,
-		const char *callsite) {
-	return Core::MacProtectedPath::CheckExternalPath(
-		operation,
-		path,
-		callsite);
+[[nodiscard]] bool CheckExportPath(Core::MacProtectedPath::Operation operation,
+								   const QString &path, const char *callsite) {
+	return Core::MacProtectedPath::CheckExternalPath(operation, path, callsite);
 }
 
 [[nodiscard]] QString TgMediaSource(
@@ -1229,10 +1224,8 @@ void RichMessageHtmlExport::start() {
 	collectJobs();
 	if (!_jobs.empty()) {
 		const auto mediaFolder = _folder + u"/media"_q;
-		if (!CheckExportPath(
-				Core::MacProtectedPath::Operation::Mkdir,
-				mediaFolder,
-				"rich-export.media-directory")
+		if (!CheckExportPath(Core::MacProtectedPath::Operation::Mkdir,
+							 mediaFolder, "rich-export.media-directory")
 			|| !QDir().mkpath(mediaFolder)) {
 			fail();
 			return;
@@ -1253,21 +1246,15 @@ void RichMessageHtmlExport::start() {
 }
 
 bool RichMessageHtmlExport::chooseFolder() {
-	if (!CheckExportPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			_basePath,
-			"rich-export.base-directory")
-		|| !CheckExportPath(
-			Core::MacProtectedPath::Operation::Stat,
-			_basePath,
-			"rich-export.base-directory-stat")) {
+	if (!CheckExportPath(Core::MacProtectedPath::Operation::OpenDir, _basePath,
+						 "rich-export.base-directory")
+		|| !CheckExportPath(Core::MacProtectedPath::Operation::Stat, _basePath,
+							"rich-export.base-directory-stat")) {
 		return false;
 	}
 	if (!QDir().exists(_basePath)
-		&& (!CheckExportPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			_basePath,
-			"rich-export.base-directory-create")
+		&& (!CheckExportPath(Core::MacProtectedPath::Operation::Mkdir,
+							 _basePath, "rich-export.base-directory-create")
 			|| !QDir().mkpath(_basePath))) {
 		return false;
 	}
@@ -1280,26 +1267,20 @@ bool RichMessageHtmlExport::chooseFolder() {
 			? u"%1 (%2)"_q.arg(name).arg(i + 1)
 			: name;
 		const auto folder = _basePath + candidate;
-		if (!CheckExportPath(
-				Core::MacProtectedPath::Operation::Stat,
-				folder,
-				"rich-export.folder-stat")) {
+		if (!CheckExportPath(Core::MacProtectedPath::Operation::Stat, folder,
+							 "rich-export.folder-stat")) {
 			return false;
 		}
 		if (!QFileInfo::exists(folder)) {
-			if (!CheckExportPath(
-					Core::MacProtectedPath::Operation::Mkdir,
-					folder,
-					"rich-export.folder-create")
+			if (!CheckExportPath(Core::MacProtectedPath::Operation::Mkdir,
+								 folder, "rich-export.folder-create")
 				|| !QDir().mkpath(folder)) {
 				return false;
 			}
 			_folder = folder;
 			_htmlPath = folder + QChar('/') + candidate + u".html"_q;
-			if (!CheckExportPath(
-					Core::MacProtectedPath::Operation::Write,
-					_htmlPath,
-					"rich-export.html-target")) {
+			if (!CheckExportPath(Core::MacProtectedPath::Operation::Write,
+								 _htmlPath, "rich-export.html-target")) {
 				return false;
 			}
 			return true;
@@ -1456,10 +1437,8 @@ void RichMessageHtmlExport::registerLoading() {
 	if (total < kMinBytesForDownloadsEntry) {
 		return;
 	}
-	if (!CheckExportPath(
-			Core::MacProtectedPath::Operation::Stat,
-			_htmlPath,
-			"rich-export.loading-file-name")) {
+	if (!CheckExportPath(Core::MacProtectedPath::Operation::Stat, _htmlPath,
+						 "rich-export.loading-file-name")) {
 		return;
 	}
 	_fakeDocument = _session->data().document(
@@ -1505,9 +1484,7 @@ void RichMessageHtmlExport::startDocumentJob(MediaJob &job) {
 	const auto existing = job.document->filepath(true);
 	if (!existing.isEmpty()) {
 		if (!Core::MacProtectedPath::CheckPair(
-				Core::MacProtectedPath::Operation::Copy,
-				existing,
-				target,
+				Core::MacProtectedPath::Operation::Copy, existing, target,
 				"rich-export.copy")) {
 			job.failed = true;
 			return;
@@ -1517,9 +1494,7 @@ void RichMessageHtmlExport::startDocumentJob(MediaJob &job) {
 		const auto relative = job.relative;
 		crl::async([=] {
 			const auto allowed = Core::MacProtectedPath::CheckPair(
-				Core::MacProtectedPath::Operation::Copy,
-				existing,
-				target,
+				Core::MacProtectedPath::Operation::Copy, existing, target,
 				"rich-export.copy");
 			const auto ok = allowed && QFile::copy(existing, target);
 			crl::on_main(weak, [=] {
@@ -1557,11 +1532,10 @@ void RichMessageHtmlExport::checkJobs() {
 				&& !job.photoMedia->imageBytes(
 					::Data::PhotoSize::Large).isEmpty()) {
 				const auto target = _folder + QChar('/') + job.relative;
-				job.done = CheckExportPath(
-					Core::MacProtectedPath::Operation::Write,
-					target,
-					"rich-export.photo-target")
-					&& job.photoMedia->saveToFile(target);
+				job.done
+					= CheckExportPath(Core::MacProtectedPath::Operation::Write,
+									  target, "rich-export.photo-target")
+					  && job.photoMedia->saveToFile(target);
 				job.failed = !job.done;
 				job.photoMedia = nullptr;
 			} else if (!job.photo->loading()) {
@@ -1573,11 +1547,10 @@ void RichMessageHtmlExport::checkJobs() {
 		} else if (job.document) {
 			if (!job.document->loading()) {
 				const auto target = _folder + QChar('/') + job.relative;
-				job.done = CheckExportPath(
-					Core::MacProtectedPath::Operation::Stat,
-					target,
-					"rich-export.document-stat")
-					&& QFile::exists(target);
+				job.done
+					= CheckExportPath(Core::MacProtectedPath::Operation::Stat,
+									  target, "rich-export.document-stat")
+					  && QFile::exists(target);
 				job.failed = !job.done;
 			} else {
 				pending = true;
@@ -1675,10 +1648,8 @@ void RichMessageHtmlExport::finalize() {
 				return std::nullopt;
 			}
 			const auto mediaFolder = _folder + u"/media"_q;
-			if (!CheckExportPath(
-					Core::MacProtectedPath::Operation::Mkdir,
-					mediaFolder,
-					"rich-export.formula-directory")
+			if (!CheckExportPath(Core::MacProtectedPath::Operation::Mkdir,
+								 mediaFolder, "rich-export.formula-directory")
 				|| !QDir().mkpath(mediaFolder)) {
 				return std::nullopt;
 			}
@@ -1690,10 +1661,8 @@ void RichMessageHtmlExport::finalize() {
 				rendered.image,
 				QColor(0, 0, 0));
 			const auto target = _folder + QChar('/') + relative;
-			if (!CheckExportPath(
-					Core::MacProtectedPath::Operation::Write,
-					target,
-					"rich-export.formula-target")
+			if (!CheckExportPath(Core::MacProtectedPath::Operation::Write,
+								 target, "rich-export.formula-target")
 				|| !colorized.save(target, "PNG")) {
 				return std::nullopt;
 			}
@@ -1716,16 +1685,13 @@ void RichMessageHtmlExport::finalize() {
 		.renderFormula = renderFormulaImage,
 	});
 	auto written = false;
-	if (!CheckExportPath(
-			Core::MacProtectedPath::Operation::Write,
-			_htmlPath,
-			"rich-export.html-write")) {
+	if (!CheckExportPath(Core::MacProtectedPath::Operation::Write, _htmlPath,
+						 "rich-export.html-write")) {
 		written = false;
 	} else {
 		auto file = QFile(_htmlPath);
 		written = file.open(QIODevice::WriteOnly)
-			&& (file.write(html) == html.size())
-			&& file.flush();
+				  && (file.write(html) == html.size()) && file.flush();
 		file.close();
 		if (written && file.error() != QFileDevice::NoError) {
 			written = false;
@@ -1742,10 +1708,8 @@ void RichMessageHtmlExport::finalize() {
 		return;
 	}
 	if (_registered) {
-		if (CheckExportPath(
-				Core::MacProtectedPath::Operation::Stat,
-				_htmlPath,
-				"rich-export.html-stat")) {
+		if (CheckExportPath(Core::MacProtectedPath::Operation::Stat, _htmlPath,
+							"rich-export.html-stat")) {
 			const auto info = QFileInfo(_htmlPath);
 			_fakeDocument->size = info.size();
 			_fakeDocument->setLocation(Core::FileLocation(info));
@@ -1800,10 +1764,8 @@ void RichMessageHtmlExport::stopJobs() {
 
 void RichMessageHtmlExport::cleanupFiles() {
 	if (!_folder.isEmpty()
-		&& CheckExportPath(
-			Core::MacProtectedPath::Operation::Rmdir,
-			_folder,
-			"rich-export.cleanup")) {
+		&& CheckExportPath(Core::MacProtectedPath::Operation::Rmdir, _folder,
+						   "rich-export.cleanup")) {
 		QDir(_folder).removeRecursively();
 	}
 }

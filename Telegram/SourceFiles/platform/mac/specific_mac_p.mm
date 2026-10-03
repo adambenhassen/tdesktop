@@ -340,8 +340,7 @@ void objc_downloadPathEnableAccess(const QByteArray &bookmark) {
 	if (!url) return;
 	const auto resolvedPath = NS2QString([url path]);
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			resolvedPath,
+			Core::MacProtectedPath::Operation::OpenDir, resolvedPath,
 			"settings.download-path.bookmark")) {
 		return;
 	}

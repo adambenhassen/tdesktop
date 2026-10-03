@@ -525,24 +525,20 @@ LastCrashedWindow::LastCrashedWindow(
 }
 
 void LastCrashedWindow::saveReport() {
-	const auto initial = QStandardPaths::writableLocation(
-		QStandardPaths::DocumentsLocation) + u"/report.telegramcrash"_q;
-	const auto safeInitial = CheckCrashPath(
-		Core::MacProtectedPath::Operation::Write,
-		initial,
-		"crash-report.save-initial")
-		? initial
-		: QString();
+	const auto initial
+		= QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+		  + u"/report.telegramcrash"_q;
+	const auto safeInitial
+		= CheckCrashPath(Core::MacProtectedPath::Operation::Write, initial,
+						 "crash-report.save-initial")
+			  ? initial
+			  : QString();
 	const auto to = QFileDialog::getSaveFileName(
-		0,
-		u"Telegram Crash Report"_q,
-		safeInitial,
+		0, u"Telegram Crash Report"_q, safeInitial,
 		u"Telegram crash report (*.telegramcrash)"_q);
 	if (!to.isEmpty()
-		&& CheckCrashPath(
-			Core::MacProtectedPath::Operation::Write,
-			to,
-			"crash-report.save-result")) {
+		&& CheckCrashPath(Core::MacProtectedPath::Operation::Write, to,
+						  "crash-report.save-result")) {
 		QFile file(to);
 		if (file.open(QIODevice::WriteOnly)) {
 			file.write(getCrashReportRaw());

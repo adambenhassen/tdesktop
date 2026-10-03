@@ -65,7 +65,6 @@ private:
 
 	std::shared_ptr<Platform::FileBookmark> _bookmark;
 	QByteArray _serializedBookmark;
-
 };
 
 inline bool operator==(const FileLocation &a, const FileLocation &b) {

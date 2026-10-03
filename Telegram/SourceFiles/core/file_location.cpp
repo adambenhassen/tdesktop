@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/file_location.h"
 
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_runtime.h"
 #include "platform/platform_file_bookmark.h"
 #include "logs.h"
@@ -41,10 +42,8 @@ ReadAccessEnabler::~ReadAccessEnabler() {
 FileLocation::FileLocation(const QString &name) : fname(name) {
 	if (fname.isEmpty() || fname == kInMediaCacheLocation) {
 		size = 0;
-	} else if (!MacProtectedPath::CheckExternalPath(
-			Operation::Read,
-			fname,
-			"file-location.construct")) {
+	} else if (!MacProtectedPath::PersistedExternalPath(fname).allowed(
+				   Operation::Read, "file-location.construct")) {
 		size = 0;
 	} else {
 		setBookmark(Platform::PathBookmark(name));
@@ -55,10 +54,8 @@ FileLocation::FileLocation(const QString &name) : fname(name) {
 FileLocation::FileLocation(const QFileInfo &info) : fname(info.filePath()) {
 	if (fname.isEmpty()) {
 		size = 0;
-	} else if (!MacProtectedPath::CheckExternalPath(
-			Operation::Read,
-			fname,
-			"file-location.construct-info")) {
+	} else if (!MacProtectedPath::PersistedExternalPath(fname).allowed(
+				   Operation::Read, "file-location.construct-info")) {
 		size = 0;
 	} else {
 		setBookmark(Platform::PathBookmark(fname));
@@ -67,10 +64,8 @@ FileLocation::FileLocation(const QFileInfo &info) : fname(info.filePath()) {
 }
 
 void FileLocation::resolveFromInfo(const QFileInfo &info) {
-	if (!MacProtectedPath::CheckExternalPath(
-			Operation::Read,
-			info.filePath(),
-			"file-location.resolve-info")) {
+	if (!MacProtectedPath::PersistedExternalPath(info.filePath())
+			 .allowed(Operation::Read, "file-location.resolve-info")) {
 		return;
 	}
 	if (info.exists()) {
@@ -130,54 +125,45 @@ bool FileLocation::check() const {
 }
 
 bool FileLocation::pathRefused() const {
-	return !fname.isEmpty()
-		&& fname != kInMediaCacheLocation
-		&& ((_bookmark && _bookmark->rejected()) || name().isEmpty());
+	return !fname.isEmpty() && fname != kInMediaCacheLocation
+		   && ((_bookmark && _bookmark->rejected()) || name().isEmpty());
 }
 
 const QString &FileLocation::name() const {
 	static const auto Empty = QString();
 	if (fname.isEmpty() || fname == kInMediaCacheLocation
-		|| !MacProtectedPath::CheckExternalPath(
-			Operation::Read,
-			fname,
-			"file-location.name")
+		|| !MacProtectedPath::PersistedExternalPath(fname).allowed(
+			Operation::Read, "file-location.name")
 		|| (_bookmark && _bookmark->rejected())) {
 		return Empty;
 	}
 	const auto &result = _bookmark ? _bookmark->name(fname) : fname;
-	return MacProtectedPath::CheckExternalPath(
-		Operation::Read,
-		result,
-		"file-location.bookmark-name")
-		? result
-		: Empty;
+	return MacProtectedPath::PersistedExternalPath(result)
+				   .forUse(Operation::Read, "file-location.bookmark-name")
+				   .isEmpty()
+			   ? Empty
+			   : result;
 }
 
 QString FileLocation::serializedName() const {
 	if (fname.isEmpty() || fname == kInMediaCacheLocation) {
 		return fname;
 	}
-	if (!MacProtectedPath::CheckExternalPath(
-			Operation::Read,
-			fname,
-			"file-location.serialize")
+	if (!MacProtectedPath::PersistedExternalPath(fname).allowed(
+			Operation::Read, "file-location.serialize")
 		|| (_bookmark && _bookmark->rejected())) {
 		return fname;
 	}
 	const auto &result = _bookmark ? _bookmark->name(fname) : fname;
-	return MacProtectedPath::CheckExternalPath(
-		Operation::Read,
-		result,
-		"file-location.serialize-bookmark")
-		? result
-		: fname;
+	return MacProtectedPath::PersistedExternalPath(result).allowed(
+			   Operation::Read, "file-location.serialize-bookmark")
+			   ? result
+			   : fname;
 }
 
 QByteArray FileLocation::bookmark() const {
-	return (_bookmark && !_bookmark->rejected())
-		? _bookmark->bookmark()
-		: _serializedBookmark;
+	return (_bookmark && !_bookmark->rejected()) ? _bookmark->bookmark()
+												 : _serializedBookmark;
 }
 
 bool FileLocation::inMediaCache() const {
@@ -187,20 +173,15 @@ bool FileLocation::inMediaCache() const {
 void FileLocation::setBookmark(const QByteArray &bm) {
 	_serializedBookmark = bm;
 	_bookmark.reset();
-	if (!bm.isEmpty()
-		&& !fname.isEmpty()
-		&& fname != kInMediaCacheLocation
-		&& MacProtectedPath::CheckExternalPath(
-			Operation::Read,
-			fname,
-			"file-location.bookmark-load")) {
+	if (!bm.isEmpty() && !fname.isEmpty() && fname != kInMediaCacheLocation
+		&& MacProtectedPath::PersistedExternalPath(fname).allowed(
+			Operation::Read, "file-location.bookmark-load")) {
 		_bookmark = std::make_shared<Platform::FileBookmark>(bm);
 	}
 }
 
 bool FileLocation::accessEnable() const {
-	return !name().isEmpty()
-		&& (_bookmark ? _bookmark->enable() : true);
+	return !name().isEmpty() && (_bookmark ? _bookmark->enable() : true);
 }
 
 void FileLocation::accessDisable() const {

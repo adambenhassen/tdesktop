@@ -377,7 +377,7 @@ bool CheckPath(Operation operation, const QString &path, const char *callsite) {
 }
 
 bool CheckExternalPath(Operation operation, const QString &path,
-				   const char *callsite) {
+					   const char *callsite) {
 	return CheckPathAt(operation, path, QString(), callsite);
 }
 

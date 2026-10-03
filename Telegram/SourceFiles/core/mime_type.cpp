@@ -107,10 +107,9 @@ MimeType MimeTypeForName(const QString &mime) {
 }
 
 MimeType MimeTypeForFile(const QFileInfo &file) {
-	if (!MacProtectedPath::CheckExternalPath(
-			MacProtectedPath::Operation::Read,
-			file.filePath(),
-			"mime.file-type")) {
+	if (!MacProtectedPath::CheckExternalPath(MacProtectedPath::Operation::Read,
+											 file.filePath(),
+											 "mime.file-type")) {
 		return MimeType(MimeType::Known::Unknown);
 	}
 	QString path = file.absoluteFilePath();
@@ -225,16 +224,14 @@ QList<QUrl> ReadMimeUrls(not_null<const QMimeData*> data) {
 	if (!data->hasUrls() || IsImageFromFirefox(data)) {
 		return {};
 	}
-	auto result = KUrlMimeData::urlsFromMimeData(
-		data,
-		KUrlMimeData::PreferLocalUrls);
+	auto result
+		= KUrlMimeData::urlsFromMimeData(data, KUrlMimeData::PreferLocalUrls);
 	auto guarded = QList<QUrl>();
 	for (const auto &url : result) {
 		if (!(url.scheme() == u"file"_q && !url.isLocalFile())
 			&& (!url.isLocalFile()
 				|| MacProtectedPath::CheckExternalPath(
-					MacProtectedPath::Operation::Open,
-					url.toLocalFile(),
+					MacProtectedPath::Operation::Open, url.toLocalFile(),
 					"mime.urls"))) {
 			guarded.push_back(url);
 		}

@@ -191,10 +191,8 @@ auto GenerateCodes() {
 	for (auto &key : audioKeys) {
 		codes.emplace(key, [=](SessionController *window) {
 			FileDialog::GetOpenPath(
-				Core::App().getFileDialogParent(),
-				"Open audio file",
-				audioFilters,
-				[=](const FileDialog::OpenResult &result) {
+				Core::App().getFileDialogParent(), "Open audio file",
+				audioFilters, [=](const FileDialog::OpenResult &result) {
 					if (!result.paths.isEmpty()
 						&& Core::MacProtectedPath::CheckExternalPath(
 							Core::MacProtectedPath::Operation::Read,
@@ -207,8 +205,7 @@ auto GenerateCodes() {
 								"Could not audio :( Errors in 'log.txt'."));
 						} else {
 							Core::App().settings().setSoundOverride(
-								key,
-								result.paths.front());
+								key, result.paths.front());
 							Core::App().saveSettingsDelayed();
 						}
 					}
@@ -227,8 +224,7 @@ auto GenerateCodes() {
 			}
 			if (!Core::MacProtectedPath::CheckExternalPath(
 					Core::MacProtectedPath::Operation::Read,
-					result.paths.front(),
-					"settings.crash-log.open")) {
+					result.paths.front(), "settings.crash-log.open")) {
 				return;
 			}
 			auto f = QFile(result.paths.front());
@@ -281,13 +277,13 @@ auto GenerateCodes() {
 		const auto iconFilters = u"Icon files (*.icns *.png);;"_q + FileDialog::AllFilesFilter();
 		const auto change = [](const QString &path) {
 			const auto allowed = path.isEmpty()
-				|| Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::Read,
-					path,
-					"settings.custom-icon");
-			const auto success = allowed && (path.isEmpty()
-				? base::ClearCustomAppIcon()
-				: base::SetCustomAppIcon(path));
+								 || Core::MacProtectedPath::CheckExternalPath(
+									 Core::MacProtectedPath::Operation::Read,
+									 path, "settings.custom-icon");
+			const auto success
+				= allowed
+				  && (path.isEmpty() ? base::ClearCustomAppIcon()
+									 : base::SetCustomAppIcon(path));
 			Ui::Toast::Show(success
 				? (path.isEmpty()
 					? "Icon cleared. Restarting the Dock."

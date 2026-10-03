@@ -625,21 +625,19 @@ void Sandbox::readClients() {
 				} else if (cmd.startsWith(u"XDG_ACTIVATION_TOKEN:"_q)) {
 					qputenv("XDG_ACTIVATION_TOKEN", QByteArray::fromBase64(cmds.mid(from + 21, to - from - 21).toLatin1()));
 				} else if (cmd.startsWith(u"OPEN:"_q)) {
-					const auto raw = cmds.mid(from + 5, to - from - 5)
-						.mid(0, 8192);
+					const auto raw
+						= cmds.mid(from + 5, to - from - 5).mid(0, 8192);
 					const auto url = QUrl(raw);
 #ifdef Q_OS_MAC
 					if ((url.scheme() == u"file"_q && !url.isLocalFile()
-						&& MacProtectedPath::IntegrationTestActive())
+						 && MacProtectedPath::IntegrationTestActive())
 						|| (url.isLocalFile()
-						&& !MacProtectedPath::CheckExternalPath(
-							MacProtectedPath::Operation::Open,
-							url.toLocalFile(),
-							"sandbox.open"))
-						|| (url.scheme().isEmpty()
 							&& !MacProtectedPath::CheckExternalPath(
 								MacProtectedPath::Operation::Open,
-								raw,
+								url.toLocalFile(), "sandbox.open"))
+						|| (url.scheme().isEmpty()
+							&& !MacProtectedPath::CheckExternalPath(
+								MacProtectedPath::Operation::Open, raw,
 								"sandbox.open"))) {
 						from = to + 1;
 						continue;

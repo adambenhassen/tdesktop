@@ -500,8 +500,7 @@ auto FileLoadTask::ReadMediaInformation(
 	auto result = std::make_unique<Ui::PreparedFileInformation>();
 	if (!filepath.isEmpty()
 		&& !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			filepath,
+			Core::MacProtectedPath::Operation::Read, filepath,
 			"media.read-information")) {
 		return result;
 	}
@@ -675,8 +674,7 @@ void FileLoadTask::process(ProcessArgs &&args) {
 	});
 	if (!_filepath.isEmpty()
 		&& !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Read,
-			_filepath,
+			Core::MacProtectedPath::Operation::Read, _filepath,
 			"media.file-load")) {
 		_result->filesize = -1;
 		return;

@@ -796,8 +796,7 @@ void Editor::importTheme() {
 			return;
 		}
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Read,
-				path,
+				Core::MacProtectedPath::Operation::Read, path,
 				"theme.editor-import")) {
 			return;
 		}

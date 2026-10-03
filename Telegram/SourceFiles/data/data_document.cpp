@@ -116,8 +116,7 @@ QString FileNameUnsafe(
 		} else if (dir.path() != u"."_q) {
 			QString path = dir.absolutePath();
 			if (Core::MacProtectedPath::CheckExternalPath(
-					Core::MacProtectedPath::Operation::OpenDir,
-					path,
+					Core::MacProtectedPath::Operation::OpenDir, path,
 					"download.dialog-directory")
 				&& path != cDialogLastPath()) {
 				cSetDialogLastPath(path);
@@ -170,40 +169,35 @@ QString FileNameUnsafe(
 	}();
 	if (path.isEmpty()) return QString();
 	if (!Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::OpenDir,
-			path,
+			Core::MacProtectedPath::Operation::OpenDir, path,
 			"download.directory")) {
 		return QString();
 	}
 	if (name.isEmpty()) name = u".unknown"_q;
 	if (name.at(0) == QChar::fromLatin1('.')) {
 		if (!Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Stat,
-				path,
+				Core::MacProtectedPath::Operation::Stat, path,
 				"download.directory.exists")) {
 			return QString();
 		}
 		if (!QDir().exists(path)
 			&& (!Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Mkdir,
-				path,
-				"download.directory.create")
+					Core::MacProtectedPath::Operation::Mkdir, path,
+					"download.directory.create")
 				|| !QDir().mkpath(path))) {
 			return QString();
 		}
 		const auto result = filedialogDefaultName(prefix, name, path);
 		return Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Write,
-			result,
-			"download.filename")
-			? result
-			: QString();
+				   Core::MacProtectedPath::Operation::Write, result,
+				   "download.filename")
+				   ? result
+				   : QString();
 	}
 	if (dir.path() != u"."_q) {
 		path = dir.absolutePath() + '/';
 		if (!Core::MacProtectedPath::CheckExternalPath(
-				Core::MacProtectedPath::Operation::Write,
-				path,
+				Core::MacProtectedPath::Operation::Write, path,
 				"download.selected-directory")) {
 			return QString();
 		}
@@ -220,36 +214,32 @@ QString FileNameUnsafe(
 	QString nameBase = path + nameStart;
 	name = nameBase + extension;
 	if (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Write,
-			name,
+			Core::MacProtectedPath::Operation::Write, name,
 			"download.filename")) {
 		return QString();
 	}
 	for (int i = 0; Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Stat,
-			name,
-			"download.filename.exists")
-		&& QFileInfo::exists(name); ++i) {
+						Core::MacProtectedPath::Operation::Stat, name,
+						"download.filename.exists")
+					&& QFileInfo::exists(name);
+		 ++i) {
 		name = nameBase + u" (%1)"_q.arg(i + 2) + extension;
 		if (!Core::MacProtectedPath::CheckPath(
-				Core::MacProtectedPath::Operation::Write,
-				name,
+				Core::MacProtectedPath::Operation::Write, name,
 				"download.filename")) {
 			return QString();
 		}
 	}
 
 	if (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Stat,
-			path,
+			Core::MacProtectedPath::Operation::Stat, path,
 			"download.directory.exists")) {
 		return QString();
 	}
 	if (!QDir().exists(path)
 		&& (!Core::MacProtectedPath::CheckPath(
-			Core::MacProtectedPath::Operation::Mkdir,
-			path,
-			"download.directory.create")
+				Core::MacProtectedPath::Operation::Mkdir, path,
+				"download.directory.create")
 			|| !QDir().mkpath(path))) {
 		return QString();
 	}
@@ -293,11 +283,10 @@ QString DocumentFileNameForSave(
 	auto alreadySavingFilename = data->loadingFilePath();
 	if (!alreadySavingFilename.isEmpty()) {
 		return Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Write,
-			alreadySavingFilename,
-			"download.existing-target")
-			? alreadySavingFilename
-			: QString();
+				   Core::MacProtectedPath::Operation::Write,
+				   alreadySavingFilename, "download.existing-target")
+				   ? alreadySavingFilename
+				   : QString();
 	}
 
 	QString name, filter, caption, prefix;
@@ -339,21 +328,14 @@ QString DocumentFileNameForSave(
 		prefix = u"doc"_q;
 	}
 
-	const auto result = FileNameForSave(
-		&data->session(),
-		caption,
-		filter,
-		prefix,
-		name,
-		forceSavingAs,
-		dir);
+	const auto result = FileNameForSave(&data->session(), caption, filter,
+										prefix, name, forceSavingAs, dir);
 	return result.isEmpty()
-		|| Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Write,
-			result,
-			"download.target")
-		? result
-		: QString();
+				   || Core::MacProtectedPath::CheckExternalPath(
+					   Core::MacProtectedPath::Operation::Write, result,
+					   "download.target")
+			   ? result
+			   : QString();
 }
 
 Data::FileOrigin StickerData::setOrigin() const {
@@ -1278,8 +1260,7 @@ void DocumentData::save(
 		bool autoLoading) {
 	if (!toFile.isEmpty()
 		&& !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Write,
-			toFile,
+			Core::MacProtectedPath::Operation::Write, toFile,
 			"document.save-target")) {
 		return;
 	}
@@ -1301,14 +1282,12 @@ void DocumentData::save(
 				const auto &alreadyName = l.name();
 				if (alreadyName != toFile) {
 					const auto copyAllowed = Core::MacProtectedPath::CheckPair(
-						Core::MacProtectedPath::Operation::Copy,
-						alreadyName,
-						toFile,
-						"document.save-copy");
-					const auto removeAllowed = Core::MacProtectedPath::CheckExternalPath(
-						Core::MacProtectedPath::Operation::Unlink,
-						toFile,
-						"document.save-replace");
+						Core::MacProtectedPath::Operation::Copy, alreadyName,
+						toFile, "document.save-copy");
+					const auto removeAllowed
+						= Core::MacProtectedPath::CheckExternalPath(
+							Core::MacProtectedPath::Operation::Unlink, toFile,
+							"document.save-replace");
 					if (copyAllowed && removeAllowed) {
 						QFile(toFile).remove();
 						QFile(alreadyName).copy(toFile);
@@ -1558,8 +1537,7 @@ bool DocumentData::saveFromDataChecked() {
 	const auto path = DocumentFileNameForSave(this);
 	if (path.isEmpty()
 		|| !Core::MacProtectedPath::CheckExternalPath(
-			Core::MacProtectedPath::Operation::Write,
-			path,
+			Core::MacProtectedPath::Operation::Write, path,
 			"download.save-from-data")) {
 		return false;
 	}
