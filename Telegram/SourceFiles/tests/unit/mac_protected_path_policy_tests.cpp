@@ -1532,7 +1532,7 @@ TEST_CASE(WebViewFileInputRejectsProtectedSelectionsBeforeCompletion) {
 			uploaded = selection;
 		});
 	CHECK(!allowed);
-	CHECK_EQ(checked, paths);
+	CHECK(checked == paths);
 	CHECK_EQ(completed, 0);
 	CHECK(uploaded.isEmpty());
 }
@@ -1553,10 +1553,13 @@ TEST_CASE(WebViewFileInputRejectsSymlinksIntoProtectedPaths) {
 		});
 	auto policy = TestPolicy(fs);
 	const auto paths = QStringList{QString::fromUtf8(source)};
+	const auto checker = CheckerFor(policy);
+	const auto checkPath = [&checker](const QString &path) {
+		return checker(Operation::Read, path, "unit.webview.file-input");
+	};
 	auto completed = false;
 	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
-		paths, CheckerFor(policy),
-		[&](const QStringList &) { completed = true; });
+		paths, checkPath, [&](const QStringList &) { completed = true; });
 	CHECK(!allowed);
 	CHECK(!completed);
 	for (const auto &call : fs.lstatCalls) {
@@ -1575,10 +1578,14 @@ TEST_CASE(WebViewFileInputAllowsDownloadsForUpload) {
 		u"/Users/alice/Downloads/first.png"_q,
 		u"/Users/alice/Downloads/second.png"_q,
 	};
+	const auto checker = CheckerFor(policy);
+	const auto checkPath = [&checker](const QString &path) {
+		return checker(Operation::Read, path, "unit.webview.file-input");
+	};
 	auto uploaded = QStringList();
 	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
-		paths, CheckerFor(policy),
+		paths, checkPath,
 		[&](const QStringList &selection) { uploaded = selection; });
 	CHECK(allowed);
-	CHECK_EQ(uploaded, paths);
+	CHECK(uploaded == paths);
 }
