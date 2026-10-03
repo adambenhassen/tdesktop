@@ -15,7 +15,7 @@ FileBookmark::~FileBookmark() = default;
 
 bool FileBookmark::check() const { return true; }
 
-bool FileBookmark::rejected() const { return false; }
+bool FileBookmark::rejected() const { return _rejected; }
 
 bool FileBookmark::enable() const { return true; }
 
