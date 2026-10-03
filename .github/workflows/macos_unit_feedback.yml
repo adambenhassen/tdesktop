@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch name or commit SHA to test.
+        description: Branch, full commit SHA, or SHA prefix of the dispatch revision.
         required: true
         default: dev
         type: string
@@ -60,10 +60,35 @@ jobs:
             exit 1
           }
 
+      - name: Resolve checkout ref.
+        id: checkout-ref
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+
+          resolve_checkout_ref() {
+            local requested_ref="$1"
+            if [[ "$requested_ref" =~ ^[[:xdigit:]]{7,39}$ ]] \
+                && [[ "$GITHUB_SHA" == "$requested_ref"* ]]; then
+              printf '%s\n' "$GITHUB_SHA"
+            else
+              printf '%s\n' "$requested_ref"
+            fi
+          }
+
+          test_ref="${GITHUB_SHA:0:10}"
+          if [[ "$(resolve_checkout_ref "$test_ref")" != "$GITHUB_SHA" ]]; then
+            echo "::error::Short SHA resolution self-test failed."
+            exit 1
+          fi
+
+          echo "ref=$(resolve_checkout_ref "$REQUESTED_REF")" >> "$GITHUB_OUTPUT"
+
       - name: Clone.
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ steps.checkout-ref.outputs.ref }}
           submodules: recursive
           path: ${{ env.REPO_NAME }}
 
