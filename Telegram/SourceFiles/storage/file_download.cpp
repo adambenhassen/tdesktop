@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/file_download.h"
 
+#include "core/mac_protected_path_access.h"
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
@@ -126,7 +127,12 @@ void FileLoader::finishWithBytes(const QByteArray &data) {
 	_data = data;
 	_localStatus = LocalStatus::Loaded;
 	if (!_filename.isEmpty() && _toCache == LoadToCacheAsWell) {
-		if (!_fileIsOpen) _fileIsOpen = _file.open(QIODevice::WriteOnly);
+		if (!_fileIsOpen) {
+			_fileIsOpen = Core::MacProtectedPath::OpenExternalFile(
+				_file, QIODevice::WriteOnly,
+				Core::MacProtectedPath::Operation::Write,
+				"file-loader.cache-write");
+		}
 		if (!_fileIsOpen) {
 			cancel(FailureReason::FileWriteFailure);
 			return;
@@ -254,7 +260,9 @@ bool FileLoader::checkForOpen() {
 		|| _fileIsOpen) {
 		return true;
 	}
-	_fileIsOpen = _file.open(QIODevice::WriteOnly);
+	_fileIsOpen = Core::MacProtectedPath::OpenExternalFile(
+		_file, QIODevice::WriteOnly, Core::MacProtectedPath::Operation::Write,
+		"file-loader.output-open");
 	if (_fileIsOpen) {
 		return true;
 	}
@@ -342,7 +350,8 @@ void FileLoader::cancel(FailureReason fail) {
 	if (_fileIsOpen) {
 		_file.close();
 		_fileIsOpen = false;
-		_file.remove();
+		(void)Core::MacProtectedPath::RemoveExternalFile(
+			_file, "file-loader.cancel-remove");
 	}
 	_data = QByteArray();
 
@@ -408,7 +417,10 @@ QByteArray FileLoader::readLoadedPartBack(int64 offset, int size) {
 	if (_fileIsOpen) {
 		if (_file.openMode() == QIODevice::WriteOnly) {
 			_file.close();
-			_fileIsOpen = _file.open(QIODevice::ReadWrite);
+			_fileIsOpen = Core::MacProtectedPath::OpenExternalFile(
+				_file, QIODevice::ReadWrite,
+				Core::MacProtectedPath::Operation::Write,
+				"file-loader.output-reopen");
 			if (!_fileIsOpen) {
 				cancel(FailureReason::FileWriteFailure);
 				return QByteArray();
@@ -430,10 +442,17 @@ bool FileLoader::finalizeResult() {
 
 	if (!_filename.isEmpty() && (_toCache == LoadToCacheAsWell)) {
 		if (!_fileIsOpen) {
-			_fileIsOpen = _file.open(QIODevice::WriteOnly);
+			_fileIsOpen = Core::MacProtectedPath::OpenExternalFile(
+				_file, QIODevice::WriteOnly,
+				Core::MacProtectedPath::Operation::Write,
+				"file-loader.output-finalize");
+		}
+		if (!_fileIsOpen) {
+			cancel(FailureReason::FileWriteFailure);
+			return false;
 		}
 		_file.seek(0);
-		if (!_fileIsOpen || _file.write(_data) != qint64(_data.size())) {
+		if (_file.write(_data) != qint64(_data.size())) {
 			cancel(FailureReason::FileWriteFailure);
 			return false;
 		}

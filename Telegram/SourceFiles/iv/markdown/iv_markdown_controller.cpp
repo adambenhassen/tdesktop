@@ -6,6 +6,8 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "iv/markdown/iv_markdown_controller.h"
+
+#include "core/mac_protected_path_runtime.h"
 #include "base/event_filter.h"
 #include "core/click_handler_types.h"
 #include "core/credits_amount.h"
@@ -160,6 +162,11 @@ struct ReadSource {
 [[nodiscard]] ReadSource ReadLocalSource(
 		const QString &path,
 		const MarkdownParseLimits &limits) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, path,
+			"markdown.local-source")) {
+		return {};
+	}
 	const auto info = QFileInfo(path);
 	auto name = info.fileName();
 	if (!IsReadableLocalFile(info) || !LooksLikeMarkdownFile(name)) {
@@ -219,6 +226,11 @@ struct ReadSource {
 }
 
 [[nodiscard]] OpenTarget ParseOpenTarget(QString path) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, path,
+			"markdown.open-target")) {
+		return {std::move(path), QString()};
+	}
 	const auto direct = QFileInfo(path);
 	if (direct.exists()) {
 		return { path, QString() };
@@ -230,6 +242,11 @@ struct ReadSource {
 	const auto candidate = path.mid(0, hash);
 	if (candidate.isEmpty()) {
 		return { path, QString() };
+	}
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, candidate,
+			"markdown.open-target-fragment")) {
+		return {std::move(path), QString()};
 	}
 	const auto info = QFileInfo(candidate);
 	return info.exists()

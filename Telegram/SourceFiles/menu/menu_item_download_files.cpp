@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_click_handler.h"
@@ -90,7 +91,21 @@ void AddAction(
 		if (path.isEmpty()) {
 			return;
 		}
-		QDir().mkpath(path);
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::OpenDir, path,
+				"downloads.menu-directory")
+			|| !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Stat, path,
+				"downloads.menu-directory-stat")) {
+			return;
+		}
+		if (!QDir().exists(path)
+			&& (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Mkdir, path,
+					"downloads.menu-directory-create")
+				|| !QDir().mkpath(path))) {
+			return;
+		}
 
 		const auto showToast = !shouldShowToast
 			? Fn<void(const QString &)>(nullptr)
@@ -140,6 +155,11 @@ void AddAction(
 		};
 
 		const auto saveToFiles = [=] {
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::OpenDir, path,
+					"downloads.menu-directory-use")) {
+				return;
+			}
 			const auto fullPath = [&](int i) {
 				return filedialogDefaultName(
 					u"photo_"_q + QString::number(i),
@@ -149,7 +169,11 @@ void AddAction(
 			auto lastPath = QString();
 			for (auto i = 0; i < views.size(); i++) {
 				lastPath = fullPath(i + 1);
-				if (views[i]->saveToFile(lastPath) && dates[i] > 0) {
+				if (!lastPath.isEmpty()
+					&& Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::Write, lastPath,
+						"downloads.menu-image-target")
+					&& views[i]->saveToFile(lastPath) && dates[i] > 0) {
 					auto f = QFile(lastPath);
 					if (f.open(QIODevice::ReadWrite)) {
 						const auto when = base::unixtime::parse(dates[i]);

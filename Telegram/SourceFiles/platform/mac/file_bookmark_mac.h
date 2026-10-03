@@ -15,6 +15,7 @@ public:
 	~FileBookmark();
 
 	[[nodiscard]] bool check() const;
+	[[nodiscard]] bool rejected() const;
 	bool enable() const;
 	void disable() const;
 	[[nodiscard]] const QString &name(const QString &original) const;
@@ -25,7 +26,7 @@ private:
 	struct Data;
 	Data *data = nullptr;
 #endif // OS_MAC_STORE
-
+	bool _rejected = false;
 };
 
 [[nodiscard]] QByteArray PathBookmark(const QString &path);

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "core/core_settings_proxy.h"
+#include "core/core_settings_external_paths.h"
 #include "media/media_common.h"
 #include "dialogs/ui/dialogs_quick_action.h"
 #include "ui/widgets/chat_filters_tabs_mode.h"
@@ -187,14 +188,13 @@ public:
 	void setAskDownloadPath(bool value) {
 		_askDownloadPath = value;
 	}
-	[[nodiscard]] QString downloadPath() const {
-		return _downloadPath.current();
-	}
+	[[nodiscard]] QString downloadPath() const;
 	[[nodiscard]] rpl::producer<QString> downloadPathValue() const {
-		return _downloadPath.value();
+		return _externalPaths.downloadPathValue();
 	}
-	void setDownloadPath(const QString &value) {
-		_downloadPath = value;
+	void setDownloadPath(const QString &value);
+	void setDownloadPathFromSerialized(const QString &value) {
+		_externalPaths.setDownloadPathFromSerialized(value);
 	}
 	[[nodiscard]] QByteArray downloadPathBookmark() const {
 		return _downloadPathBookmark;
@@ -422,12 +422,10 @@ public:
 	-> rpl::producer<Ui::InputSubmitSettings> {
 		return _sendSubmitWay.value();
 	}
-	void setSoundOverride(const QString &key, const QString &path) {
-		_soundOverrides.emplace(key, path);
-	}
-	void clearSoundOverrides() {
-		_soundOverrides.clear();
-	}
+	void setSoundOverride(const QString &key, const QString &path);
+	void setSoundOverrideFromSerialized(const QString &key,
+										const QString &path);
+	void clearSoundOverrides() { _externalPaths.clearSoundOverrides(); }
 	[[nodiscard]] QString getSoundPath(const QString &key) const;
 
 	[[nodiscard]] auto noWarningExtensions() const
@@ -1089,7 +1087,7 @@ private:
 	rpl::variable<float64> _songVolume = kDefaultVolume;
 	rpl::variable<float64> _videoVolume = kDefaultVolume;
 	bool _askDownloadPath = false;
-	rpl::variable<QString> _downloadPath;
+	SettingsExternalPaths _externalPaths;
 	QByteArray _downloadPathBookmark;
 	bool _soundNotify = true;
 	bool _desktopNotify = true;
@@ -1123,7 +1121,6 @@ private:
 	Ui::SendFilesWay _sendFilesWay = Ui::SendFilesWay();
 	rpl::variable<Ui::InputSubmitSettings> _sendSubmitWay
 		= Ui::InputSubmitSettings();
-	base::flat_map<QString, QString> _soundOverrides;
 	base::flat_set<QString> _noWarningExtensions;
 	bool _ipRevealWarning = true;
 	bool _loopAnimatedStickers = true;
@@ -1231,4 +1228,3 @@ private:
 };
 
 } // namespace Core
-

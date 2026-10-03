@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_file_click_handler.h"
 
+#include "core/mac_protected_path_runtime.h"
 #include "core/click_handler_types.h"
 #include "core/file_utilities.h"
 #include "core/application.h"
@@ -96,6 +97,12 @@ void DocumentSaveClickHandler::Save(
 			return;
 		}
 		const auto filepath = data->filepath(true);
+		if (!filepath.isEmpty()
+			&& !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, filepath,
+				"document.save-source")) {
+			return;
+		}
 		const auto fileinfo = QFileInfo(filepath);
 		const auto filedir = filepath.isEmpty()
 			? QDir()

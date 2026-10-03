@@ -994,7 +994,8 @@ void Account::writeLocations() {
 		quint32 size = 0;
 		for (auto i = _fileLocations.cbegin(), e = _fileLocations.cend(); i != e; ++i) {
 			// location + type + namelen + name
-			size += sizeof(quint64) * 2 + sizeof(quint32) + Serialize::stringSize(i.value().name());
+			size += sizeof(quint64) * 2 + sizeof(quint32)
+					+ Serialize::stringSize(i.value().serializedName());
 			if (AppVersion > 9013) {
 				// bookmark
 				size += Serialize::bytearraySize(i.value().bookmark());
@@ -1022,7 +1023,9 @@ void Account::writeLocations() {
 		EncryptedDescriptor data(size);
 		auto legacyTypeField = 0;
 		for (auto i = _fileLocations.cbegin(); i != _fileLocations.cend(); ++i) {
-			data.stream << quint64(i.key().first) << quint64(i.key().second) << quint32(legacyTypeField) << i.value().name();
+			data.stream << quint64(i.key().first) << quint64(i.key().second)
+						<< quint32(legacyTypeField)
+						<< i.value().serializedName();
 			if (AppVersion > 9013) {
 				data.stream << i.value().bookmark();
 			}
@@ -1890,6 +1893,12 @@ void Account::writeFileLocation(MediaKey location, const Core::FileLocation &loc
 	if (local.fname.isEmpty()) {
 		return;
 	}
+	if (!local.inMediaCache()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, local.fname,
+			"account.file-location.write")) {
+		return;
+	}
 	if (!local.inMediaCache()) {
 		const auto aliasIt = _fileLocationAliases.constFind(location);
 		if (aliasIt != _fileLocationAliases.cend()) {
@@ -1918,6 +1927,15 @@ void Account::writeFileLocation(MediaKey location, const Core::FileLocation &loc
 		_fileLocationPairs.insert(local.fname, { location, local });
 	} else {
 		for (auto i = _fileLocations.find(location); (i != _fileLocations.end()) && (i.key() == location);) {
+			if (!i.value().inMediaCache()
+				&& !Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Read, i.value().fname,
+					"account.file-location.cache-write")) {
+				return;
+			}
+			if (!i.value().inMediaCache() && i.value().pathRefused()) {
+				return;
+			}
 			if (i.value().inMediaCache() || i.value().check()) {
 				return;
 			}
@@ -1946,6 +1964,15 @@ Core::FileLocation Account::readFileLocation(MediaKey location) {
 	}
 
 	for (auto i = _fileLocations.find(location); (i != _fileLocations.end()) && (i.key() == location);) {
+		if (!i.value().inMediaCache()
+			&& !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, i.value().fname,
+				"account.file-location.read")) {
+			return Core::FileLocation();
+		}
+		if (!i.value().inMediaCache() && i.value().pathRefused()) {
+			return Core::FileLocation();
+		}
 		if (!i.value().inMediaCache() && !i.value().check()) {
 			_fileLocationPairs.remove(i.value().fname);
 			i = _fileLocations.erase(i);
@@ -3074,6 +3101,11 @@ void Account::saveRecentSearchHashtags(const QString &text) {
 }
 
 void Account::writeExportSettings(const Export::Settings &settings) {
+	if (!settings.path.isEmpty()) {
+		(void)Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, settings.path,
+			"export.settings-save");
+	}
 	const auto check = Export::Settings();
 	if (settings.types == check.types
 		&& settings.fullChats == check.fullChats
@@ -3191,6 +3223,11 @@ Export::Settings Account::readExportSettings() {
 	result.media.types = Export::MediaSettings::Types::from_raw(mediaTypes);
 	result.media.sizeLimit = mediaSizeLimit;
 	result.format = Export::Output::Format(format);
+	if (!path.isEmpty()) {
+		(void)Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, path,
+			"export.settings-load");
+	}
 	result.path = path;
 	result.availableAt = availableAt;
 	result.singlePeer = [&] {

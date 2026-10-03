@@ -28,6 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h"
 #include "ui/controls/download_bar.h"
 #include "ui/text/format_song_document_name.h"
@@ -121,12 +122,25 @@ struct DocumentDescriptor {
 };
 
 [[nodiscard]] QString RichExportFolderToRemove(const QString &filePath) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, filePath,
+			"download-history.cleanup-read")
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, filePath,
+			"download-history.cleanup-stat")) {
+		return QString();
+	}
 	if (!filePath.endsWith(u".html"_q, Qt::CaseInsensitive)) {
 		return QString();
 	}
 	const auto info = QFileInfo(filePath);
 	const auto folder = info.absolutePath();
 	if (QDir(folder).dirName() != info.completeBaseName()) {
+		return QString();
+	}
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, folder,
+			"download-history.cleanup-directory")) {
 		return QString();
 	}
 	auto file = QFile(filePath);
@@ -475,6 +489,12 @@ void DownloadManager::addLoaded(
 		DownloadDate started) {
 	Expects(object.item != nullptr);
 	Expects(object.document || object.photo);
+	if (path.isEmpty()
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, path,
+			"download-history.add")) {
+		return;
+	}
 
 	const auto size = QFileInfo(path).size();
 	if (size <= 0 || size > kMaxFileSize) {
@@ -620,10 +640,24 @@ void DownloadManager::finishFilesDelete(DeleteFilesDescriptor &&descriptor) {
 	}
 	crl::async([files = std::move(descriptor.files)]{
 		for (const auto &file : files) {
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Read, file.first,
+					"download-history.cleanup-read")
+				|| !Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Stat, file.first,
+					"download-history.cleanup-stat")) {
+				continue;
+			}
 			const auto folder = RichExportFolderToRemove(file.first);
 			if (!folder.isEmpty()) {
-				QDir(folder).removeRecursively();
-			} else {
+				if (Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::RecursiveDelete,
+						folder, "download-history.cleanup-folder")) {
+					QDir(folder).removeRecursively();
+				}
+			} else if (Core::MacProtectedPath::CheckExternalPath(
+						   Core::MacProtectedPath::Operation::Unlink,
+						   file.first, "download-history.cleanup-file")) {
 				QFile(file.first).remove();
 			}
 			crl::on_main([descriptor = file.second] {
@@ -826,6 +860,21 @@ void DownloadManager::resolve(
 	auto from = last + (data.resolveNeeded - data.resolveSentTotal);
 	for (auto i = from; i != last;) {
 		auto &id = *--i;
+		if (id.path.isEmpty()) {
+			if (++data.resolveSentTotal >= kMaxResolvePerAttempt) {
+				break;
+			}
+			continue;
+		}
+		if (!id.path.isEmpty()
+			&& !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, id.path,
+				"download-history.resolve")) {
+			if (++data.resolveSentTotal >= kMaxResolvePerAttempt) {
+				break;
+			}
+			continue;
+		}
 		const auto msgId = id.itemId.msg;
 		const auto info = QFileInfo(id.path);
 		if (!info.exists() || info.size() != id.size) {
@@ -895,12 +944,15 @@ void DownloadManager::resolveRequestsFinished(
 		const auto media = item ? item->media() : nullptr;
 		const auto document = media ? media->document() : nullptr;
 		const auto photo = media ? media->photo() : nullptr;
-		if (i->download.type == DownloadType::Document
-			&& (!document || document->id != i->download.objectId)) {
-			generateEntry(session, *i);
-		} else if (i->download.type == DownloadType::Photo
-			&& (!photo || photo->id != i->download.objectId)) {
-			generateEntry(session, *i);
+		const auto generate
+			= (i->download.type == DownloadType::Document
+			   && (!document || document->id != i->download.objectId))
+			  || (i->download.type == DownloadType::Photo
+				  && (!photo || photo->id != i->download.objectId));
+		if (generate) {
+			details::GenerateAndNotifyLoadedEntry(
+				*i, [=](DownloadedId &entry) { generateEntry(session, entry); },
+				[=](const DownloadedId *entry) { _loadedAdded.fire(entry); });
 		} else {
 			i->object = std::make_unique<DownloadObject>(DownloadObject{
 				.item = item,
@@ -908,8 +960,8 @@ void DownloadManager::resolveRequestsFinished(
 				.photo = photo,
 			});
 			_loaded.emplace(item);
+			_loadedAdded.fire(&*i);
 		}
-		_loadedAdded.fire(&*i);
 	}
 	crl::on_main(session, [=] {
 		resolve(session, sessionData(session));
@@ -933,6 +985,12 @@ void DownloadManager::generateEntry(
 		not_null<Main::Session*> session,
 		DownloadedId &id) {
 	Expects(!id.object);
+	if (id.path.isEmpty()
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, id.path,
+			"download-history.generate")) {
+		return;
+	}
 
 	const auto info = QFileInfo(id.path);
 	const auto document = session->data().document(

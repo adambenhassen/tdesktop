@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_updates.h"
 #include "api/api_views.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/components/scheduled_messages.h"
 #include "data/data_document_media.h"
 #include "data/data_document_resolver.h"
@@ -2996,6 +2997,14 @@ void MainWidget::activate() {
 void MainWidget::handleStartFiles(
 		QStringList interprets,
 		QStringList paths) {
+	auto guardedPaths = QStringList();
+	for (const auto &path : paths) {
+		if (Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Open, path,
+				"main-widget.start-file")) {
+			guardedPaths.push_back(path);
+		}
+	}
 	for (const auto &interpret : interprets) {
 		const auto error = Support::InterpretSendPath(
 			_controller,
@@ -3004,9 +3013,9 @@ void MainWidget::handleStartFiles(
 			_controller->show(Ui::MakeInformBox(error));
 		}
 	}
-	if (!paths.isEmpty()) {
-		const auto chosen = [=](not_null<Data::Thread*> thread) {
-			return sendPaths(thread, paths);
+	if (!guardedPaths.isEmpty()) {
+		const auto chosen = [=](not_null<Data::Thread *> thread) {
+			return sendPaths(thread, guardedPaths);
 		};
 		Window::ShowChooseRecipientBox(_controller, chosen);
 	}

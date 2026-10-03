@@ -35,6 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/launcher.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "main/main_account.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
@@ -673,6 +674,10 @@ QString ChatOccupiedString(not_null<History*> history) {
 QString InterpretSendPath(
 		not_null<Window::SessionController*> window,
 		const QString &path) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, path, "interpret.input")) {
+		return "App Error: Could not open interpret file.";
+	}
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly)) {
 		return "App Error: Could not open interpret file: " + path;
@@ -704,7 +709,11 @@ QString InterpretSendPath(
 			topicRootId = MsgId(topicId);
 		} else if (line.startsWith(u"file: "_q)) {
 			const auto path = line.mid(u"file: "_q.size());
-			if (!QFile(path).exists()) {
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Read, path,
+					"interpret.media-file")) {
+				return "App Error: Could not find interpret media file.";
+			} else if (!QFile(path).exists()) {
 				return "App Error: Could not find file with path: " + path;
 			}
 			filePath = path;

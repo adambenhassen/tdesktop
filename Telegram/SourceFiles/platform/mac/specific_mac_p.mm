@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/sandbox.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/version.h"
 #include "core/crash_reports.h"
 #include "menu/menu_dock.h"
@@ -337,6 +338,12 @@ void objc_downloadPathEnableAccess(const QByteArray &bookmark) {
 	NSError *error = nil;
 	NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark.toNSData() options:NSURLBookmarkResolutionWithSecurityScope relativeToURL:nil bookmarkDataIsStale:&isStale error:&error];
 	if (!url) return;
+	const auto resolvedPath = NS2QString([url path]);
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, resolvedPath,
+			"settings.download-path.bookmark")) {
+		return;
+	}
 
 	if ([url startAccessingSecurityScopedResource]) {
 		if (_downloadPathUrl) {
@@ -344,7 +351,7 @@ void objc_downloadPathEnableAccess(const QByteArray &bookmark) {
 		}
 		_downloadPathUrl = [url retain];
 
-		Core::App().settings().setDownloadPath(NS2QString([_downloadPathUrl path]) + '/');
+		Core::App().settings().setDownloadPath(resolvedPath + '/');
 		if (isStale) {
 			NSData *data = [_downloadPathUrl bookmarkDataWithOptions:NSURLBookmarkCreationWithSecurityScope includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
 			if (data) {

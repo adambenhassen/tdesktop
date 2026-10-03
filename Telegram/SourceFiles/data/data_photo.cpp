@@ -483,6 +483,9 @@ MediaKey PhotoData::mediaKey() const {
 
 const Core::FileLocation &PhotoData::location(bool check) const {
 	if (check && !_location.check()) {
+		if (_location.pathRefused()) {
+			return _location;
+		}
 		const auto location = session().local().readFileLocation(mediaKey());
 		const auto that = const_cast<PhotoData*>(this);
 		if (!location.inMediaCache()) {

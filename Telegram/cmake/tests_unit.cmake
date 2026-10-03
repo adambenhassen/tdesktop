@@ -69,6 +69,7 @@ PRIVATE
     core/hash_sha.cpp
     core/hash_md5.cpp
     core/mac_protected_path_policy.cpp
+    core/file_location.cpp
     data/data_peer_id.cpp
     data/data_pts_waiter.cpp
     intro/intro_server_discovery.cpp
@@ -80,6 +81,7 @@ PRIVATE
     storage/storage_server_forget_startup.cpp
     storage/storage_domain.cpp
     tests/unit/data_chat_participants_tests.cpp
+    tests/unit/data_download_manager_tests.cpp
     tests/unit/intro_signup_error_tests.cpp
     tests/unit/intro_username_validation_tests.cpp
     tests/unit/local_url_conversion_tests.cpp
@@ -106,6 +108,7 @@ if(APPLE)
     nice_target_sources(test_unit ${src_loc}
     PRIVATE
         tests/unit/mac_protected_path_runtime_stub.cpp
+        tests/unit/mac_file_bookmark_stub.cpp
     )
 endif()
 

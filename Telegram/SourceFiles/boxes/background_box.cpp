@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "mtproto/sender.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
@@ -232,6 +233,12 @@ void BackgroundBox::chooseFromFile() {
 	filters.push_back(FileDialog::AllFilesFilter());
 	const auto callback = [=](const FileDialog::OpenResult &result) {
 		if (result.paths.isEmpty() && result.remoteContent.isEmpty()) {
+			return;
+		}
+		if (!result.paths.isEmpty()
+			&& !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, result.paths.front(),
+				"background.file")) {
 			return;
 		}
 

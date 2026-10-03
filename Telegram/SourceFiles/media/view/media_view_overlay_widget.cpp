@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/click_handler_types.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h"
 #include "core/ui_integration.h"
 #include "core/crash_reports.h"
@@ -3147,10 +3148,23 @@ void OverlayWidget::saveAs() {
 				name,
 				true,
 				alreadyDir);
-			if (!file.isEmpty() && file != location.name()) {
+			if (!file.isEmpty()
+				&& Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Write, file,
+					"media-view.save-target")
+				&& file != location.name()) {
 				if (bytes.isEmpty()) {
-					QFile(file).remove();
-					QFile(location.name()).copy(file);
+					const auto copyAllowed = Core::MacProtectedPath::CheckPair(
+						Core::MacProtectedPath::Operation::Copy,
+						location.name(), file, "media-view.save-copy");
+					const auto removeAllowed
+						= Core::MacProtectedPath::CheckExternalPath(
+							Core::MacProtectedPath::Operation::Unlink, file,
+							"media-view.save-replace");
+					if (copyAllowed && removeAllowed) {
+						QFile(file).remove();
+						QFile(location.name()).copy(file);
+					}
 				} else {
 					QFile f(file);
 					if (f.open(QIODevice::WriteOnly)) {
@@ -3300,25 +3314,56 @@ void OverlayWidget::downloadMedia() {
 		path = Core::App().settings().downloadPath();
 	}
 	if (path.isEmpty()) return;
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, path,
+			"media-view.download-directory")) {
+		return;
+	}
 	QString toName;
 	if (_document) {
 		const auto &location = _document->location(true);
 		if (location.accessEnable()) {
-			if (!QDir().exists(path)) QDir().mkpath(path);
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Stat, path,
+					"media-view.download-directory-stat")) {
+				location.accessDisable();
+				return;
+			}
+			if (!QDir().exists(path)
+				&& (!Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::Mkdir, path,
+						"media-view.download-directory-create")
+					|| !QDir().mkpath(path))) {
+				location.accessDisable();
+				return;
+			}
 			toName = filedialogNextFilename(
 				_document->filename(),
 				location.name(),
 				path);
 			if (!toName.isEmpty() && toName != location.name()) {
-				QFile(toName).remove();
-				if (!QFile(location.name()).copy(toName)) {
+				const auto copyAllowed = Core::MacProtectedPath::CheckPair(
+					Core::MacProtectedPath::Operation::Copy, location.name(),
+					toName, "media-view.download-copy");
+				const auto removeAllowed
+					= Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::Unlink, toName,
+						"media-view.download-replace");
+				if (!copyAllowed || !removeAllowed) {
 					toName = QString();
-				} else if (_message) {
-					auto &manager = Core::App().downloadManager();
-					manager.addLoaded({
-						.item = _message,
-						.document = _document,
-					}, toName, manager.computeNextStartDate());
+				} else {
+					QFile(toName).remove();
+					if (!QFile(location.name()).copy(toName)) {
+						toName = QString();
+					} else if (_message) {
+						auto &manager = Core::App().downloadManager();
+						manager.addLoaded(
+							{
+								.item = _message,
+								.document = _document,
+							},
+							toName, manager.computeNextStartDate());
+					}
 				}
 			}
 			if (_stories && !toName.isEmpty()) {
@@ -3356,11 +3401,24 @@ void OverlayWidget::downloadMedia() {
 		}
 	} else if (_photo && _photo->hasVideo()) {
 		if (!_photoMedia->videoContent(Data::PhotoSize::Large).isEmpty()) {
-			if (!QDir().exists(path)) {
-				QDir().mkpath(path);
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Stat, path,
+					"media-view.download-directory-stat")) {
+				return;
+			}
+			if (!QDir().exists(path)
+				&& (!Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::Mkdir, path,
+						"media-view.download-directory-create")
+					|| !QDir().mkpath(path))) {
+				return;
 			}
 			toName = filedialogDefaultName(u"photo"_q, u".mp4"_q, path);
-			if (!_photoMedia->saveToFile(toName)) {
+			if (toName.isEmpty()
+				|| !Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Write, toName,
+					"media-view.download-video-target")
+				|| !_photoMedia->saveToFile(toName)) {
 				toName = QString();
 			}
 		} else {
@@ -3372,11 +3430,24 @@ void OverlayWidget::downloadMedia() {
 			_saveVisible = computeSaveButtonVisible();
 			update(_saveNavOver);
 		} else {
-			if (!QDir().exists(path)) {
-				QDir().mkpath(path);
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Stat, path,
+					"media-view.download-directory-stat")) {
+				return;
+			}
+			if (!QDir().exists(path)
+				&& (!Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::Mkdir, path,
+						"media-view.download-directory-create")
+					|| !QDir().mkpath(path))) {
+				return;
 			}
 			toName = filedialogDefaultName(u"photo"_q, u".jpg"_q, path);
-			const auto saved = _photoMedia->saveToFile(toName);
+			const auto saved = !toName.isEmpty()
+							   && Core::MacProtectedPath::CheckExternalPath(
+								   Core::MacProtectedPath::Operation::Write,
+								   toName, "media-view.download-photo-target")
+							   && _photoMedia->saveToFile(toName);
 			if (!saved) {
 				toName = QString();
 			}

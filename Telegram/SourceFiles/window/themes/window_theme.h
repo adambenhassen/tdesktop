@@ -61,6 +61,7 @@ struct Cached {
 struct Saved {
 	Object object;
 	Cached cache;
+	bool refusedPath = false;
 };
 bool Initialize(Saved &&saved);
 void Uninitialize();

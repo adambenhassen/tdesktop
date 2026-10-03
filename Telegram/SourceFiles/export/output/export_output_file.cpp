@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/output/export_output_file.h"
 
+#include "core/mac_protected_path_runtime.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_stats.h"
 #include "base/qt/qt_string_view.h"
@@ -64,6 +65,10 @@ Result File::reopen() {
 	if (_file && _file->isOpen()) {
 		return Result::Success();
 	}
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Write, _path, "export.output")) {
+		return Result(Result::Type::FatalError, QString());
+	}
 	_file.emplace(_path);
 	if (_file->exists()) {
 		if (_file->size() < _offset) {
@@ -79,11 +84,27 @@ Result File::reopen() {
 	}
 	const auto info = QFileInfo(_path);
 	const auto dir = info.absoluteDir();
-	return (!dir.exists()
-		&& dir.mkpath(dir.absolutePath())
-		&& _file->open(QIODevice::Append))
-		? Result::Success()
-		: error();
+	const auto directory = dir.absolutePath();
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, directory,
+			"export.output-directory")
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, directory,
+			"export.output-directory-stat")) {
+		return Result(Result::Type::FatalError, QString());
+	}
+	if (dir.exists()) {
+		return error();
+	}
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Mkdir, directory,
+			"export.output-directory-create")) {
+		return Result(Result::Type::FatalError, QString());
+	}
+	if (!dir.mkpath(directory)) {
+		return error();
+	}
+	return _file->open(QIODevice::Append) ? Result::Success() : error();
 }
 
 Result File::error() const {
@@ -97,6 +118,14 @@ Result File::fatalError() const {
 QString File::PrepareRelativePath(
 		const QString &folder,
 		const QString &suggested) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, folder,
+			"export.relative-path-directory")
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, folder + suggested,
+			"export.relative-path-candidate")) {
+		return QString();
+	}
 	if (!QFile::exists(folder + suggested)) {
 		return suggested;
 	}
@@ -115,6 +144,11 @@ QString File::PrepareRelativePath(
 	auto attempt = 0;
 	while (true) {
 		const auto relativePath = relativePart(++attempt);
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Stat, folder + relativePath,
+				"export.relative-path-candidate")) {
+			return QString();
+		}
 		if (!QFile::exists(folder + relativePath)) {
 			return relativePath;
 		}
@@ -125,6 +159,11 @@ Result File::Copy(
 		const QString &source,
 		const QString &path,
 		Stats *stats) {
+	if (!Core::MacProtectedPath::CheckPair(
+			Core::MacProtectedPath::Operation::Copy, source, path,
+			"export.copy")) {
+		return Result(Result::Type::FatalError, QString());
+	}
 	QFile f(source);
 	if (!f.exists() || !f.open(QIODevice::ReadOnly)) {
 		return Result(Result::Type::FatalError, source);

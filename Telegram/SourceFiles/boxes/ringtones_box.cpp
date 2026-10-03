@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
@@ -304,6 +305,11 @@ void RingtonesBox(
 				auto name = QString();
 				auto content = result.remoteContent;
 				if (!result.paths.isEmpty()) {
+					if (!Core::MacProtectedPath::CheckExternalPath(
+							Core::MacProtectedPath::Operation::Read,
+							result.paths.front(), "ringtones.upload")) {
+						return;
+					}
 					auto info = QFileInfo(result.paths.front());
 					mime = Core::MimeTypeForFile(info).name();
 					name = info.fileName();

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/mac/file_bookmark_mac.h"
 
 #include "base/platform/mac/base_utilities_mac.h"
+#include "core/mac_protected_path_runtime.h"
 #include "logs.h"
 
 #include <QtCore/QMutex>
@@ -44,11 +45,18 @@ FileBookmark::FileBookmark(const QByteArray &bookmark) {
 	NSError *error = nil;
 	NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark.toNSData() options:NSURLBookmarkResolutionWithSecurityScope relativeToURL:nil bookmarkDataIsStale:&isStale error:&error];
 	if (!url) return;
+	const auto path = NS2QString([url path]);
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, path,
+			"file-bookmark.resolve")) {
+		_rejected = true;
+		return;
+	}
 
 	if ([url startAccessingSecurityScopedResource]) {
 		data = new Data();
 		data->url = [url retain];
-		data->name = NS2QString([url path]);
+		data->name = path;
 		data->bookmark = bookmark;
 		[url stopAccessingSecurityScopedResource];
 	}
@@ -62,6 +70,8 @@ bool FileBookmark::check() const {
 	}
 	return false;
 }
+
+bool FileBookmark::rejected() const { return _rejected; }
 
 bool FileBookmark::enable() const {
 #ifndef OS_MAC_STORE

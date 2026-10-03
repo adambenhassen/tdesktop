@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/serialize_common.h"
 #include "storage/storage_account.h"
 #include "storage/details/storage_file_utilities.h"
+#include "storage/details/storage_theme_path.h"
 #include "storage/details/storage_settings_scheme.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
@@ -22,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_location.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_runtime.h"
 #include "core/version.h"
 #include "media/audio/media_audio.h"
@@ -46,7 +48,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Local {
 namespace {
 
-constexpr auto kThemeFileSizeLimit = 5 * 1024 * 1024;
 constexpr auto kFileLoaderQueueStopTimeout = crl::time(5000);
 
 constexpr auto kSavedBackgroundFormat = QImage::Format_ARGB32_Premultiplied;
@@ -955,34 +956,16 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 
 	auto ignoreCache = false;
 	if (!object.cloud.id) {
-		auto file = QFile(object.pathRelative);
-		if (!object.pathRelative.isEmpty()
-			&& !CheckProfilePath(Operation::Stat, file.fileName(),
-								 Q_FUNC_INFO)) {
+		const auto pathLoad = LoadThemeFileContent(object);
+		result.refusedPath = pathLoad.refusedPath;
+		if (!pathLoad.tooLargePath.isEmpty()) {
+			LOG(("Error: theme file too large: %1 "
+				 "(should be less than 5 MB, got %2)")
+					.arg(pathLoad.tooLargePath)
+					.arg(pathLoad.tooLargeSize));
 			return {};
 		}
-		if (object.pathRelative.isEmpty() || !file.exists()) {
-			file.setFileName(object.pathAbsolute);
-		}
-		if (!file.fileName().isEmpty()
-			&& CheckProfilePath(Operation::Stat, file.fileName(), Q_FUNC_INFO)
-			&& file.exists()
-			&& CheckProfilePath(Operation::Read, file.fileName(), Q_FUNC_INFO)
-			&& file.open(QIODevice::ReadOnly)) {
-			if (file.size() > kThemeFileSizeLimit) {
-				LOG(("Error: theme file too large: %1 "
-					"(should be less than 5 MB, got %2)"
-					).arg(file.fileName()
-					).arg(file.size()));
-				return {};
-			}
-			auto fileContent = file.readAll();
-			file.close();
-			if (object.content != fileContent) {
-				object.content = fileContent;
-				ignoreCache = true;
-			}
-		}
+		ignoreCache = pathLoad.contentChanged;
 	}
 	int32 cachePaletteChecksum = 0;
 	int32 cacheContentChecksum = 0;
@@ -1068,8 +1051,13 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 	return result;
 }
 
-std::optional<QString> InitialLoadThemeUsingKey(FileKey key) {
+std::optional<QString> InitialLoadThemeUsingKey(FileKey key,
+												bool *refusedPath) {
 	auto read = readThemeUsingKey(key);
+	const auto blocked = read.refusedPath;
+	if (refusedPath) {
+		*refusedPath = blocked;
+	}
 	const auto result = read.object.pathAbsolute;
 	if (read.object.content.isEmpty()) {
 		DEBUG_LOG(("Theme: Could not read content for key: %1").arg(key));
@@ -1077,6 +1065,9 @@ std::optional<QString> InitialLoadThemeUsingKey(FileKey key) {
 	if (read.object.content.isEmpty()
 		|| !Window::Theme::Initialize(std::move(read))) {
 		DEBUG_LOG(("Theme: Could not initialized for key: %1").arg(key));
+		return std::nullopt;
+	}
+	if (blocked) {
 		return std::nullopt;
 	}
 	return result;
@@ -1204,25 +1195,29 @@ void InitialLoadTheme() {
 			Window::Theme::SetNightModeValue(false);
 		}
 		return;
-	} else if (const auto path = InitialLoadThemeUsingKey(key)) {
-		DEBUG_LOG(("Theme: loaded with result: %1").arg(*path));
-		if (_themeKeyLegacy) {
-			Window::Theme::SetNightModeValue(*path
-				== Window::Theme::NightThemePath());
-			(Window::Theme::IsNightMode()
-				? _themeKeyNight
-				: _themeKeyDay) = base::take(_themeKeyLegacy);
-			DEBUG_LOG(("Theme: now (night: %1), "
-				"key_legacy: %2, key_day: %3, key_night: %4 (path: %5)"
-				).arg(Logs::b(Window::Theme::IsNightMode())
-				).arg(_themeKeyLegacy
-				).arg(_themeKeyDay
-				).arg(_themeKeyNight
-				).arg(*path));
-		}
 	} else {
-		DEBUG_LOG(("Theme: could not load, clearing.."));
-		clearTheme();
+		auto refusedPath = false;
+		const auto path = InitialLoadThemeUsingKey(key, &refusedPath);
+		if (path) {
+			DEBUG_LOG(("Theme: loaded with result: %1").arg(*path));
+			if (_themeKeyLegacy) {
+				Window::Theme::SetNightModeValue(
+					*path == Window::Theme::NightThemePath());
+				(Window::Theme::IsNightMode() ? _themeKeyNight : _themeKeyDay)
+					= base::take(_themeKeyLegacy);
+				DEBUG_LOG(
+					("Theme: now (night: %1), "
+					 "key_legacy: %2, key_day: %3, key_night: %4 (path: %5)")
+						.arg(Logs::b(Window::Theme::IsNightMode()))
+						.arg(_themeKeyLegacy)
+						.arg(_themeKeyDay)
+						.arg(_themeKeyNight)
+						.arg(*path));
+			}
+		} else if (!refusedPath) {
+			DEBUG_LOG(("Theme: could not load, clearing.."));
+			clearTheme();
+		}
 	}
 }
 

@@ -35,6 +35,7 @@ struct RuntimeState final {
 	QMutex mutex;
 	bool initialized = false;
 	bool ready = false;
+	QString initialWorkingDirectory;
 	QString ipcDirectory;
 	QString profile;
 	std::shared_ptr<const MacProtectedPathPolicy> policy;
@@ -230,6 +231,7 @@ bool InitializeProfile() {
 		}
 		return true;
 	}
+	const auto initialWorkingDirectory = QDir::currentPath() + '/';
 	auto &state = State();
 	{
 		QMutexLocker lock(&state.mutex);
@@ -237,6 +239,7 @@ bool InitializeProfile() {
 			return state.ready;
 		}
 		state.initialized = true;
+		state.initialWorkingDirectory = initialWorkingDirectory;
 	}
 
 	const auto homes = NativeHomeRoots();
@@ -294,6 +297,15 @@ bool InitializeProfile() {
 	return true;
 }
 
+QString InitialWorkingDirectory() {
+	if (!IntegrationTestActive()) {
+		return {};
+	}
+	auto &state = State();
+	QMutexLocker lock(&state.mutex);
+	return state.initialWorkingDirectory;
+}
+
 QString ProfileRoot() {
 	if (!IntegrationTestActive()) {
 		return {};
@@ -322,12 +334,12 @@ QString IpcDirectory() {
 	return u"/tmp"_q;
 }
 
-bool CheckPath(Operation operation, const QString &path, const char *callsite) {
+bool CheckPathAt(Operation operation, const QString &path,
+				 const QString &anchor, const char *callsite) {
 	if (!IntegrationTestActive()) {
 		return true;
 	}
 	auto policy = std::shared_ptr<const MacProtectedPathPolicy>();
-	auto anchor = QString();
 	{
 		auto &state = State();
 		QMutexLocker lock(&state.mutex);
@@ -336,7 +348,6 @@ bool CheckPath(Operation operation, const QString &path, const char *callsite) {
 			return false;
 		}
 		policy = state.policy;
-		anchor = state.profile;
 	}
 	const auto result = policy->Resolve(operation, QFile::encodeName(path),
 										QFile::encodeName(anchor),
@@ -346,6 +357,28 @@ bool CheckPath(Operation operation, const QString &path, const char *callsite) {
 		return false;
 	}
 	return true;
+}
+
+bool CheckPath(Operation operation, const QString &path, const char *callsite) {
+	if (!IntegrationTestActive()) {
+		return true;
+	}
+	auto anchor = QString();
+	{
+		auto &state = State();
+		QMutexLocker lock(&state.mutex);
+		if (!state.ready || !state.policy) {
+			ReportInvalidInitialization(u"operation.before-profile"_q);
+			return false;
+		}
+		anchor = state.profile;
+	}
+	return CheckPathAt(operation, path, anchor, callsite);
+}
+
+bool CheckExternalPath(Operation operation, const QString &path,
+					   const char *callsite) {
+	return CheckPathAt(operation, path, QString(), callsite);
 }
 
 namespace {

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/file_utilities.h"
 
+#include "core/mac_protected_path_runtime.h"
 #include "core/version.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
@@ -41,7 +42,15 @@ bool filedialogGetSaveFile(
 		filter,
 		FileDialog::internal::Type::WriteFile,
 		initialPath);
-	file = files.isEmpty() ? QString() : files.at(0);
+	const auto selected = files.isEmpty() ? QString() : files.at(0);
+	if (!selected.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Write, selected,
+			"file-dialog.write-result")) {
+		file.clear();
+		return false;
+	}
+	file = selected;
 	return result;
 }
 
@@ -71,6 +80,12 @@ QString filedialogDefaultName(
 		}
 		directoryPath = cDialogLastPath();
 	}
+	if (!directoryPath.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, directoryPath,
+			"file-dialog.default-name-directory")) {
+		return QString();
+	}
 
 	QString base;
 	if (fileTime) {
@@ -94,8 +109,17 @@ QString filedialogDefaultName(
 		const auto nameBase = (dir.endsWith('/') ? dir : (dir + '/'))
 			+ base;
 		name = nameBase + extension;
-		for (int i = 0; QFileInfo::exists(name); ++i) {
+		for (int i = 0; Core::MacProtectedPath::CheckExternalPath(
+							Core::MacProtectedPath::Operation::Stat, name,
+							"file-dialog.default-name-stat")
+						&& QFileInfo::exists(name);
+			 ++i) {
 			name = nameBase + u" (%1)"_q.arg(i + 2) + extension;
+		}
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Write, name,
+				"file-dialog.default-name-write")) {
+			return QString();
 		}
 	}
 	return name;
@@ -105,7 +129,14 @@ QString filedialogNextFilename(
 		const QString &name,
 		const QString &cur,
 		const QString &path) {
-	QDir directory(path.isEmpty() ? cDialogLastPath() : path);
+	const auto directoryPath = path.isEmpty() ? cDialogLastPath() : path;
+	if (!directoryPath.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, directoryPath,
+			"file-dialog.next-filename-directory")) {
+		return QString();
+	}
+	QDir directory(directoryPath);
 	int32 extIndex = name.lastIndexOf('.');
 	QString prefix = name, extension;
 	if (extIndex >= 0) {
@@ -115,10 +146,19 @@ QString filedialogNextFilename(
 	const auto dir = directory.absolutePath();
 	const auto nameBase = (dir.endsWith('/') ? dir : (dir + '/')) + prefix;
 	auto result = nameBase + extension;
-	for (int i = 0; result.toLower() != cur.toLower() && QFileInfo::exists(result); ++i) {
+	for (int i = 0; result.toLower() != cur.toLower()
+					&& Core::MacProtectedPath::CheckExternalPath(
+						Core::MacProtectedPath::Operation::Stat, result,
+						"file-dialog.next-filename-stat")
+					&& QFileInfo::exists(result);
+		 ++i) {
 		result = nameBase + u" (%1)"_q.arg(i + 2) + extension;
 	}
-	return result;
+	return Core::MacProtectedPath::CheckExternalPath(
+			   Core::MacProtectedPath::Operation::Write, result,
+			   "file-dialog.next-filename-write")
+			   ? result
+			   : QString();
 }
 
 namespace File {
@@ -218,7 +258,13 @@ void GetOpenPath(
 			caption,
 			filter,
 			FileDialog::internal::Type::ReadFile);
-		if (success
+		const auto pathsAllowed
+			= ranges::all_of(files, [](const QString &path) {
+				  return Core::MacProtectedPath::CheckExternalPath(
+					  Core::MacProtectedPath::Operation::Read, path,
+					  "file-dialog.open-result");
+			  });
+		if (success && pathsAllowed
 			&& ((!files.isEmpty() && !files[0].isEmpty())
 				|| !remoteContent.isEmpty())) {
 			if (callback) {
@@ -252,7 +298,14 @@ void GetOpenPaths(
 			caption,
 			filter,
 			FileDialog::internal::Type::ReadFiles);
-		if (success && (!files.isEmpty() || !remoteContent.isEmpty())) {
+		const auto pathsAllowed
+			= ranges::all_of(files, [](const QString &path) {
+				  return Core::MacProtectedPath::CheckExternalPath(
+					  Core::MacProtectedPath::Operation::Read, path,
+					  "file-dialog.open-results");
+			  });
+		if (success && pathsAllowed
+			&& (!files.isEmpty() || !remoteContent.isEmpty())) {
 			if (callback) {
 				auto result = OpenResult();
 				result.paths = files;
@@ -275,8 +328,13 @@ void GetWritePath(
 	InvokeQueued(QCoreApplication::instance(), [=] {
 		auto file = QString();
 		if (filedialogGetSaveFile(parent, file, caption, filter, initialPath)) {
-			if (callback) {
+			const auto allowed = Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Write, file,
+				"file-dialog.write-result");
+			if (allowed && callback) {
 				callback(std::move(file));
+			} else if (!allowed && failed) {
+				failed();
 			}
 		} else if (failed) {
 			failed();
@@ -302,7 +360,10 @@ void GetFolder(
 			QString(),
 			FileDialog::internal::Type::ReadFolder,
 			initialPath);
-		if (success && !files.isEmpty() && !files[0].isEmpty()) {
+		if (success && !files.isEmpty() && !files[0].isEmpty()
+			&& Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::OpenDir, files[0],
+				"file-dialog.folder-result")) {
 			if (callback) {
 				callback(std::move(files[0]));
 			}
@@ -359,7 +420,13 @@ const QString &Tmp() {
 namespace internal {
 
 void InitLastPathDefault() {
-	cSetDialogLastPath(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+	const auto path
+		= QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+	if (Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, path,
+			"file-dialog.default-path")) {
+		cSetDialogLastPath(path);
+	}
 }
 
 bool GetDefault(
@@ -375,8 +442,23 @@ bool GetDefault(
 	}
 
 	remoteContent = QByteArray();
-	if (startFile.isEmpty() || startFile.at(0) != '/') {
-		startFile = cDialogLastPath() + '/' + startFile;
+	const auto lastPath = cDialogLastPath();
+	const auto lastPathAllowed = lastPath.isEmpty()
+								 || Core::MacProtectedPath::CheckExternalPath(
+									 Core::MacProtectedPath::Operation::OpenDir,
+									 lastPath, "file-dialog.last-path");
+	if (!lastPathAllowed && (startFile.isEmpty() || startFile.at(0) != '/')) {
+		startFile.clear();
+	} else if ((startFile.isEmpty() || startFile.at(0) != '/')
+			   && (!lastPath.isEmpty()
+				   || !Core::MacProtectedPath::IntegrationTestActive())) {
+		startFile = lastPath + '/' + startFile;
+	}
+	if (!startFile.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Open, startFile,
+			"file-dialog.initial-path")) {
+		startFile.clear();
 	}
 	QString file;
 
@@ -389,8 +471,22 @@ bool GetDefault(
 	});
 	if (type == Type::ReadFiles) {
 		files = QFileDialog::getOpenFileNames(resolvedParent, caption, startFile, filter);
+		const auto pathsAllowed
+			= ranges::all_of(files, [](const QString &path) {
+				  return Core::MacProtectedPath::CheckExternalPath(
+					  Core::MacProtectedPath::Operation::Read, path,
+					  "file-dialog.selected-path");
+			  });
+		if (!pathsAllowed) {
+			files.clear();
+			return false;
+		}
 		QString path = files.isEmpty() ? QString() : QFileInfo(files.back()).absoluteDir().absolutePath();
-		if (!path.isEmpty() && path != cDialogLastPath()) {
+		if (!path.isEmpty()
+			&& Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::OpenDir, path,
+				"file-dialog.selected-directory")
+			&& path != cDialogLastPath()) {
 			cSetDialogLastPath(path);
 			Local::writeSettings();
 		}
@@ -407,10 +503,24 @@ bool GetDefault(
 		files = QStringList();
 		return false;
 	}
+	const auto selectedOperation
+		= (type == Type::WriteFile) ? Core::MacProtectedPath::Operation::Write
+		  : (type == Type::ReadFolder)
+			  ? Core::MacProtectedPath::Operation::OpenDir
+			  : Core::MacProtectedPath::Operation::Read;
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			selectedOperation, file, "file-dialog.selected-path")) {
+		files.clear();
+		return false;
+	}
 	if (type != Type::ReadFolder) {
 		// Save last used directory for all queries except directory choosing.
 		auto path = QFileInfo(file).absoluteDir().absolutePath();
-		if (!path.isEmpty() && path != cDialogLastPath()) {
+		if (!path.isEmpty()
+			&& Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::OpenDir, path,
+				"file-dialog.selected-directory")
+			&& path != cDialogLastPath()) {
 			cSetDialogLastPath(path);
 			Local::writeSettings();
 		}

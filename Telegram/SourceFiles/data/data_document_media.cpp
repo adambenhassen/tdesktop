@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/themes/window_theme_preview.h"
 #include "core/core_settings.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h"
 #include "storage/file_download.h"
 #include "ui/chat/attach/attach_prepare.h"
@@ -62,6 +63,12 @@ enum class FileType {
 		const QString &path,
 		QByteArray data,
 		FileType type) {
+	if (!path.isEmpty() && !path.startsWith(u":/"_q)
+		&& !path.startsWith(u"qrc:/"_q)
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, path, "media.thumbnail")) {
+		return QImage();
+	}
 	if (type == FileType::Video || type == FileType::VideoSticker) {
 		auto result = v::get<Ui::PreparedFileInformation::Video>(
 			::Media::Clip::PrepareForSending(path, data).media);

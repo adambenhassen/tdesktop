@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/themes/window_theme_preview.h"
 
+#include "core/mac_protected_path_runtime.h"
 #include "dialogs/dialogs_three_state_icon.h"
 #include "lang/lang_keys.h"
 #include "lottie/lottie_icon.h"
@@ -1084,6 +1085,13 @@ std::unique_ptr<Preview> PreviewFromFile(
 		const QByteArray &bytes,
 		const QString &filepath,
 		const Data::CloudTheme &cloud) {
+	if (!filepath.isEmpty() && !filepath.startsWith(u":/"_q)
+		&& !filepath.startsWith(u"qrc:/"_q)
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, filepath,
+			"theme.preview")) {
+		return nullptr;
+	}
 	auto result = std::make_unique<Preview>();
 	auto &object = result->object;
 	object.cloud = cloud;

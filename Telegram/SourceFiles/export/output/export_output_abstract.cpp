@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/output/export_output_json.h"
 #include "export/output/export_output_stats.h"
 #include "export/output/export_output_result.h"
+#include "core/mac_protected_path_runtime.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QDate>
@@ -20,8 +21,21 @@ namespace Export {
 namespace Output {
 
 QString NormalizePath(const Settings &settings) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, settings.path,
+			"export.normalize-directory")) {
+		return QString();
+	}
 	QDir folder(settings.path);
 	const auto path = folder.absolutePath();
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, path,
+			"export.normalize-absolute-directory")
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, path,
+			"export.normalize-directory-stat")) {
+		return QString();
+	}
 	auto result = path.endsWith('/') ? path : (path + '/');
 	if (!folder.exists() && !settings.forceSubPath) {
 		return result;
@@ -40,7 +54,15 @@ QString NormalizePath(const Settings &settings) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};
 	auto index = 0;
-	while (QDir(result + add(index)).exists()) {
+	while (true) {
+		const auto candidate = result + add(index);
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Stat, candidate,
+				"export.normalize-candidate-stat")) {
+			return QString();
+		} else if (!QDir(candidate).exists()) {
+			break;
+		}
 		++index;
 	}
 	result += add(index) + '/';

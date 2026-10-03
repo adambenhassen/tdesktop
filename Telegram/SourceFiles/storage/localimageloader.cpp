@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h"
 #include "base/unixtime.h"
 #include "base/random.h"
@@ -497,6 +498,12 @@ auto FileLoadTask::ReadMediaInformation(
 	const QString &filemime)
 -> std::unique_ptr<Ui::PreparedFileInformation> {
 	auto result = std::make_unique<Ui::PreparedFileInformation>();
+	if (!filepath.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, filepath,
+			"media.read-information")) {
+		return result;
+	}
 	result->filemime = filemime;
 
 	if (CheckForSong(filepath, content, result)) {
@@ -665,6 +672,13 @@ void FileLoadTask::process(ProcessArgs &&args) {
 		.spoiler = _spoiler,
 		.album = _album,
 	});
+	if (!_filepath.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, _filepath,
+			"media.file-load")) {
+		_result->filesize = -1;
+		return;
+	}
 	if (const auto cover = _videoCover.get()) {
 		cover->process();
 		if (const auto &result = cover->peekResult()) {

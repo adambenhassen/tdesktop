@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
 
 class QFileInfo;
@@ -42,7 +43,9 @@ public:
 	static FileLocation InMediaCacheLocation();
 
 	[[nodiscard]] bool check() const;
+	[[nodiscard]] bool pathRefused() const;
 	[[nodiscard]] const QString &name() const;
+	[[nodiscard]] QString serializedName() const;
 	void setBookmark(const QByteArray &bookmark);
 	QByteArray bookmark() const;
 	[[nodiscard]] bool isEmpty() const {
@@ -61,7 +64,7 @@ private:
 	void resolveFromInfo(const QFileInfo &info);
 
 	std::shared_ptr<Platform::FileBookmark> _bookmark;
-
+	QByteArray _serializedBookmark;
 };
 
 inline bool operator==(const FileLocation &a, const FileLocation &b) {

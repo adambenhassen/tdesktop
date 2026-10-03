@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "storage/localimageloader.h"
 #include "core/mime_type.h"
+#include "core/mac_protected_path_runtime.h"
 #include "ui/image/image_prepare.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "core/crash_reports.h"
@@ -87,6 +88,11 @@ bool ValidatePhotoEditorMediaDragData(not_null<const QMimeData*> data) {
 		if (url.isLocalFile()) {
 			using namespace Core;
 			const auto file = Platform::File::UrlToLocal(url);
+			if (!MacProtectedPath::CheckExternalPath(
+					MacProtectedPath::Operation::Read, file,
+					"media.drag-validation")) {
+				return false;
+			}
 			const auto info = QFileInfo(file);
 			return FileIsImage(file, MimeTypeForFile(info).name())
 				&& QImageReader(file).canRead();
@@ -110,7 +116,13 @@ bool ValidateEditMediaDragData(
 		const auto url = urls.front();
 		if (url.isLocalFile()) {
 			using namespace Core;
-			const auto info = QFileInfo(Platform::File::UrlToLocal(url));
+			const auto file = Platform::File::UrlToLocal(url);
+			if (!MacProtectedPath::CheckExternalPath(
+					MacProtectedPath::Operation::Read, file,
+					"media.drag-edit-validation")) {
+				return false;
+			}
+			const auto info = QFileInfo(file);
 			return IsMimeAcceptedForPhotoVideoAlbum(MimeTypeForFile(info).name());
 		}
 	}
@@ -139,6 +151,11 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 			return MimeDataState::None;
 		}
 		const auto file = Platform::File::UrlToLocal(url);
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, file,
+				"media.mime-state")) {
+			return MimeDataState::None;
+		}
 
 		const auto info = QFileInfo(file);
 		if (info.isDir()) {
@@ -202,6 +219,14 @@ PreparedList PrepareMediaList(
 	auto result = PreparedList();
 	result.files.reserve(files.size());
 	for (const auto &file : files) {
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, file,
+				"media.prepare-list")) {
+			return {
+				PreparedList::Error::EmptyFile,
+				QString(),
+			};
+		}
 		const auto fileinfo = QFileInfo(file);
 		const auto filesize = fileinfo.size();
 		if (fileinfo.isDir()) {
@@ -285,6 +310,14 @@ std::optional<PreparedList> PreparedFileFromFilesDialog(
 
 void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 	if (!file.path.isEmpty()) {
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, file.path,
+				"media.prepare-details")) {
+			file.path.clear();
+			file.size = 0;
+			file.information = std::make_unique<PreparedFileInformation>();
+			return;
+		}
 		file.information = FileLoadTask::ReadMediaInformation(
 			file.path,
 			QByteArray(),
@@ -409,4 +442,3 @@ bool ApplyModifications(PreparedList &list) {
 }
 
 } // namespace Storage
-

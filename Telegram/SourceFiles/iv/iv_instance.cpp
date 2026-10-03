@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/shortcuts.h"
 #include "core/click_handler_types.h"
 #include "data/data_changes.h"
@@ -98,12 +99,24 @@ struct LocalMarkdownTarget {
 }
 
 [[nodiscard]] LocalMarkdownTarget ParseLocalMarkdownTarget(QString path) {
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, path,
+			"markdown.local-target")) {
+		return {
+			.key = path,
+			.path = std::move(path),
+		};
+	}
 	auto sourcePath = path;
 	auto fragment = QString();
 	if (!QFileInfo(sourcePath).exists()) {
 		const auto hash = sourcePath.lastIndexOf(QChar('#'));
 		const auto candidate = (hash > 0) ? sourcePath.mid(0, hash) : QString();
-		if (!candidate.isEmpty() && QFileInfo(candidate).exists()) {
+		if (!candidate.isEmpty()
+			&& Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Stat, candidate,
+				"markdown.local-target-fragment")
+			&& QFileInfo(candidate).exists()) {
 			fragment = NormalizeLocalMarkdownFragment(sourcePath.mid(hash + 1));
 			sourcePath = candidate;
 		}

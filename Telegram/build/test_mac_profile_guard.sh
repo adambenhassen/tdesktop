@@ -372,6 +372,117 @@ if (( FAILURES > 0 )); then
 	exit 1
 fi
 
+SOCKET_TARGET="$TEST_HOME/Library/Application Support/Telegram Desktop/tdata/socket-x"
+mkdir -p "$(dirname "$SOCKET_TARGET")"
+
+python3 - "$SOCKET_PATH" "$SOCKET_TARGET" <<'PY'
+import pathlib
+import socket
+import sys
+import time
+
+socket_path, target = sys.argv[1:]
+
+
+def request(command, deadline):
+	remaining = deadline - time.monotonic()
+	if remaining <= 0:
+		raise TimeoutError("request deadline expired")
+	with socket.socket(socket.AF_UNIX) as client:
+		client.settimeout(remaining)
+		client.connect(socket_path)
+		client.sendall(command.encode())
+		response = bytearray()
+		while b";" not in response:
+			chunk = client.recv(256)
+			if not chunk:
+				raise RuntimeError("socket closed before response")
+			response.extend(chunk)
+		if not response.startswith(b"RES:"):
+			raise RuntimeError(f"unexpected socket response: {response!r}")
+		return bytes(response)
+
+
+deadline = time.monotonic() + 30
+last_error = None
+while time.monotonic() < deadline:
+	try:
+		request("CMD:show;", min(deadline, time.monotonic() + 2))
+		break
+	except (OSError, TimeoutError, RuntimeError) as error:
+		last_error = error
+		time.sleep(0.1)
+else:
+	raise RuntimeError(
+		f"single-instance socket did not answer readiness probe: {last_error}")
+
+request(
+	"OPEN:" + pathlib.Path(target).as_uri() + ";",
+	time.monotonic() + 10)
+PY
+
+for ((attempt = 0; attempt < 50; ++attempt)); do
+	if has_start_record "class=application-support callsite=sandbox.open"; then
+		break
+	fi
+	sleep 0.1
+done
+if ! has_start_record "class=application-support callsite=sandbox.open"; then
+	echo "single-instance OPEN command was not refused before dispatch." >&2
+	cat "$START_LOG" >&2
+	if [[ -f "$PROFILE/log.txt" ]]; then
+		cat "$PROFILE/log.txt" >&2
+	fi
+	exit 1
+fi
+if grep -F -q "$TEST_HOME/Library/Application Support/Telegram Desktop" "$START_LOG"; then
+	echo "single-instance OPEN refusal disclosed the protected path." >&2
+	cat "$START_LOG" >&2
+	exit 1
+fi
+printf 'socket_open_protected_path_refusal=PASS class=application-support before-dispatch=1\n'
+
+ARGV_HOME="$TEST_HOME/argv-home"
+mkdir -p "$ARGV_HOME/uploads" \
+	"$ARGV_HOME/Library/Application Support/Telegram Desktop/tdata"
+ARGV_REFUSAL_LOG="$TEST_HOME/argv-refusal.log"
+set +e
+(cd "$ARGV_HOME" && env HOME="$ARGV_HOME" TMPDIR="$TEST_TMP_BASE" \
+	TDESKTOP_MAC_PROFILE_TEST_HOME="$ARGV_HOME" \
+	TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+	"$APP" -quit -- "./Library/Application Support/Telegram Desktop/tdata/x") >"$ARGV_REFUSAL_LOG" 2>&1
+ARGV_REFUSAL_STATUS=$?
+set -e
+if [[ "$ARGV_REFUSAL_STATUS" -ne 0 ]] \
+	|| ! grep -F -q "class=application-support callsite=launcher.argv" "$ARGV_REFUSAL_LOG"; then
+	echo "protected command-line path was not refused before dispatch." >&2
+	cat "$ARGV_REFUSAL_LOG" >&2
+	exit 1
+fi
+if grep -F -q "$ARGV_HOME/Library/Application Support/Telegram Desktop" "$ARGV_REFUSAL_LOG"; then
+	echo "command-line path refusal disclosed the protected path." >&2
+	cat "$ARGV_REFUSAL_LOG" >&2
+	exit 1
+fi
+printf 'argv_protected_path_refusal=PASS status=%s class=application-support before_dispatch=1\n' \
+	"$ARGV_REFUSAL_STATUS"
+
+ARGV_ALLOWED_LOG="$TEST_HOME/argv-allowed.log"
+set +e
+(cd "$ARGV_HOME" && env HOME="$ARGV_HOME" TMPDIR="$TEST_TMP_BASE" \
+	TDESKTOP_MAC_PROFILE_TEST_HOME="$ARGV_HOME" \
+	TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 \
+	"$APP" -quit -- "./uploads/x") >"$ARGV_ALLOWED_LOG" 2>&1
+ARGV_ALLOWED_STATUS=$?
+set -e
+if [[ "$ARGV_ALLOWED_STATUS" -ne 0 ]] \
+	|| grep -F -q "callsite=launcher.argv" "$ARGV_ALLOWED_LOG"; then
+	echo "safe command-line path was refused or failed to dispatch." >&2
+	cat "$ARGV_ALLOWED_LOG" >&2
+	exit 1
+fi
+printf 'argv_profile_relative_path_allowed=PASS status=%s\n' "$ARGV_ALLOWED_STATUS"
+
 QUIT_LOG="$TEST_HOME/quit.log"
 set +e
 env HOME="$TEST_HOME" TMPDIR="$TEST_TMP_BASE" TDESKTOP_MAC_PROFILE_TEST_HOME="$TEST_HOME" TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST=1 "$APP" -quit >"$QUIT_LOG" 2>&1
@@ -458,6 +569,20 @@ if ! grep -F -q \
 	echo "post-open authenticated cache regression did not report coverage." >&2
 	exit 1
 fi
-printf 'authenticated_cache_regression=PASS roots=2 cache_directory_symlinks=2 cache_file_symlinks=2 cleanup_initial_symlink=1 cleanup_worker_symlink=1\n'
+if ! grep -F -q \
+	"Authenticated refused download history regression passed: entry without a live message remained unpublished." \
+	"$AUTH_LOG"; then
+	cat "$AUTH_LOG" >&2
+	echo "refused download-history regression did not report coverage." >&2
+	exit 1
+fi
+if ! grep -F -q \
+	"Mac protected path refusal: operation=read class=group-container callsite=download-history.resolve" \
+	"$AUTH_LOG"; then
+	cat "$AUTH_LOG" >&2
+	echo "refused download-history fixture did not reach manager resolution." >&2
+	exit 1
+fi
+printf 'authenticated_cache_regression=PASS roots=2 cache_directory_symlinks=2 cache_file_symlinks=2 cleanup_initial_symlink=1 cleanup_worker_symlink=1 download_history=PASS\n'
 
 echo "profile, spoiler-cache, and non-store single-instance checks passed."

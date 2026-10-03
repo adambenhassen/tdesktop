@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/themes/window_theme_editor.h"
 
+#include "core/mac_protected_path_runtime.h"
 #include "window/themes/window_theme.h"
 #include "window/themes/window_theme_editor_block.h"
 #include "window/themes/window_theme_editor_box.h"
@@ -792,6 +793,11 @@ void Editor::importTheme() {
 			? QString()
 			: result.paths.front();
 		if (path.isEmpty()) {
+			return;
+		}
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, path,
+				"theme.editor-import")) {
 			return;
 		}
 		auto f = QFile(path);

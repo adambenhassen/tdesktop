@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/cache/storage_cache_database.h"
 #include "storage/serialize_common.h"
 #include "storage/storage_media_prepare.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "mtproto/mtproto_config.h"
@@ -935,11 +936,19 @@ bool ReadSetting(
 		stream >> v;
 		if (!CheckStreamStatus(stream)) return false;
 #ifndef OS_WIN_STORE
+		const auto pathAllowed = Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, v,
+			"settings.download-path.legacy-load");
+		if (!pathAllowed) {
+			Core::App().settings().setDownloadPathFromSerialized(v);
+			context.legacyRead = true;
+			break;
+		}
 		if (!v.isEmpty() && v != FileDialog::Tmp() && !v.endsWith('/')) {
 			v += '/';
 		}
 		Core::App().settings().setDownloadPathBookmark(QByteArray());
-		Core::App().settings().setDownloadPath(v);
+		Core::App().settings().setDownloadPathFromSerialized(v);
 #endif // OS_WIN_STORE
 		context.legacyRead = true;
 	} break;
@@ -951,11 +960,20 @@ bool ReadSetting(
 		if (!CheckStreamStatus(stream)) return false;
 
 #ifndef OS_WIN_STORE
+		const auto pathAllowed = Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, v,
+			"settings.download-path.legacy-load");
+		if (!pathAllowed) {
+			Core::App().settings().setDownloadPathFromSerialized(v);
+			Core::App().settings().setDownloadPathBookmark(bookmark);
+			context.legacyRead = true;
+			break;
+		}
 		if (!v.isEmpty() && v != FileDialog::Tmp() && !v.endsWith('/')) {
 			v += '/';
 		}
 		Core::App().settings().setDownloadPathBookmark(bookmark);
-		Core::App().settings().setDownloadPath(v);
+		Core::App().settings().setDownloadPathFromSerialized(v);
 		psDownloadPathEnableAccess();
 #endif // OS_WIN_STORE
 		context.legacyRead = true;
@@ -1095,6 +1113,9 @@ bool ReadSetting(
 		stream >> path;
 		if (!CheckStreamStatus(stream)) return false;
 
+		(void)Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, path,
+			"settings.dialog-last-path");
 		cSetDialogLastPath(path);
 	} break;
 

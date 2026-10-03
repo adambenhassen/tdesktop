@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_cloud_manager.h"
 #include "lang/lang_instance.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "core/file_utilities.h"
@@ -189,21 +190,26 @@ auto GenerateCodes() {
 	};
 	for (auto &key : audioKeys) {
 		codes.emplace(key, [=](SessionController *window) {
-			FileDialog::GetOpenPath(Core::App().getFileDialogParent(), "Open audio file", audioFilters, [=](const FileDialog::OpenResult &result) {
-				if (!result.paths.isEmpty()) {
-					auto track = Media::Audio::Current().createTrack();
-					track->fillFromFile(result.paths.front());
-					if (track->failed()) {
-						Ui::show(Ui::MakeInformBox(
-							"Could not audio :( Errors in 'log.txt'."));
-					} else {
-						Core::App().settings().setSoundOverride(
-							key,
-							result.paths.front());
-						Core::App().saveSettingsDelayed();
+			FileDialog::GetOpenPath(
+				Core::App().getFileDialogParent(), "Open audio file",
+				audioFilters, [=](const FileDialog::OpenResult &result) {
+					if (!result.paths.isEmpty()
+						&& Core::MacProtectedPath::CheckExternalPath(
+							Core::MacProtectedPath::Operation::Read,
+							result.paths.front(),
+							"settings.sound-override.select")) {
+						auto track = Media::Audio::Current().createTrack();
+						track->fillFromFile(result.paths.front());
+						if (track->failed()) {
+							Ui::show(Ui::MakeInformBox(
+								"Could not audio :( Errors in 'log.txt'."));
+						} else {
+							Core::App().settings().setSoundOverride(
+								key, result.paths.front());
+							Core::App().saveSettingsDelayed();
+						}
 					}
-				}
-			});
+				});
 		});
 	}
 	codes.emplace(u"sounds_reset"_q, [](SessionController *window) {
@@ -214,6 +220,11 @@ auto GenerateCodes() {
 	codes.emplace(u"unpacklog"_q, [](SessionController *window) {
 		FileDialog::GetOpenPath(Core::App().getFileDialogParent(), "Open crash log file", "Crash dump (*.txt)", [=](const FileDialog::OpenResult &result) {
 			if (result.paths.isEmpty()) {
+				return;
+			}
+			if (!Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::Read,
+					result.paths.front(), "settings.crash-log.open")) {
 				return;
 			}
 			auto f = QFile(result.paths.front());
@@ -265,9 +276,14 @@ auto GenerateCodes() {
 	codes.emplace(u"customicon"_q, [](SessionController *window) {
 		const auto iconFilters = u"Icon files (*.icns *.png);;"_q + FileDialog::AllFilesFilter();
 		const auto change = [](const QString &path) {
-			const auto success = path.isEmpty()
-				? base::ClearCustomAppIcon()
-				: base::SetCustomAppIcon(path);
+			const auto allowed = path.isEmpty()
+								 || Core::MacProtectedPath::CheckExternalPath(
+									 Core::MacProtectedPath::Operation::Read,
+									 path, "settings.custom-icon");
+			const auto success
+				= allowed
+				  && (path.isEmpty() ? base::ClearCustomAppIcon()
+									 : base::SetCustomAppIcon(path));
 			Ui::Toast::Show(success
 				? (path.isEmpty()
 					? "Icon cleared. Restarting the Dock."

@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "iv/markdown/iv_markdown_prepare_links.h"
+#include "core/mac_protected_path_runtime.h"
 #include "ui/basic_click_handlers.h"
 
 #include <QtCore/QDir>
@@ -282,6 +283,12 @@ PreparedLink ClassifiedLink(
 		return result;
 	}
 	if (target.contains(QChar('?'))) {
+		result.kind = PreparedLinkKind::RejectedRelative;
+		return result;
+	}
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, state->request->sourcePath,
+			"markdown.relative-link-source")) {
 		result.kind = PreparedLinkKind::RejectedRelative;
 		return result;
 	}

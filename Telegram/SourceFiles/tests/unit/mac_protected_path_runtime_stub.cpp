@@ -11,6 +11,10 @@ namespace Core::MacProtectedPath {
 
 bool CheckPath(Operation, const QString &, const char *) { return true; }
 
+bool CheckExternalPath(Operation, const QString &, const char *) {
+	return true;
+}
+
 bool CheckPair(Operation, const QString &, const QString &, const char *) {
 	return true;
 }

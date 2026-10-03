@@ -304,6 +304,10 @@ void ControllerObject::startExport(
 	_settings.singleTopicPeerId = _topicPeerId;
 
 	_settings.path = Output::NormalizePath(_settings);
+	if (_settings.path.isEmpty()) {
+		ioError(QString());
+		return;
+	}
 	_writer = Output::CreateWriter(_settings.format);
 	fillExportSteps();
 	exportNext();
@@ -892,7 +896,7 @@ rpl::producer<State> Controller::state() const {
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	LOG(("Export Info: Started export to '%1'.").arg(settings.path));
+	LOG(("Export Info: Started export."));
 
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.startExport(settings, environment);

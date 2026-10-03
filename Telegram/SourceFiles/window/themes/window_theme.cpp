@@ -38,6 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "boxes/background_box.h"
 #include "core/application.h"
+#include "core/mac_protected_path_runtime.h"
 #include "webview/webview_common.h"
 
 #include <QtCore/QBuffer>
@@ -55,6 +56,13 @@ constexpr auto kThemeFileSizeLimit = 5 * 1024 * 1024;
 constexpr auto kBackgroundSizeLimit = 25 * 1024 * 1024;
 constexpr auto kNightThemeFile = ":/gui/night.tdesktop-theme"_cs;
 constexpr auto kDarkValueThreshold = 0.5;
+
+[[nodiscard]] bool CheckThemePath(Core::MacProtectedPath::Operation operation,
+								  const QString &path, const char *callsite) {
+	return path.startsWith(u":/"_q) || path.startsWith(u"qrc:/"_q)
+		   || Core::MacProtectedPath::CheckExternalPath(operation, path,
+														callsite);
+}
 
 struct Applying {
 	Saved data;
@@ -84,6 +92,10 @@ inline bool AreTestingTheme() {
 }
 
 QByteArray readThemeContent(const QString &path) {
+	if (!CheckThemePath(Core::MacProtectedPath::Operation::Read, path,
+						"theme.content")) {
+		return QByteArray();
+	}
 	QFile file(path);
 	if (!file.exists()) {
 		LOG(("Theme Error: theme file not found: %1").arg(path));
@@ -418,9 +430,12 @@ bool InitializeFromCache(
 
 bool InitializeFromSaved(Saved &&saved) {
 	if (saved.object.content.size() < 4) {
-		LOG(("Theme Error: Could not load theme from '%1' (%2)").arg(
-			saved.object.pathRelative,
-			saved.object.pathAbsolute));
+		if (saved.refusedPath) {
+			LOG(("Theme Error: Could not load refused saved theme."));
+		} else {
+			LOG(("Theme Error: Could not load theme from '%1' (%2)")
+					.arg(saved.object.pathRelative, saved.object.pathAbsolute));
+		}
 		return false;
 	}
 
@@ -451,7 +466,7 @@ bool InitializeFromSaved(Saved &&saved) {
 	}
 	if (editing) {
 		Background()->setEditingTheme(ReadCloudFromText(*editing));
-	} else {
+	} else if (!saved.refusedPath) {
 		Local::writeTheme(saved);
 	}
 	return true;
@@ -605,9 +620,10 @@ void ChatBackground::start() {
 
 void ChatBackground::refreshThemeWatcher() {
 	const auto path = _themeObject.pathAbsolute;
-	if (path.isEmpty()
-		|| !QFileInfo(path).isNativePath()
-		|| editingTheme()) {
+	if (path.isEmpty() || editingTheme()
+		|| !CheckThemePath(Core::MacProtectedPath::Operation::Stat, path,
+						   "theme.watcher")
+		|| !QFileInfo(path).isNativePath()) {
 		_themeWatcher = nullptr;
 	} else if (!_themeWatcher || !_themeWatcher->files().contains(path)) {
 		_themeWatcher = std::make_unique<QFileSystemWatcher>(
@@ -1219,6 +1235,9 @@ void ChatBackground::reapplyWithNightMode(
 	auto path = read.object.pathAbsolute;
 
 	_nightMode = oldNightMode;
+	if (read.refusedPath) {
+		return;
+	}
 	auto oldTileValue = (_nightMode ? _tileNightValue : _tileDayValue);
 	const auto alreadyOnDisk = [&] {
 		if (read.object.content.isEmpty()) {
@@ -1311,6 +1330,10 @@ void Uninitialize() {
 bool Apply(
 		const QString &filepath,
 		const Data::CloudTheme &cloud) {
+	if (!CheckThemePath(Core::MacProtectedPath::Operation::Read, filepath,
+						"theme.apply")) {
+		return false;
+	}
 	if (auto preview = PreviewFromFile(QByteArray(), filepath, cloud)) {
 		return Apply(std::move(preview));
 	}
@@ -1329,6 +1352,10 @@ bool Apply(std::unique_ptr<Preview> preview) {
 
 void ApplyDefaultWithPath(const QString &themePath) {
 	if (!themePath.isEmpty()) {
+		if (!CheckThemePath(Core::MacProtectedPath::Operation::Read, themePath,
+							"theme.apply-default")) {
+			return;
+		}
 		if (auto preview = PreviewFromFile(QByteArray(), themePath, {})) {
 			Apply(std::move(preview));
 		}

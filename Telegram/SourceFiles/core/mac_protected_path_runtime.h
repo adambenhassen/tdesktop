@@ -16,12 +16,19 @@ namespace Core::MacProtectedPath {
 #ifdef Q_OS_MAC
 [[nodiscard]] bool InitializeProfile();
 [[nodiscard]] bool IntegrationTestActive();
+[[nodiscard]] QString InitialWorkingDirectory();
 [[nodiscard]] QString IpcDirectory();
 [[nodiscard]] QString NotificationSoundsDirectory();
 [[nodiscard]] QString ProfileRoot();
 
 [[nodiscard]] bool CheckPath(Operation operation, const QString &path,
 							 const char *callsite);
+
+[[nodiscard]] bool CheckPathAt(Operation operation, const QString &path,
+							   const QString &anchor, const char *callsite);
+
+[[nodiscard]] bool CheckExternalPath(Operation operation, const QString &path,
+									 const char *callsite);
 
 [[nodiscard]] bool CheckCachePath(const QString &path, const char *callsite);
 
@@ -36,10 +43,19 @@ CheckCachePathForTesting(const QString &path, const char *callsite,
 #else  // Q_OS_MAC
 [[nodiscard]] inline bool InitializeProfile() { return true; }
 [[nodiscard]] inline bool IntegrationTestActive() { return false; }
+[[nodiscard]] inline QString InitialWorkingDirectory() { return {}; }
 [[nodiscard]] inline QString IpcDirectory() { return {}; }
 [[nodiscard]] inline QString NotificationSoundsDirectory() { return {}; }
 [[nodiscard]] inline QString ProfileRoot() { return {}; }
 [[nodiscard]] inline bool CheckPath(Operation, const QString &, const char *) {
+	return true;
+}
+[[nodiscard]] inline bool CheckPathAt(Operation, const QString &,
+									  const QString &, const char *) {
+	return true;
+}
+[[nodiscard]] inline bool CheckExternalPath(Operation, const QString &,
+											const char *) {
 	return true;
 }
 [[nodiscard]] inline bool CheckCachePath(const QString &, const char *) {

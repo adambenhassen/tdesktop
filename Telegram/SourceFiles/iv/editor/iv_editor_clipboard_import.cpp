@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "iv/editor/iv_editor_clipboard_import.h"
 
+#include "core/mac_protected_path_runtime.h"
 #include "iv/editor/iv_editor_text_entities.h"
 #include "ui/text/text_entity.h"
 #include "ui/text/text_html_tags.h"
@@ -177,7 +178,10 @@ constexpr auto kMaxCellLength = 4096;
 		return QString();
 	} else if (source.startsWith(u"file:"_q, Qt::CaseInsensitive)) {
 		const auto url = QUrl(source);
-		if (!url.isLocalFile()) {
+		if (!url.isLocalFile()
+			|| !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, url.toLocalFile(),
+				"markdown.clipboard-media")) {
 			return QString();
 		}
 		const auto info = QFileInfo(url.toLocalFile());
@@ -191,6 +195,11 @@ constexpr auto kMaxCellLength = 4096;
 	}
 	const auto decoded = QUrl::fromPercentEncoding(source.toUtf8());
 	const auto absolute = QDir(basePath).absoluteFilePath(decoded);
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, absolute,
+			"markdown.clipboard-relative-media")) {
+		return QString();
+	}
 	const auto info = QFileInfo(absolute);
 	if (!info.exists() || !info.isFile()) {
 		return QString();
@@ -628,6 +637,11 @@ std::vector<RichPage::Block> ConvertImportedBlocks(
 		return QString();
 	}
 	const auto path = urls.front().toLocalFile();
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, path,
+			"markdown.clipboard-html")) {
+		return QString();
+	}
 	if (!path.endsWith(u".html"_q, Qt::CaseInsensitive)) {
 		return QString();
 	}

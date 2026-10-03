@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "crl/crl_on_main.h"
 #include "crl/crl_semaphore.h"
 #include "data/data_chat.h"
+#include "data/data_download_manager.h"
 #include "data/data_peer_id.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -36,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDataStream>
 #include <QtCore/QDir>
 #include <QtCore/QEventLoop>
 #include <QtCore/QFile>
@@ -131,6 +133,63 @@ struct ProtectedCacheFixtures {
 	auto file = QFile(path);
 	return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size()
 		   && file.flush();
+}
+
+[[nodiscard]] QByteArray SerializeRefusedDownloadHistory(const QString &path,
+														 FullMsgId itemId) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream.setVersion(QDataStream::Qt_5_1);
+	stream << qint32(1) << quint64(7) << qint32(Data::DownloadType::Document)
+		   << qint64(1) << quint32(1) << quint64(itemId.peer.value)
+		   << qint64(itemId.msg.bare) << quint64(0) << path;
+	stream.device()->close();
+	return result;
+}
+
+[[nodiscard]] bool
+StoreRefusedDownloadHistory(not_null<Main::Account *> account,
+							const QString &path, FullMsgId itemId) {
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		return true;
+	}
+	if (Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Stat, path,
+			"Tests::DownloadHistory::fixture")) {
+		return false;
+	}
+	const auto serialized = SerializeRefusedDownloadHistory(path, itemId);
+	const auto called = std::make_shared<bool>(false);
+	account->local().updateDownloads([=] {
+		*called = true;
+		return serialized;
+	});
+	auto loop = QEventLoop();
+	QTimer::singleShot(1500, &loop, &QEventLoop::quit);
+	loop.exec();
+	return *called && account->local().downloadsSerialized() == serialized;
+}
+
+[[nodiscard]] bool
+RunRefusedDownloadHistoryRegression(not_null<Main::Session *> session,
+									FullMsgId itemId) {
+	if (!Core::MacProtectedPath::IntegrationTestActive()) {
+		return true;
+	}
+	if (session->data().message(itemId)) {
+		return false;
+	}
+	auto published = 0;
+	auto lifetime = rpl::lifetime();
+	Core::App().downloadManager().loadedAdded()
+		| rpl::on_next(
+			[&](not_null<const Data::DownloadedId *>) { ++published; },
+			lifetime);
+	auto loaded = 0;
+	for (const auto entry : Core::App().downloadManager().loadedList()) {
+		loaded += (entry->itemId == itemId);
+	}
+	return !published && !loaded;
 }
 
 [[nodiscard]] bool FixtureContainsOnlyMarker(const QString &path) {
@@ -986,6 +1045,12 @@ StartChatParticipantsRegression(Main::Domain &domain,
 	stock->setSessionUserId(selfId);
 	const auto stockCachePath = stock->local().cachePath();
 	const auto stockMediaCachePath = stock->local().cacheBigFilePath();
+	const auto refusedDownload = FullMsgId(peerFromUser(selfId), MsgId(12345));
+	if (!StoreRefusedDownloadHistory(stock, fixtures.cacheRoot + "/marker",
+									 refusedDownload)) {
+		return FailChatParticipantsRegression(
+			"could not persist the refused download-history fixture");
+	}
 	if (Core::MacProtectedPath::IntegrationTestActive()
 		&& (!QDir().mkpath(QFileInfo(stockCachePath).absolutePath())
 			|| !QDir().mkpath(QFileInfo(stockMediaCachePath).absolutePath())
@@ -1001,6 +1066,14 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			"could not create the stock test session");
 	}
 	if (Core::MacProtectedPath::IntegrationTestActive()) {
+		if (!RunRefusedDownloadHistoryRegression(&stock->session(),
+												 refusedDownload)) {
+			return FailChatParticipantsRegression(
+				"refused persisted download history was published");
+		}
+		std::fprintf(
+			stderr, "Authenticated refused download history regression passed: "
+					"entry without a live message remained unpublished.\n");
 		stock->session().data().cache().sync();
 		stock->session().data().cacheBigFile().sync();
 		if (Core::MacProtectedPath::CheckCachePath(

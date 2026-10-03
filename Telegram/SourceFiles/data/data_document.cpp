@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "mainwidget.h"
 #include "core/file_utilities.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/mime_type.h"
 #include "data/stickers/data_stickers.h"
 #include "media/audio/media_audio.h"
@@ -114,7 +115,10 @@ QString FileNameUnsafe(
 			name = filedialogDefaultName(prefix, name);
 		} else if (dir.path() != u"."_q) {
 			QString path = dir.absolutePath();
-			if (path != cDialogLastPath()) {
+			if (Core::MacProtectedPath::CheckExternalPath(
+					Core::MacProtectedPath::Operation::OpenDir, path,
+					"download.dialog-directory")
+				&& path != cDialogLastPath()) {
 				cSetDialogLastPath(path);
 				Local::writeSettings();
 			}
@@ -164,13 +168,39 @@ QString FileNameUnsafe(
 		}
 	}();
 	if (path.isEmpty()) return QString();
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::OpenDir, path,
+			"download.directory")) {
+		return QString();
+	}
 	if (name.isEmpty()) name = u".unknown"_q;
 	if (name.at(0) == QChar::fromLatin1('.')) {
-		if (!QDir().exists(path)) QDir().mkpath(path);
-		return filedialogDefaultName(prefix, name, path);
+		if (!Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Stat, path,
+				"download.directory.exists")) {
+			return QString();
+		}
+		if (!QDir().exists(path)
+			&& (!Core::MacProtectedPath::CheckPath(
+					Core::MacProtectedPath::Operation::Mkdir, path,
+					"download.directory.create")
+				|| !QDir().mkpath(path))) {
+			return QString();
+		}
+		const auto result = filedialogDefaultName(prefix, name, path);
+		return Core::MacProtectedPath::CheckPath(
+				   Core::MacProtectedPath::Operation::Write, result,
+				   "download.filename")
+				   ? result
+				   : QString();
 	}
 	if (dir.path() != u"."_q) {
 		path = dir.absolutePath() + '/';
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Write, path,
+				"download.selected-directory")) {
+			return QString();
+		}
 	}
 
 	QString nameStart, extension;
@@ -183,11 +213,36 @@ QString FileNameUnsafe(
 	}
 	QString nameBase = path + nameStart;
 	name = nameBase + extension;
-	for (int i = 0; QFileInfo::exists(name); ++i) {
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Write, name,
+			"download.filename")) {
+		return QString();
+	}
+	for (int i = 0; Core::MacProtectedPath::CheckPath(
+						Core::MacProtectedPath::Operation::Stat, name,
+						"download.filename.exists")
+					&& QFileInfo::exists(name);
+		 ++i) {
 		name = nameBase + u" (%1)"_q.arg(i + 2) + extension;
+		if (!Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Write, name,
+				"download.filename")) {
+			return QString();
+		}
 	}
 
-	if (!QDir().exists(path)) QDir().mkpath(path);
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Stat, path,
+			"download.directory.exists")) {
+		return QString();
+	}
+	if (!QDir().exists(path)
+		&& (!Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::Mkdir, path,
+				"download.directory.create")
+			|| !QDir().mkpath(path))) {
+		return QString();
+	}
 	return name;
 }
 
@@ -227,7 +282,11 @@ QString DocumentFileNameForSave(
 		const QDir &dir) {
 	auto alreadySavingFilename = data->loadingFilePath();
 	if (!alreadySavingFilename.isEmpty()) {
-		return alreadySavingFilename;
+		return Core::MacProtectedPath::CheckExternalPath(
+				   Core::MacProtectedPath::Operation::Write,
+				   alreadySavingFilename, "download.existing-target")
+				   ? alreadySavingFilename
+				   : QString();
 	}
 
 	QString name, filter, caption, prefix;
@@ -269,14 +328,14 @@ QString DocumentFileNameForSave(
 		prefix = u"doc"_q;
 	}
 
-	return FileNameForSave(
-		&data->session(),
-		caption,
-		filter,
-		prefix,
-		name,
-		forceSavingAs,
-		dir);
+	const auto result = FileNameForSave(&data->session(), caption, filter,
+										prefix, name, forceSavingAs, dir);
+	return result.isEmpty()
+				   || Core::MacProtectedPath::CheckExternalPath(
+					   Core::MacProtectedPath::Operation::Write, result,
+					   "download.target")
+			   ? result
+			   : QString();
 }
 
 Data::FileOrigin StickerData::setOrigin() const {
@@ -1199,6 +1258,12 @@ void DocumentData::save(
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading) {
+	if (!toFile.isEmpty()
+		&& !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Write, toFile,
+			"document.save-target")) {
+		return;
+	}
 	if (const auto media = activeMediaView(); media && media->loaded(true)) {
 		auto &l = location(true);
 		if (!toFile.isEmpty()) {
@@ -1216,8 +1281,17 @@ void DocumentData::save(
 			} else if (l.accessEnable()) {
 				const auto &alreadyName = l.name();
 				if (alreadyName != toFile) {
-					QFile(toFile).remove();
-					QFile(alreadyName).copy(toFile);
+					const auto copyAllowed = Core::MacProtectedPath::CheckPair(
+						Core::MacProtectedPath::Operation::Copy, alreadyName,
+						toFile, "document.save-copy");
+					const auto removeAllowed
+						= Core::MacProtectedPath::CheckExternalPath(
+							Core::MacProtectedPath::Operation::Unlink, toFile,
+							"document.save-replace");
+					if (copyAllowed && removeAllowed) {
+						QFile(toFile).remove();
+						QFile(alreadyName).copy(toFile);
+					}
 				}
 				l.accessDisable();
 			}
@@ -1413,6 +1487,9 @@ QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform) {
 
 const Core::FileLocation &DocumentData::location(bool check) const {
 	if (check && !_location.check()) {
+		if (_location.pathRefused()) {
+			return _location;
+		}
 		const auto location = session().local().readFileLocation(mediaKey());
 		const auto that = const_cast<DocumentData*>(this);
 		if (location.inMediaCache()) {
@@ -1458,7 +1535,10 @@ bool DocumentData::saveFromDataChecked() {
 		return false;
 	}
 	const auto path = DocumentFileNameForSave(this);
-	if (path.isEmpty()) {
+	if (path.isEmpty()
+		|| !Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Write, path,
+			"download.save-from-data")) {
 		return false;
 	}
 	auto file = QFile(path);
@@ -1923,6 +2003,9 @@ void DocumentData::setRemoteLocation(
 	if (_dc != dc || _access != access) {
 		_dc = dc;
 		_access = access;
+		if (_location.pathRefused()) {
+			return;
+		}
 		if (!isNull()) {
 			if (_location.check()) {
 				session().local().writeFileLocation(mediaKey(), _location);
