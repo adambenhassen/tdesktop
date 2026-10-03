@@ -421,6 +421,7 @@ void Application::run() {
 	}
 
 	if (qEnvironmentVariableIsSet("TDESKTOP_AUTH_LIFECYCLE_REGRESSION")) {
+		Media::Player::start(_audio.get());
 		Tests::RunAccountLifecycleRegression([=](int result) {
 			QCoreApplication::exit(regressionResult | result);
 		});
