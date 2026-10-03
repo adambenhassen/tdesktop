@@ -628,6 +628,7 @@ void Sandbox::readClients() {
 					const auto raw = cmds.mid(from + 5, to - from - 5)
 						.mid(0, 8192);
 					const auto url = QUrl(raw);
+#ifdef Q_OS_MAC
 					if ((url.scheme() == u"file"_q && !url.isLocalFile()
 						&& MacProtectedPath::IntegrationTestActive())
 						|| (url.isLocalFile()
@@ -643,6 +644,7 @@ void Sandbox::readClients() {
 						from = to + 1;
 						continue;
 					}
+#endif // Q_OS_MAC
 					startUrls.append(url);
 					if (!activationRequired) {
 						activationRequired = StartUrlRequiresActivate(startUrls.back().toString());
