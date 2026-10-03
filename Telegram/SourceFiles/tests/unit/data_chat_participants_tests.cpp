@@ -15,6 +15,7 @@ namespace {
 using Data::details::ChatParticipantInfo;
 using Data::details::ResolveChatParticipants;
 using Data::details::CanMarkUserLoadedNormally;
+using Data::details::CanAddBasicChatAdmins;
 
 auto ResolveForAccount(
 		const std::vector<ChatParticipantInfo> &participants,
@@ -35,6 +36,12 @@ auto ResolveForAccount(
 }
 
 } // namespace
+
+TEST_CASE(BasicGroupAdminPromotionRequiresCreatorMembership) {
+	CHECK(CanAddBasicChatAdmins(true, true));
+	CHECK(!CanAddBasicChatAdmins(false, true));
+	CHECK(!CanAddBasicChatAdmins(true, false));
+}
 
 TEST_CASE(PinnedPhoneFreeSelfMemberKeepsGroupParticipants) {
 	const auto participants = std::vector<ChatParticipantInfo>{

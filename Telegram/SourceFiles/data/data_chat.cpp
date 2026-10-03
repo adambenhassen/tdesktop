@@ -96,7 +96,7 @@ bool ChatData::canAddMembers() const {
 }
 
 bool ChatData::canAddAdmins() const {
-	return amIn() && amCreator() && !usesCustomServer();
+	return Data::details::CanAddBasicChatAdmins(amIn(), amCreator());
 }
 
 bool ChatData::canBanMembers() const {

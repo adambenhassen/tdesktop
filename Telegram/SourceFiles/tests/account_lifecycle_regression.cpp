@@ -1162,10 +1162,10 @@ StartChatParticipantsRegression(Main::Domain &domain,
 	if (!HasExpectedParticipants(pinnedActionChat, selfId)
 		|| !pinnedActionChat->canEditInformation()
 		|| !pinnedActionChat->canAddMembers()
-		|| pinnedActionChat->canAddAdmins()
+		|| !pinnedActionChat->canAddAdmins()
 		|| !pinnedActionChat->canBanMembers()) {
 		return FailChatParticipantsRegression(
-			"pinned creator lost a supported action or retained admin grants");
+			"pinned creator lost a supported basic-group admin action");
 	}
 	if (!pinnedActionChat->usesCustomServer()
 		|| pinnedActionChat->isDeactivated()

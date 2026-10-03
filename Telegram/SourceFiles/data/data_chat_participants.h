@@ -18,6 +18,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Data::details {
 
+[[nodiscard]] inline constexpr bool CanAddBasicChatAdmins(
+		bool isMember,
+		bool isCreator) {
+	return isMember && isCreator;
+}
+
 struct ChatParticipantInfo {
 	UserId userId;
 	UserId inviterId;
