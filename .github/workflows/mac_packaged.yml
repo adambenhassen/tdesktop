@@ -55,7 +55,6 @@ jobs:
           brew upgrade || true
           brew install autoconf automake boost ccache cmake libtool ninja pkg-config python $libs
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
 
           xcodebuild -version > CACHE_KEY.txt
           brew list --versions $libs >> CACHE_KEY.txt
@@ -157,6 +156,8 @@ jobs:
           fi
 
           cmake -Bbuild . \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DTDESKTOP_API_TEST=ON \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -165,7 +166,7 @@ jobs:
             $DEFINE
           ccache --max-size="$CCACHE_MAXSIZE"
           ccache --zero-stats
-          cmake --build build
+          CCACHE_DISABLE=1 cmake --build build
           if ! ./build/test_unit; then
             lldb --batch -o run -k bt -- ./build/test_unit
             exit 1
@@ -410,7 +411,8 @@ jobs:
           diagnostics="$regression_root/diagnostics"
           application_logs="$diagnostics/application"
           symbols="$regression_root/symbols/Telegramd.app.dSYM"
-          executable="$GITHUB_WORKSPACE/$REPO_NAME/build/Telegramd.app/Contents/MacOS/Telegramd"
+          repo="$GITHUB_WORKSPACE/$REPO_NAME"
+          executable="$repo/build/Telegramd.app/Contents/MacOS/Telegramd"
           mkdir -p "$regression_home" "$regression_work" "$diagnostics" "$application_logs/DebugLogs" "$(dirname "$symbols")"
           test -x "$executable"
 
@@ -422,33 +424,168 @@ jobs:
             sw_vers
             uname -a
             xcodebuild -version
+            cmake --version
             printf 'Executable SHA-256: %s\n' "$(shasum -a 256 "$executable" | awk '{print $1}')"
             dwarfdump --uuid "$executable"
           } > "$diagnostics/metadata.txt" 2>&1
+
+          fail_dwarf_prerequisite() {
+            reason="$1"
+            printf 'DWARF prerequisite failed before replay: %s\n' "$reason" >> "$diagnostics/metadata.txt"
+            printf 'Replay skipped: %s\n' "$reason" > "$diagnostics/replay-status.txt"
+            for relative_log in log.txt DebugLogs/log.txt DebugLogs/mtp.txt DebugLogs/last_openal_log.txt; do
+              printf 'Not generated because replay was skipped: %s\n' "$relative_log" >> "$diagnostics/missing-application-logs.txt"
+            done
+            printf 'Diagnostic replay skipped: %s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          cmake -LA -N "$repo/build" > "$diagnostics/cmake-cache.txt"
+          awk -F: '/^CMAKE_(BUILD_TYPE|C_COMPILER|CXX_COMPILER|C_FLAGS_DEBUG|CXX_FLAGS_DEBUG|EXE_LINKER_FLAGS_DEBUG|SHARED_LINKER_FLAGS_DEBUG|OSX_ARCHITECTURES|EXPORT_COMPILE_COMMANDS):/ { print }' "$diagnostics/cmake-cache.txt" > "$diagnostics/build-settings.txt"
+          printf 'CCACHE_DISABLE=1 for Telegramd build\n' >> "$diagnostics/build-settings.txt"
+          build_type="$(awk -F= '$1 ~ "^CMAKE_BUILD_TYPE:" { print substr($0, index($0, "=") + 1); found=1; exit } END { if (!found) exit 1 }' "$repo/build/CMakeCache.txt")" || fail_dwarf_prerequisite "CMAKE_BUILD_TYPE is missing from CMakeCache.txt"
+          if [ "$build_type" != "Debug" ]; then
+            fail_dwarf_prerequisite "the effective CMake build type is $build_type, not Debug"
+          fi
+          for flag in CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG; do
+            value="$(awk -F= -v key="$flag" '$1 ~ "^" key ":" { print substr($0, index($0, "=") + 1); found=1; exit } END { if (!found) exit 1 }' "$repo/build/CMakeCache.txt")" || fail_dwarf_prerequisite "$flag is missing from CMakeCache.txt"
+            if [[ " $value " != *" -g "* ]]; then
+              fail_dwarf_prerequisite "$flag does not preserve the default -g DWARF flag: $value"
+            fi
+          done
+
+          if ! python3 - "$repo" "$repo/build/compile_commands.json" > "$diagnostics/compile-command-settings.txt" 2>&1 <<'PY'
+          import json
+          import os
+          import re
+          import shlex
+          import sys
+
+          repo, database = sys.argv[1:]
+          source_root = os.path.realpath(os.path.join(repo, "Telegram", "SourceFiles"))
+          with open(database, encoding="utf-8") as stream:
+              entries = json.load(stream)
+
+          app_entries = []
+          for entry in entries:
+              source = entry["file"]
+              if not os.path.isabs(source):
+                  source = os.path.join(entry["directory"], source)
+              source = os.path.realpath(source)
+              if source.startswith(source_root + os.sep):
+                  app_entries.append((source, entry))
+
+          print(f"Telegramd source compile commands: {len(app_entries)}")
+          if not app_entries:
+              print("No Telegram/SourceFiles compile commands were found.")
+              sys.exit(1)
+
+          missing_debug = []
+          sample = None
+          for source, entry in app_entries:
+              command = entry.get("command")
+              arguments = entry.get("arguments")
+              tokens = shlex.split(command) if command else arguments
+              if not tokens:
+                  missing_debug.append(source)
+                  continue
+              debug_flags = [
+                  token for token in tokens
+                  if re.fullmatch(r"-g(?:[0-3]|0|line-tables-only|line-directives-only)?", token)
+              ]
+              if not debug_flags or debug_flags[-1] != "-g":
+                  missing_debug.append(source)
+              elif sample is None:
+                  sample = (source, command or shlex.join(arguments))
+
+          if sample:
+              print(f"Sample source: {sample[0]}")
+              print(f"Sample compile command: {sample[1]}")
+          if missing_debug:
+              print("Sources without effective full DWARF (-g):")
+              for source in missing_debug:
+                  print(source)
+              sys.exit(1)
+          print("Every Telegram/SourceFiles compile command retains -g.")
+          PY
+          then
+            fail_dwarf_prerequisite "Telegramd compile commands do not all retain full -g DWARF; see compile-command-settings.txt"
+          fi
+
+          if ! ninja -C "$repo/build" -t commands Telegram | grep -F 'Telegramd.app/Contents/MacOS/Telegramd' | tail -n 1 > "$diagnostics/telegramd-link-command.txt"; then
+            fail_dwarf_prerequisite "the effective Telegramd link command could not be captured"
+          fi
+          if [ ! -s "$diagnostics/telegramd-link-command.txt" ]; then
+            fail_dwarf_prerequisite "the effective Telegramd link command is empty"
+          fi
 
           dsym_status=0
           dsymutil "$executable" -o "$symbols" > "$diagnostics/dsymutil.log" 2>&1 || dsym_status=$?
           symbol_file=""
           printf 'dsymutil exit: %s\n' "$dsym_status" >> "$diagnostics/metadata.txt"
           dsym_file="$symbols/Contents/Resources/DWARF/Telegramd"
-          if [ "$dsym_status" -eq 0 ] && [ -f "$dsym_file" ]; then
-            binary_uuid_status=0
-            symbol_uuid_status=0
-            binary_uuid="$(dwarfdump --uuid "$executable" | awk '{print $2, $3}')" || binary_uuid_status=$?
-            symbol_uuid="$(dwarfdump --uuid "$dsym_file" | awk '{print $2, $3}')" || symbol_uuid_status=$?
-            printf 'dSYM UUID: %s\n' "$symbol_uuid" >> "$diagnostics/metadata.txt"
-            if [ "$binary_uuid_status" -eq 0 ] \
-                && [ "$symbol_uuid_status" -eq 0 ] \
-                && [ -n "$binary_uuid" ] \
-                && [ "$binary_uuid" = "$symbol_uuid" ]; then
-              symbol_file="$dsym_file"
-              echo "dSYM UUID matches executable." >> "$diagnostics/metadata.txt"
-            else
-              echo "dSYM UUID does not match executable or could not be read." >> "$diagnostics/metadata.txt"
-            fi
-          else
-            echo "Matching dSYM was not generated; inspect dsymutil.log and retain compiler debug information for Telegramd." >> "$diagnostics/metadata.txt"
+          if [ "$dsym_status" -ne 0 ] || [ ! -f "$dsym_file" ]; then
+            fail_dwarf_prerequisite "dsymutil did not produce a Telegramd DWARF file; see dsymutil.log"
           fi
+
+          binary_uuid_status=0
+          symbol_uuid_status=0
+          binary_uuid="$(dwarfdump --uuid "$executable" | awk '{print $2, $3}')" || binary_uuid_status=$?
+          symbol_uuid="$(dwarfdump --uuid "$dsym_file" | awk '{print $2, $3}')" || symbol_uuid_status=$?
+          printf 'dSYM UUID: %s\n' "$symbol_uuid" >> "$diagnostics/metadata.txt"
+          if [ "$binary_uuid_status" -ne 0 ] \
+              || [ "$symbol_uuid_status" -ne 0 ] \
+              || [ -z "$binary_uuid" ] \
+              || [ "$binary_uuid" != "$symbol_uuid" ]; then
+            fail_dwarf_prerequisite "the generated dSYM UUID does not match Telegramd"
+          fi
+          printf 'dSYM UUID matches executable.\n' >> "$diagnostics/metadata.txt"
+
+          if ! dwarf_tool="$(xcrun --find llvm-dwarfdump 2> "$diagnostics/llvm-dwarfdump-lookup.log")"; then
+            fail_dwarf_prerequisite "Xcode llvm-dwarfdump is unavailable for symbol inspection"
+          fi
+          "$dwarf_tool" --version > "$diagnostics/llvm-dwarfdump-version.txt" 2>&1 || fail_dwarf_prerequisite "llvm-dwarfdump could not report its version"
+          if ! "$dwarf_tool" --debug-info --arch=arm64 "$dsym_file" 2> "$diagnostics/dwarf-info-errors.txt" | awk '
+            /DW_TAG_compile_unit/ { compile_units++ }
+            /DW_TAG_subprogram/ { functions++ }
+            /DW_AT_stmt_list/ { statement_lists++ }
+            /Telegram\/SourceFiles/ {
+              app_source_paths++
+              if (app_source_paths <= 5) {
+                print "Telegram source entry: " $0
+              }
+            }
+            END {
+              printf "DWARF compile units: %d\nDWARF function entries: %d\nDWARF statement-list attributes: %d\nTelegram source path entries: %d\n", compile_units, functions, statement_lists, app_source_paths
+              if (!compile_units || !functions || !statement_lists || !app_source_paths) {
+                exit 1
+              }
+            }
+          ' > "$diagnostics/dwarf-info-summary.txt"; then
+            fail_dwarf_prerequisite "the dSYM lacks Telegramd compile units, functions, or application source paths"
+          fi
+          if ! "$dwarf_tool" --debug-line --arch=arm64 "$dsym_file" 2> "$diagnostics/dwarf-line-errors.txt" | awk '
+            /^debug_line\[/ { line_tables++ }
+            /^[[:space:]]*0x[[:xdigit:]]+[[:space:]]+[1-9][[:digit:]]*[[:space:]]+[0-9]+/ {
+              source_lines++
+              if (source_lines <= 5) {
+                print "DWARF source line row: " $0
+              }
+            }
+            END {
+              printf "DWARF line tables: %d\nDWARF source line rows: %d\n", line_tables, source_lines
+              if (!line_tables || !source_lines) {
+                exit 1
+              }
+            }
+          ' > "$diagnostics/dwarf-line-summary.txt"; then
+            fail_dwarf_prerequisite "the dSYM lacks populated DWARF source line tables"
+          fi
+          "$dwarf_tool" --verify --arch=arm64 "$dsym_file" > "$diagnostics/dwarf-verify.txt" 2>&1 || fail_dwarf_prerequisite "llvm-dwarfdump found invalid DWARF; see dwarf-verify.txt"
+
+          printf 'DWARF compile-unit/function/line-table inspection passed. See dwarf-info-summary.txt and dwarf-line-summary.txt.\n' >> "$diagnostics/metadata.txt"
+          symbol_file="$dsym_file"
+          printf 'Replay status: symbol prerequisite passed; LLDB replay may start.\n' > "$diagnostics/replay-status.txt"
 
           set +e
           env \
@@ -515,21 +652,25 @@ jobs:
             if [ -f "$regression_work/$relative_log" ]; then
               cp "$regression_work/$relative_log" "$application_logs/$relative_log"
             else
-              printf 'Not generated: %s\n' "$relative_log" >> "$diagnostics/missing-application-logs.txt"
+              printf 'Not generated after replay: %s\n' "$relative_log" >> "$diagnostics/missing-application-logs.txt"
             fi
           done
           printf 'LLDB exit: %s\n' "$debugger_status" >> "$diagnostics/metadata.txt"
-          symbolized_frame="$(awk '/Telegramd.* at .*:[0-9]+/ { print; exit }' "$diagnostics/lldb.log")"
-          if [ -n "$symbolized_frame" ]; then
-            printf 'Symbolized application frame: %s\n' "$symbolized_frame" >> "$diagnostics/metadata.txt"
-          elif [ -n "$symbol_file" ]; then
-            echo "No Telegramd source line was emitted despite a matching dSYM; retain full LLDB log and dSYM line-table/source-map data is still needed for attribution." >> "$diagnostics/metadata.txt"
-          else
-            echo "Application frame remains unsymbolized; a matching Telegramd dSYM with source line tables is the remaining prerequisite for function/source attribution." >> "$diagnostics/metadata.txt"
-          fi
+          printf 'LLDB replay exit: %s\n' "$debugger_status" > "$diagnostics/replay-status.txt"
+          faulting_frame="$(awk '
+            /^\* thread .*stop reason = (EXC_|signal SIG(SEGV|ABRT|BUS))/ { fault_thread = 1; next }
+            /^\* thread / { fault_thread = 0 }
+            fault_thread && /frame #0:.*Telegramd.* at .*:[0-9]+/ { print; exit }
+          ' "$diagnostics/lldb.log")"
 
           if grep -Eq 'EXC_(BAD_ACCESS|BREAKPOINT|CRASH)|SIG(SEGV|ABRT|BUS)' "$diagnostics/lldb.log"; then
-            echo "Full chat info session regression crashed under the null audio backend on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "$faulting_frame" ]; then
+              echo "Crash reproduced, but LLDB did not symbolize the faulting Telegramd frame despite passing the DWARF prerequisite." >> "$diagnostics/metadata.txt"
+              echo "Crash reproduced without a symbolized faulting Telegramd frame on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            printf 'Faulting Telegramd frame: %s\n' "$faulting_frame" >> "$diagnostics/metadata.txt"
+            printf 'Null-audio lifecycle crash: %s\n' "$faulting_frame" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           if [ "$debugger_status" -ne 0 ] || ! grep -F 'exited with status = 0' "$diagnostics/lldb.log" >/dev/null; then
