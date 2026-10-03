@@ -143,8 +143,8 @@ jobs:
                               changed[current].append((first, first + count - 1))
 
           if not changed:
-              print("::error::No changed C++ source lines were found to format-check.")
-              sys.exit(1)
+              print("No changed C++ source lines were found; skipping format check.")
+              sys.exit(0)
 
           style = (
               "{BasedOnStyle: LLVM, UseTab: Always, IndentWidth: 4, TabWidth: 4, "
