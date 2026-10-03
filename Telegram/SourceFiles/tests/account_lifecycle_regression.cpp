@@ -1061,6 +1061,28 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		return FailChatParticipantsRegression(
 			"could not create the pinned test session");
 	}
+	const auto capabilitiesMatch = [](const Main::Session &session,
+								  bool supported) {
+		return (session.callsSupported() == supported)
+			&& (session.botAppsSupported() == supported)
+			&& (session.paidFeaturesSupported() == supported)
+			&& (session.storiesSupported() == supported)
+			&& (session.exportSupported() == supported)
+			&& (session.passportSupported() == supported)
+			&& (session.aiComposeSupported() == supported)
+			&& (session.serverTranslationSupported() == supported);
+	};
+	const auto capabilitiesMatchInOrder = [&](bool customFirst) {
+		const auto first = customFirst ? pinned : stock;
+		const auto second = customFirst ? stock : pinned;
+		return capabilitiesMatch(first->session(), !customFirst)
+			&& capabilitiesMatch(second->session(), customFirst);
+	};
+	if (!capabilitiesMatchInOrder(false)
+		|| !capabilitiesMatchInOrder(true)) {
+		return FailChatParticipantsRegression(
+			"session feature capabilities crossed account boundaries");
+	}
 	if (Core::MacProtectedPath::IntegrationTestActive()) {
 		pinned->session().data().cache().sync();
 		pinned->session().data().cacheBigFile().sync();

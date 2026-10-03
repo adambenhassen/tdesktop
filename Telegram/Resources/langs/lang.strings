@@ -423,6 +423,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_server_connecting"        = "Connecting…";
 "lng_intro_server_connect_failed"    = "Could not connect to this server. Check the address and your connection, then try again.";
 "lng_intro_server_unsupported"       = "This server could not complete the connection. Check the address or contact your server administrator.";
+"lng_server_feature_unavailable"    = "This feature isn't available on this server.";
 "lng_intro_server_save_failed"       = "Could not save this server on this device. Try again.";
 "lng_intro_server_key_mismatch"      = "This server no longer matches this account. Connection is blocked. Contact your server administrator.";
 "lng_intro_server_dc_mismatch"       = "This server's configuration does not match this account. Connection is blocked. Contact your server administrator.";

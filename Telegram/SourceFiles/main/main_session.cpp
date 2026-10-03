@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
 #include "main/main_app_config.h"
+#include "main/session_feature_support.h"
 #include "main/session/send_as_peers.h"
 #include "mtproto/mtproto_config.h"
 #include "chat_helpers/stickers_emoji_pack.h"
@@ -368,6 +369,38 @@ rpl::producer<bool> Session::premiumPossibleValue() const {
 
 bool Session::premiumCanBuy() const {
 	return _premiumPossible.current();
+}
+
+bool Session::callsSupported() const {
+	return details::callsSupported(mtp().dcOptions());
+}
+
+bool Session::botAppsSupported() const {
+	return details::botAppsSupported(mtp().dcOptions());
+}
+
+bool Session::paidFeaturesSupported() const {
+	return details::paidFeaturesSupported(mtp().dcOptions());
+}
+
+bool Session::storiesSupported() const {
+	return details::storiesSupported(mtp().dcOptions());
+}
+
+bool Session::exportSupported() const {
+	return details::exportSupported(mtp().dcOptions());
+}
+
+bool Session::passportSupported() const {
+	return details::passportSupported(mtp().dcOptions());
+}
+
+bool Session::aiComposeSupported() const {
+	return details::aiComposeSupported(mtp().dcOptions());
+}
+
+bool Session::serverTranslationSupported() const {
+	return details::serverTranslationSupported(mtp().dcOptions());
 }
 
 bool Session::isTestMode() const {
