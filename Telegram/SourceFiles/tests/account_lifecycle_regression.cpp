@@ -1075,7 +1075,6 @@ StartChatParticipantsRegression(Main::Domain &domain,
 			&& (session.serverTranslationSupported() == supported);
 	};
 	auto &app = Core::App();
-	auto *const previousActive = &domain.active();
 	const auto stockWindow = app.ensureSeparateWindowFor(stock);
 	const auto pinnedWindow = app.ensureSeparateWindowFor(pinned);
 	const auto closeWindows = gsl::finally([&] {
@@ -1085,7 +1084,7 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		if (pinnedWindow && app.separateWindowFor(pinned) == pinnedWindow) {
 			app.closeWindow(pinnedWindow);
 		}
-		domain.activate(previousActive);
+		domain.activate(stock);
 	});
 	const auto windowsMatch = [&] {
 		const auto stockController = stockWindow->sessionController();
