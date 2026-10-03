@@ -212,7 +212,7 @@ void ReportInvalidInitialization(const QString &callsite) {
 } // namespace
 
 bool IntegrationTestActive() {
-#if defined(TDESKTOP_TELEGRAMD)                                                \
+#if defined(TDESKTOP_TEAGRAM)                                                 \
 	&& defined(TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
 	return qEnvironmentVariable("TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST")
 		   == "1";
@@ -248,7 +248,7 @@ bool InitializeProfile() {
 		ReportRefusal(failure);
 		return false;
 	}
-	const auto profileBytes = TelegramdProfileRoot(homes, AppSandboxed());
+	const auto profileBytes = TeagramProfileRoot(homes, AppSandboxed());
 	if (profileBytes.isEmpty()) {
 		ReportInvalidInitialization(u"profile.home-source"_q);
 		return false;

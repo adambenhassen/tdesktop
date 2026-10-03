@@ -752,7 +752,7 @@ TEST_CASE(MatchingConfigDcIsNoFailure) {
 }
 
 // CheckPinnedServerConfig: a server naming another dc id than the pin
-// is a mismatch. This is the telegramd-with-non-default-TG_DC_ID case:
+// is a mismatch. This is the server-with-non-default-TG_DC_ID case:
 // without the report the account loses its only endpoint in silence.
 TEST_CASE(DifferentConfigDcIsMismatch) {
 	const auto failure = CheckPinnedServerConfig(3, {3}, PinnedServer(2));

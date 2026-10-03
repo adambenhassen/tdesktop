@@ -60,7 +60,7 @@ jobs:
           mkdir -p "$evidence"
           printf 'tested_sha=%s\nvariant=%s\n' "$GITHUB_SHA" "$BUILD_VARIANT" > "$evidence/run.txt"
 
-      - name: Verify Telegramd identity contract.
+      - name: Verify Teagram identity contract.
         run: bash "$REPO_NAME/Telegram/build/test_mac_identity.sh" "$REPO_NAME" identity
 
       - name: First set up.
@@ -88,7 +88,7 @@ jobs:
           set -Eeuo pipefail
           evidence="$REPO_NAME/out/Debug/evidence"
           mkdir -p "$evidence"
-          rejection_build="$RUNNER_TEMP/telegramd-macstore-rejection"
+          rejection_build="$RUNNER_TEMP/teagram-macstore-rejection"
           rejection_log="$evidence/macstore-rejection.log"
           set +e
           cmake -S "$REPO_NAME" -B "$rejection_build" \
@@ -99,8 +99,8 @@ jobs:
           set -e
           cat "$rejection_log"
           if [ "$rejection_status" -eq 0 ] \
-            || ! grep -Fq 'Mac App Store builds are unsupported by Telegramd.' "$rejection_log"; then
-            echo "::error::Mac App Store configuration was not rejected by Telegramd's build guard."
+            || ! grep -Fq 'Mac App Store builds are unsupported by Teagram.' "$rejection_log"; then
+            echo "::error::Mac App Store configuration was not rejected by Teagram's build guard."
             exit 1
           fi
           printf 'tested_sha=%s\nvariant=build_macstore\nresult=unsupported\nconfigure_exit_status=%s\n' \
@@ -214,12 +214,12 @@ jobs:
             ThirdParty
           key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
 
-      - name: Telegramd build.
+      - name: Teagram build.
         id: build
         if: env.ONLY_CACHE == 'false'
         run: |
           set -Eeo pipefail
-          BUILD_LOG="$RUNNER_TEMP/telegramd-build-${BUILD_VARIANT}.log"
+          BUILD_LOG="$RUNNER_TEMP/teagram-build-${BUILD_VARIANT}.log"
           cd "$REPO_NAME/Telegram"
 
           BUILD_ARGS=()
@@ -242,7 +242,7 @@ jobs:
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
           "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG" || configure_status=$?
           if [ "$configure_status" -ne 0 ]; then
-            echo "::error::Telegramd configure failed for variant=$BUILD_VARIANT exit_status=$configure_status; see the retained build log."
+            echo "::error::Teagram configure failed for variant=$BUILD_VARIANT exit_status=$configure_status; see the retained build log."
             exit "$configure_status"
           fi
 
@@ -250,7 +250,7 @@ jobs:
           build_status=0
           cmake --build ../out --config Debug --parallel 2>&1 | tee -a "$BUILD_LOG" || build_status=$?
           if [ "$build_status" -ne 0 ]; then
-            echo "::error::Telegramd build failed for variant=$BUILD_VARIANT exit_status=$build_status; see the retained build log."
+            echo "::error::Teagram build failed for variant=$BUILD_VARIANT exit_status=$build_status; see the retained build log."
             exit "$build_status"
           fi
 
@@ -272,13 +272,13 @@ jobs:
           }
           trap static_failure EXIT
           grep -F 'DESKTOP_APP_DISABLE_AUTOUPDATE:BOOL=ON' ../CMakeCache.txt | tee evidence/cmake-cache-autoupdate.txt
-          app=Telegramd.app
+          app=Teagram.app
           plist="$app/Contents/Info.plist"
-          executable="$app/Contents/MacOS/Telegramd"
+          executable="$app/Contents/MacOS/Teagram"
           plutil -p "$plist" | tee evidence/plist.txt
-          test "$(plutil -extract CFBundleExecutable raw -o - "$plist")" = Telegramd
-          test "$(plutil -extract CFBundleName raw -o - "$plist")" = Telegramd
-          test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = com.teagramhq.desktop
+          test "$(plutil -extract CFBundleExecutable raw -o - "$plist")" = Teagram
+          test "$(plutil -extract CFBundleName raw -o - "$plist")" = Teagram
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = io.teagram.desktop
           if plutil -extract CFBundleURLTypes xml1 -o - "$plist" >/dev/null 2>&1; then
             echo "CFBundleURLTypes must be absent from $plist"
             exit 1
@@ -317,10 +317,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           evidence="$REPO_NAME/out/Debug/evidence"
-          state="$(mktemp -d "$RUNNER_TEMP/telegramd-profile-ipc-${BUILD_VARIANT}.XXXXXX")"
+          state="$(mktemp -d "$RUNNER_TEMP/teagram-profile-ipc-${BUILD_VARIANT}.XXXXXX")"
           trap 'rm -rf "$state"' EXIT
           mkdir -p "$state/home" "$state/tmp"
-          executable="$REPO_NAME/out/Debug/Telegramd.app/Contents/MacOS/Telegramd"
+          executable="$REPO_NAME/out/Debug/Teagram.app/Contents/MacOS/Teagram"
           set +e
           env HOME="$state/home" TMPDIR="$state/tmp" \
             TDESKTOP_MAC_PROFILE_TEST_TMP_BASE="$state/tmp" \
@@ -358,7 +358,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           {
-            printf '### macOS Telegramd validation: %s\n\n' "$BUILD_VARIANT"
+            printf '### macOS Teagram validation: %s\n\n' "$BUILD_VARIANT"
             printf -- '- Tested SHA: `%s`\n- C++ format check: `%s`\n' \
               "$GITHUB_SHA" "$FORMAT_OUTCOME"
             printf -- '- Mac App Store rejection check: `%s`\n- Build: `%s`\n- Artifact verification: `%s`\n- Profile/IPC harness: `%s`\n' \
@@ -371,12 +371,12 @@ jobs:
           set -Eeuo pipefail
           evidence="$REPO_NAME/out/Debug/evidence"
           mkdir -p "$evidence"
-          build_log="$RUNNER_TEMP/telegramd-build-${BUILD_VARIANT}.log"
+          build_log="$RUNNER_TEMP/teagram-build-${BUILD_VARIANT}.log"
           if [ -f "$build_log" ]; then
             cp "$build_log" "$evidence/build-${BUILD_VARIANT}.log"
           fi
 
-      - name: Classify Telegramd artifact publication.
+      - name: Classify Teagram artifact publication.
         if: always()
         run: |
           set -u
@@ -396,14 +396,14 @@ jobs:
         run: |
           cd $REPO_NAME/out/Debug
           mkdir artifact
-          if [ -d Telegramd.app ]; then
-            mv Telegramd.app artifact/
+          if [ -d Teagram.app ]; then
+            mv Teagram.app artifact/
           fi
       - uses: actions/upload-artifact@v7
         if: always() && env.UPLOAD_ARTIFACT == 'true' && env.ARTIFACT_READY == 'true'
         name: Upload artifact.
         with:
-          name: Telegramd-macOS-arm64
+          name: Teagram-macOS-arm64
           path: ${{ env.REPO_NAME }}/out/Debug/artifact/
           if-no-files-found: error
 
@@ -415,10 +415,10 @@ jobs:
           set -euo pipefail
           artifact_dir="$REPO_NAME/out/Debug/artifact"
           asset_tag="${RELEASE_TAG//\//-}"
-          asset_name="Telegramd-macOS-arm64-${asset_tag}.zip"
+          asset_name="Teagram-macOS-arm64-${asset_tag}.zip"
           (
             cd "$artifact_dir"
-            zip -r "../$asset_name" Telegramd.app
+            zip -r "../$asset_name" Teagram.app
           )
           release_asset="$REPO_NAME/out/Debug/$asset_name"
           release_asset_sha256="$(shasum -a 256 "$release_asset" | awk '{print $1}')"
@@ -427,11 +427,11 @@ jobs:
           printf 'release_asset_sha256=%s\n' "$release_asset_sha256" \
             > "$REPO_NAME/out/Debug/evidence/release-asset-sha256.txt"
 
-      - name: Save Telegramd evidence.
+      - name: Save Teagram evidence.
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: Telegramd-macOS-arm64-evidence
+          name: Teagram-macOS-arm64-evidence
           path: ${{ env.REPO_NAME }}/out/Debug/evidence/
           if-no-files-found: warn
 

@@ -126,10 +126,10 @@ QString SingleInstanceLocalServerName(const QString &hash) {
 		const auto directory = Core::MacProtectedPath::IpcDirectory();
 		return directory.isEmpty()
 				   ? QString()
-				   : directory + u"/Telegramd-"_q + hash.left(16);
+				   : directory + u"/Teagram-"_q + hash.left(16);
 #endif // OS_MAC_STORE
 	}
-	return Core::MacProtectedPath::IpcDirectory() + u"/Telegramd-"_q
+	return Core::MacProtectedPath::IpcDirectory() + u"/Teagram-"_q
 		   + hash.left(16);
 }
 

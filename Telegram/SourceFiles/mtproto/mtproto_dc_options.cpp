@@ -1219,7 +1219,7 @@ void DcOptions::applyCustomServerUnlocked(
 		_customServer.key->fingerprint(),
 		*_customServer.key);
 	// A CDN key for the pinned DC id would shadow the pinned key in
-	// getDcRSAKey(), and telegramd advertises no CDN at all, so a
+	// getDcRSAKey(), and the server advertises no CDN at all, so a
 	// pinned account keeps no CDN keys.
 	_cdnPublicKeys.clear();
 	applyOneGuarded(

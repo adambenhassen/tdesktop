@@ -216,7 +216,7 @@ def format_report(
 def self_test():
     with tempfile.TemporaryDirectory(prefix="mac-fs-usage-") as root:
         old = os.path.join(root, "Library", "Application Support", "Telegram Desktop")
-        allowed = os.path.join(root, "Library", "Application Support", "Telegramd")
+        allowed = os.path.join(root, "Library", "Application Support", "Teagram")
         os.makedirs(os.path.join(old, "tdata"))
         os.makedirs(allowed)
         alias = os.path.join(root, "old-alias")
@@ -241,13 +241,13 @@ def self_test():
         trace = ["# observer-pid=%d" % target_pid]
         for index, operation in enumerate(forbidden, 1):
             path = os.path.join(alias, "tdata", "entry-%d" % index)
-            trace.append("12:00:%02d.000 %s %s 0.001 Telegramd.%d" % (
+            trace.append("12:00:%02d.000 %s %s 0.001 Teagram.%d" % (
                 index,
                 operation,
                 path,
                 thread_suffix,
             ))
-        trace.append("12:00:20.000 open %s/tdata/allowed 0.001 TelegramdHelper.%d" % (
+        trace.append("12:00:20.000 open %s/tdata/allowed 0.001 TeagramHelper.%d" % (
             allowed,
             thread_suffix + 1,
         ))
@@ -279,11 +279,11 @@ def self_test():
 
         clean_trace = [
             "# observer-pid=%d" % target_pid,
-            "12:00:30.000 open %s/tdata/allowed 0.001 Telegramd.%d" % (
+            "12:00:30.000 open %s/tdata/allowed 0.001 Teagram.%d" % (
                 allowed,
                 thread_suffix,
             ),
-            "12:00:31.000 open %s-backup/tdata/allowed 0.001 Telegramd.%d" % (
+            "12:00:31.000 open %s-backup/tdata/allowed 0.001 Teagram.%d" % (
                 old,
                 thread_suffix + 1,
             ),
@@ -310,7 +310,7 @@ def self_test():
         ):
             raise AssertionError("observer rejected an allowed canonical root")
         truncated_trace = ["# observer-pid=%d" % target_pid] + [
-            "12:00:%02d.000 %s ... Telegramd.%d" % (40 + index, operation, thread_suffix)
+            "12:00:%02d.000 %s ... Teagram.%d" % (40 + index, operation, thread_suffix)
             for index, operation in enumerate(forbidden)
         ]
         _, truncated_ambiguous, _, _, _, _, truncated_parseable_pids = scan(
@@ -334,7 +334,7 @@ def self_test():
         ) = scan(
             [
                 "# observer-pid=%d" % target_pid,
-                "12:00:55.000 open %s/tdata/entry 0.001 Telegramd.708875" % allowed,
+                "12:00:55.000 open %s/tdata/entry 0.001 Teagram.708875" % allowed,
             ],
             old_alias,
             (target_pid,),
@@ -348,7 +348,7 @@ def self_test():
             raise AssertionError("observer treated a thread suffix as an OS pid")
         missing_suffix_trace = [
             "# observer-pid=%d" % target_pid,
-            "12:00:56.000 open %s/tdata/entry 0.001 Telegramd" % allowed,
+            "12:00:56.000 open %s/tdata/entry 0.001 Teagram" % allowed,
         ]
         _, missing_suffix_ambiguous, _, _, _, _, missing_suffix_parseable_pids = scan(
             missing_suffix_trace,
@@ -360,7 +360,7 @@ def self_test():
         _, _, untracked_coverage, _, _, _, _ = scan(
             [
                 "# observer-pid=99999",
-                "12:00:57.000 open %s/tdata/entry 0.001 Telegramd.9999" % allowed,
+                "12:00:57.000 open %s/tdata/entry 0.001 Teagram.9999" % allowed,
             ],
             old_alias,
             (target_pid,),
@@ -370,7 +370,7 @@ def self_test():
         _, _, missing_section_coverage, _, _, _, _ = scan(
             [
                 "# observer-pid=%d" % target_pid,
-                "12:00:58.000 open %s/tdata/entry 0.001 Telegramd.%d" % (
+                "12:00:58.000 open %s/tdata/entry 0.001 Teagram.%d" % (
                     allowed,
                     thread_suffix,
                 ),
@@ -394,7 +394,7 @@ def self_test():
         ) = scan(
             [
                 "# observer-pid=%d" % target_pid,
-                "12:00:59.000 open %s/tdata/entry 0.001 Telegramd.%d" % (
+                "12:00:59.000 open %s/tdata/entry 0.001 Teagram.%d" % (
                     allowed,
                     thread_suffix,
                 ),
@@ -450,11 +450,11 @@ def self_test():
         ) = scan(
             [
                 "# observer-pid=%d" % target_pid,
-                "12:01:00.000 open %s/tdata/entry 0.001 Telegramd.%d" % (
+                "12:01:00.000 open %s/tdata/entry 0.001 Teagram.%d" % (
                     allowed,
                     thread_suffix,
                 ),
-                "12:01:01.000 setattrlist %s/tdata/forbidden 0.001 Telegramd.%d" % (
+                "12:01:01.000 setattrlist %s/tdata/forbidden 0.001 Teagram.%d" % (
                     alias,
                     thread_suffix,
                 ),

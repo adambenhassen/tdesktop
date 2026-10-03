@@ -302,13 +302,13 @@ QString objc_documentsPath() {
 }
 
 QString objc_appDataPath() {
-#ifdef TDESKTOP_TELEGRAMD
+#ifdef TDESKTOP_TEAGRAM
 	const auto home = qEnvironmentVariable("HOME");
 	if (!home.isEmpty()) {
 		return home + u"/Library/Application Support/"_q
 			+ MacSupportDirectoryName.utf16() + '/';
 	}
-#endif // TDESKTOP_TELEGRAMD
+#endif // TDESKTOP_TEAGRAM
 	NSURL *url = [[NSFileManager defaultManager] URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
 	if (url) {
 		return QString::fromUtf8([[url path] fileSystemRepresentation]) + '/' + MacSupportDirectoryName.utf16() + '/';

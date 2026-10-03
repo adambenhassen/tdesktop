@@ -2303,9 +2303,9 @@ else()
 endif()
 
 if (build_macstore)
-    set(bundle_identifier "com.teagramhq.desktop")
+    set(bundle_identifier "io.teagram.desktop")
     set(bundle_entitlements "Telegram Lite.entitlements")
-    set(output_name "Telegramd")
+    set(output_name "Teagram")
     target_compile_definitions(Telegram PRIVATE OS_MAC_STORE)
     target_link_options(Telegram
     PRIVATE
@@ -2322,8 +2322,8 @@ if (build_macstore)
     )
 else()
     if (APPLE)
-        set(bundle_identifier "com.teagramhq.desktop")
-        set(output_name "Telegramd")
+        set(bundle_identifier "io.teagram.desktop")
+        set(output_name "Teagram")
     elseif (CMAKE_GENERATOR STREQUAL Xcode)
         set(bundle_identifier "com.tdesktop.Telegram$<$<CONFIG:Debug>:Debug>")
         set(output_name "Telegram")
@@ -2375,7 +2375,7 @@ PRIVATE
 )
 
 if (APPLE)
-    target_compile_definitions(Telegram PRIVATE TDESKTOP_TELEGRAMD)
+    target_compile_definitions(Telegram PRIVATE TDESKTOP_TEAGRAM)
     if (TDESKTOP_MAC_PROTECTED_PATH_INTEGRATION_TEST)
         target_compile_definitions(Telegram
         PRIVATE
