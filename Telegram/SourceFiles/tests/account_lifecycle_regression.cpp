@@ -867,10 +867,24 @@ RunPostOpenCacheSymlinkRegression(const QString &path, const QString &fixture,
 		ChatId chatId,
 		int version,
 		QString selfPhone,
-		UserId creatorId) {
+		UserId creatorId,
+		bool memberIsAdmin = false) {
 	const auto memberId = (creatorId == UserId(1))
 		? UserId(2)
 		: UserId(1);
+	const auto member = memberIsAdmin
+		? MTP_chatParticipantAdmin(
+			MTP_flags(MTPDchatParticipantAdmin::Flags()),
+			MTP_long(memberId.bare),
+			MTP_long(creatorId.bare),
+			MTP_int(0),
+			MTP_string(QString()))
+		: MTP_chatParticipant(
+			MTP_flags(MTPDchatParticipant::Flags()),
+			MTP_long(memberId.bare),
+			MTP_long(creatorId.bare),
+			MTP_int(0),
+			MTP_string(QString()));
 	const auto participants = MTP_chatParticipants(
 		MTP_long(chatId.bare),
 		MTP_vector<MTPChatParticipant>({
@@ -878,12 +892,7 @@ RunPostOpenCacheSymlinkRegression(const QString &path, const QString &fixture,
 				MTP_flags(MTPDchatParticipantCreator::Flags()),
 				MTP_long(creatorId.bare),
 				MTP_string(QString())),
-			MTP_chatParticipant(
-				MTP_flags(MTPDchatParticipant::Flags()),
-				MTP_long(memberId.bare),
-				MTP_long(creatorId.bare),
-				MTP_int(0),
-				MTP_string(QString())),
+			member,
 			MTP_chatParticipant(
 				MTP_flags(MTPDchatParticipant::Flags()),
 				MTP_long(UserId(9).bare),
@@ -1166,6 +1175,88 @@ StartChatParticipantsRegression(Main::Domain &domain,
 		|| !pinnedActionChat->canBanMembers()) {
 		return FailChatParticipantsRegression(
 			"pinned creator lost a supported basic-group admin action");
+	}
+
+	const auto memberActionChatId = ChatId(1053);
+	const auto memberActionChat = stock->session().data().chat(memberActionChatId);
+	const auto memberActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*memberActionChat));
+	stock->session().api().processFullPeer(
+		memberActionPeer,
+		RegressionChatFullReply(
+			memberActionChatId,
+			1,
+		u"+10000000001"_q,
+			UserId(2)));
+
+	const auto adminActionChatId = ChatId(1054);
+	const auto adminActionChat = stock->session().data().chat(adminActionChatId);
+	const auto adminActionPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*adminActionChat));
+	stock->session().api().processFullPeer(
+		adminActionPeer,
+		RegressionChatFullReply(
+			adminActionChatId,
+			1,
+		u"+10000000001"_q,
+			UserId(2),
+			true));
+	const auto self = stock->session().user();
+	if (!HasExpectedParticipants(adminActionChat, UserId(2))
+		|| !adminActionChat->admins.contains(self)
+		|| adminActionChat->hasAdminRights()
+		|| adminActionChat->canEditPermissions()
+		|| adminActionChat->canDeleteMessages()
+		|| adminActionChat->canBanMembers()
+		|| adminActionChat->canHaveInviteLink()
+		|| (adminActionChat->canEditInformation()
+			!= memberActionChat->canEditInformation())
+		|| (adminActionChat->canAddMembers()
+			!= memberActionChat->canAddMembers())
+		|| (adminActionChat->canAddAdmins()
+			!= memberActionChat->canAddAdmins())) {
+		return FailChatParticipantsRegression(
+			"basic-group admin role widened member permissions instead of staying display-only");
+	}
+
+	const auto liveAdminChatId = ChatId(1055);
+	const auto liveAdminChat = stock->session().data().chat(liveAdminChatId);
+	const auto liveAdminPeer = not_null<PeerData*>(
+		static_cast<PeerData*>(&*liveAdminChat));
+	stock->session().api().processFullPeer(
+		liveAdminPeer,
+		RegressionChatFullReply(
+			liveAdminChatId,
+			1,
+		u"+10000000001"_q,
+			UserId(2)));
+	Data::ApplyChatUpdate(
+		liveAdminChat,
+		MTP_updateChatParticipantAdmin(
+			MTP_long(liveAdminChatId.bare),
+			MTP_long(selfId.bare),
+			MTP_boolTrue(),
+			MTP_int(2)).c_updateChatParticipantAdmin());
+	if (!liveAdminChat->admins.contains(self)
+		|| liveAdminChat->hasAdminRights()
+		|| liveAdminChat->canEditPermissions()
+		|| liveAdminChat->canDeleteMessages()
+		|| liveAdminChat->canBanMembers()
+		|| liveAdminChat->canHaveInviteLink()) {
+		return FailChatParticipantsRegression(
+			"incremental basic-group admin update granted extra permissions");
+	}
+	Data::ApplyChatUpdate(
+		liveAdminChat,
+		MTP_updateChatParticipantAdmin(
+			MTP_long(liveAdminChatId.bare),
+			MTP_long(selfId.bare),
+			MTP_boolFalse(),
+			MTP_int(3)).c_updateChatParticipantAdmin());
+	if (liveAdminChat->admins.contains(self)
+		|| liveAdminChat->hasAdminRights()) {
+		return FailChatParticipantsRegression(
+			"incremental basic-group demotion did not clear admin display state");
 	}
 	if (!pinnedActionChat->usesCustomServer()
 		|| pinnedActionChat->isDeactivated()

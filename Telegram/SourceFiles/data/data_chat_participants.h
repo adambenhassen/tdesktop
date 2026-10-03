@@ -18,10 +18,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Data::details {
 
+enum class BasicChatRole {
+	Member,
+	Admin,
+	Creator,
+};
+
 [[nodiscard]] inline constexpr bool CanAddBasicChatAdmins(
 		bool isMember,
 		bool isCreator) {
 	return isMember && isCreator;
+}
+
+[[nodiscard]] inline constexpr bool CanManageBasicChatCall(
+		BasicChatRole role) {
+	return role == BasicChatRole::Creator;
 }
 
 struct ChatParticipantInfo {

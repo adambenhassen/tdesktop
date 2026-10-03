@@ -426,9 +426,7 @@ void ApplyChatUpdate(
 		return;
 	}
 	if (user->isSelf()) {
-		chat->setAdminRights(mtpIsTrue(update.vis_admin())
-			? chat->defaultAdminRights(user).flags
-			: ChatAdminRights());
+		chat->setAdminRights(ChatAdminRights());
 	}
 	if (mtpIsTrue(update.vis_admin())) {
 		if (chat->noParticipantInfo()) {
@@ -623,8 +621,7 @@ void ApplyChatUpdate(
 			} else if (participant.admin) {
 				chat->admins.emplace(user);
 				if (user->isSelf()) {
-					chat->setAdminRights(
-						chat->defaultAdminRights(user).flags);
+					chat->setAdminRights(ChatAdminRights());
 				}
 			}
 			if (!participant.rank.isEmpty()) {

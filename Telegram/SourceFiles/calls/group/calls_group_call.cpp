@@ -29,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_user.h"
 #include "data/data_chat.h"
+#include "data/data_chat_participants.h"
 #include "data/data_channel.h"
 #include "data/data_group_call.h"
 #include "data/data_peer_values.h"
@@ -258,8 +259,12 @@ GroupCall::VideoTrack::VideoTrack(
 		return (peer == participantPeer);
 	}
 	if (const auto chat = peer->asChat()) {
-		return chat->admins.contains(user)
-			|| (chat->creator == peerToUser(user->id));
+		const auto role = (chat->creator == peerToUser(user->id))
+			? Data::details::BasicChatRole::Creator
+			: chat->admins.contains(user)
+			? Data::details::BasicChatRole::Admin
+			: Data::details::BasicChatRole::Member;
+		return Data::details::CanManageBasicChatCall(role);
 	} else if (const auto group = peer->asChannel()) {
 		if (const auto mgInfo = group->mgInfo.get()) {
 			if (mgInfo->creator == user) {

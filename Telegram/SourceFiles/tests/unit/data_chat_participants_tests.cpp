@@ -16,6 +16,8 @@ using Data::details::ChatParticipantInfo;
 using Data::details::ResolveChatParticipants;
 using Data::details::CanMarkUserLoadedNormally;
 using Data::details::CanAddBasicChatAdmins;
+using Data::details::CanManageBasicChatCall;
+using Data::details::BasicChatRole;
 
 auto ResolveForAccount(
 		const std::vector<ChatParticipantInfo> &participants,
@@ -41,6 +43,12 @@ TEST_CASE(BasicGroupAdminPromotionRequiresCreatorMembership) {
 	CHECK(CanAddBasicChatAdmins(true, true));
 	CHECK(!CanAddBasicChatAdmins(false, true));
 	CHECK(!CanAddBasicChatAdmins(true, false));
+}
+
+TEST_CASE(BasicGroupAdminRoleDoesNotGrantCallManagement) {
+	CHECK(CanManageBasicChatCall(BasicChatRole::Creator));
+	CHECK(!CanManageBasicChatCall(BasicChatRole::Admin));
+	CHECK(!CanManageBasicChatCall(BasicChatRole::Member));
 }
 
 TEST_CASE(PinnedPhoneFreeSelfMemberKeepsGroupParticipants) {
