@@ -187,7 +187,7 @@ RunRefusedDownloadHistoryRegression(not_null<Main::Session *> session,
 			lifetime);
 	auto loaded = 0;
 	for (const auto entry : Core::App().downloadManager().loadedList()) {
-		++loaded;
+		loaded += (entry->itemId == itemId);
 	}
 	return !published && !loaded;
 }
