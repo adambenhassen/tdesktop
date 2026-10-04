@@ -104,7 +104,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QMimeDatabase>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
+#include <QtGui/QPainter>
+#include <QtGui/QPixmap>
 #include <QtGui/QScreen>
+#include <QtSvg/QSvgRenderer>
+
+#include <array>
+#include <utility>
 
 #include <ksandbox.h>
 
@@ -116,6 +122,39 @@ constexpr auto kAutoLockTimeoutLateMs = crl::time(3000);
 constexpr auto kClearEmojiImageSourceTimeout = 10 * crl::time(1000);
 
 LaunchState GlobalLaunchState/* = LaunchState::Running*/;
+
+#if defined Q_OS_MAC && !defined OS_MAC_STORE
+[[nodiscard]] QIcon CreateTeagramIcon(Core::TeagramIconChoice choice) {
+	const auto resource = Core::TeagramIconSvgResource(choice);
+	auto renderer = QSvgRenderer(QString::fromLatin1(
+		resource.data(),
+		static_cast<qsizetype>(resource.size())));
+	constexpr auto sizes = std::array{
+		std::pair{ 16, 1 },
+		std::pair{ 16, 2 },
+		std::pair{ 32, 1 },
+		std::pair{ 32, 2 },
+		std::pair{ 128, 1 },
+		std::pair{ 128, 2 },
+		std::pair{ 256, 1 },
+		std::pair{ 256, 2 },
+		std::pair{ 512, 1 },
+		std::pair{ 512, 2 },
+	};
+	auto result = QIcon();
+	for (const auto &[logicalSize, scale] : sizes) {
+		auto pixmap = QPixmap(logicalSize * scale, logicalSize * scale);
+		pixmap.setDevicePixelRatio(scale);
+		pixmap.fill(Qt::transparent);
+		{
+			auto p = QPainter(&pixmap);
+			renderer.render(&p, QRectF(0, 0, logicalSize, logicalSize));
+		}
+		result.addPixmap(pixmap);
+	}
+	return result;
+}
+#endif // Q_OS_MAC && !OS_MAC_STORE
 
 void SetCrashAnnotationsGL() {
 #ifdef DESKTOP_APP_USE_ANGLE
@@ -1976,9 +2015,9 @@ void Application::refreshApplicationIcon(Main::Session *session) {
 	auto icon = Window::CreateIcon(session, Platform::IsMac());
 #if defined Q_OS_MAC && !defined OS_MAC_STORE
 	if constexpr (Platform::IsMac()) {
-		if (!support
-			&& (ReadTeagramIconChoice(settings()) == TeagramIconChoice::T)) {
-			icon = QIcon(u":/gui/art/teagram-app-icon-t.png"_q);
+		const auto choice = ReadTeagramIconChoice(settings());
+		if (!support && (choice != TeagramIconChoice::MugSignal)) {
+			icon = CreateTeagramIcon(choice);
 		}
 	}
 #endif // Q_OS_MAC && !OS_MAC_STORE

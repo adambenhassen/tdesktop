@@ -413,12 +413,27 @@ RegressionOtherServerKey() {
 [[nodiscard]] bool TeagramIconChoicePersistsAcrossSettingsReload() {
 	auto settings = Core::Settings();
 	if (Core::ReadTeagramIconChoice(settings)
-		!= Core::TeagramIconChoice::Mug) {
+		!= Core::TeagramIconChoice::MugSignal) {
+		return false;
+	}
+	auto legacy = Core::Settings();
+	legacy.writePref<bool>(
+		Core::kLegacyTeagramIconChoicePreference,
+		true);
+	auto legacyReloaded = Core::Settings();
+	legacyReloaded.addFromSerialized(legacy.serialize());
+	if (Core::ReadTeagramIconChoice(legacyReloaded)
+		!= Core::TeagramIconChoice::TPrimary) {
 		return false;
 	}
 	for (const auto choice : {
-			Core::TeagramIconChoice::T,
-			Core::TeagramIconChoice::Mug,
+			Core::TeagramIconChoice::TPrimary,
+			Core::TeagramIconChoice::MugSignal,
+			Core::TeagramIconChoice::MugGreen,
+			Core::TeagramIconChoice::MugCrimson,
+			Core::TeagramIconChoice::TCrimson,
+			Core::TeagramIconChoice::MugBrown,
+			Core::TeagramIconChoice::TBrown,
 		}) {
 		Core::WriteTeagramIconChoice(settings, choice);
 		auto reloaded = Core::Settings();

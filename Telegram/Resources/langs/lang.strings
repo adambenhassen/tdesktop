@@ -1110,8 +1110,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_settings_theme_settings" = "Theme settings";
 "lng_settings_teagram_icon" = "Teagram app icon";
-"lng_settings_teagram_icon_mug" = "Mug";
-"lng_settings_teagram_icon_t" = "T";
+"lng_settings_teagram_icon_mug_signal" = "Mug Signal";
+"lng_settings_teagram_icon_mug_tea" = "Mug Tea";
+"lng_settings_teagram_icon_mug_green" = "Mug Green";
+"lng_settings_teagram_icon_mug_sky" = "Mug Sky";
+"lng_settings_teagram_icon_t_primary" = "T Primary";
+"lng_settings_teagram_icon_t_navy" = "T Navy";
+"lng_settings_teagram_icon_t_night" = "T Night";
+"lng_settings_teagram_icon_t_paper" = "T Paper";
+"lng_settings_teagram_icon_mug_crimson" = "Mug Crimson";
+"lng_settings_teagram_icon_t_crimson" = "T Crimson";
+"lng_settings_teagram_icon_mug_brown" = "Mug Brown";
+"lng_settings_teagram_icon_t_brown" = "T Brown";
 "lng_settings_theme_name_color" = "Your name color";
 "lng_settings_auto_night_mode" = "Auto-night mode";
 "lng_settings_auto_night_mode_off" = "Off";

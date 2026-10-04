@@ -1324,8 +1324,23 @@ std::optional<bool> Settings::readPrefImpl<bool>(std::string_view key) {
 }
 
 template <>
+std::optional<int> Settings::readPrefImpl<int>(std::string_view key) {
+	if (const auto data = readPrefGeneric(key)) {
+		auto valid = false;
+		const auto value = data->toInt(&valid);
+		return valid ? std::optional<int>(value) : std::nullopt;
+	}
+	return {};
+}
+
+template <>
 void Settings::writePrefImpl<bool>(std::string_view key, bool value) {
 	writePrefGeneric(key, value ? "\x1"_q : QByteArray());
+}
+
+template <>
+void Settings::writePrefImpl<int>(std::string_view key, int value) {
+	writePrefGeneric(key, QByteArray::number(value));
 }
 
 QString Settings::getSoundPath(const QString &key) const {

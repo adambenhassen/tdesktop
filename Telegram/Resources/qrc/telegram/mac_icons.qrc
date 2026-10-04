@@ -2,6 +2,18 @@
   <qresource prefix="/gui">
     <file alias="art/icon_round512@2x.png">../../art/icon_round512@2x.png</file>
     <file alias="art/teagram-icon-1024.png">../../art/teagram-icon-1024.png</file>
+    <file alias="art/teagram-icon.svg">../../art/teagram-icon.svg</file>
     <file alias="art/teagram-app-icon-t.png">../../art/teagram-app-icon-t.png</file>
+    <file alias="art/teagram-app-icon-t.svg">../../art/teagram-app-icon-t.svg</file>
+    <file alias="art/teagram-app-icon-mug-tea.svg">../../art/teagram-app-icon-mug-tea.svg</file>
+    <file alias="art/teagram-app-icon-mug-green.svg">../../art/teagram-app-icon-mug-green.svg</file>
+    <file alias="art/teagram-app-icon-mug-sky.svg">../../art/teagram-app-icon-mug-sky.svg</file>
+    <file alias="art/teagram-app-icon-t-navy.svg">../../art/teagram-app-icon-t-navy.svg</file>
+    <file alias="art/teagram-app-icon-t-night.svg">../../art/teagram-app-icon-t-night.svg</file>
+    <file alias="art/teagram-app-icon-t-paper.svg">../../art/teagram-app-icon-t-paper.svg</file>
+    <file alias="art/teagram-app-icon-mug-crimson.svg">../../art/teagram-app-icon-mug-crimson.svg</file>
+    <file alias="art/teagram-app-icon-t-crimson.svg">../../art/teagram-app-icon-t-crimson.svg</file>
+    <file alias="art/teagram-app-icon-mug-brown.svg">../../art/teagram-app-icon-mug-brown.svg</file>
+    <file alias="art/teagram-app-icon-t-brown.svg">../../art/teagram-app-icon-t-brown.svg</file>
   </qresource>
 </RCC>

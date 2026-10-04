@@ -51,6 +51,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/ui_utility.h"
 #include "ui/widgets/menu/menu_add_action_callback.h"
 #include "ui/rp_widget.h"
+#include "ui/widgets/scroll_area.h"
 #include "history/view/history_view_quick_action.h"
 #include "lang/lang_keys.h"
 #include "lottie/lottie_icon.h"
@@ -92,8 +93,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 
 #include <QAction>
+#include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QVBoxLayout>
 #include <QtGui/QPainter>
-#include <QtGui/QPixmap>
+#include <QtSvg/QSvgRenderer>
+
+#include <array>
+#include <utility>
 
 namespace Settings {
 namespace {
@@ -883,29 +889,108 @@ public:
 			const QString &path,
 			const QString &accessibleName)
 	: Ui::RpWidget(parent)
-	, _pixmap(path) {
+	, _renderer(path) {
 		setFixedSize(st::teagramAppIconPreviewSize);
 		setAccessibleName(accessibleName);
+	}
+	void setSelected(bool selected) {
+		if (_selected == selected) {
+			return;
+		}
+		_selected = selected;
+		update();
 	}
 
 protected:
 	void paintEvent(QPaintEvent *) override {
 		auto p = QPainter(this);
-		p.setRenderHint(QPainter::SmoothPixmapTransform);
-		p.drawPixmap(rect(), _pixmap);
+		p.setRenderHint(QPainter::Antialiasing);
+		_renderer.render(&p, rect());
+		if (_selected) {
+			p.setPen(QPen(
+				st::teagramAppIconSelectionBorder->c,
+				st::teagramAppIconSelectionBorderWidth));
+			p.setBrush(Qt::NoBrush);
+			p.drawRoundedRect(
+				rect().adjusted(
+					st::teagramAppIconSelectionInset,
+					st::teagramAppIconSelectionInset,
+					-st::teagramAppIconSelectionInset,
+					-st::teagramAppIconSelectionInset),
+				st::teagramAppIconSelectionRadius,
+				st::teagramAppIconSelectionRadius);
+		}
 	}
 
 private:
-	QPixmap _pixmap;
+	QSvgRenderer _renderer;
+	bool _selected = false;
 
 };
 
 void BuildTeagramIconSection(SectionBuilder &builder) {
 	builder.add([](const WidgetContext &ctx) {
+		const auto choices = std::array{
+			std::pair{
+				Core::TeagramIconChoice::MugSignal,
+				tr::lng_settings_teagram_icon_mug_signal(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TPrimary,
+				tr::lng_settings_teagram_icon_t_primary(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugTea,
+				tr::lng_settings_teagram_icon_mug_tea(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TNavy,
+				tr::lng_settings_teagram_icon_t_navy(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugGreen,
+				tr::lng_settings_teagram_icon_mug_green(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TNight,
+				tr::lng_settings_teagram_icon_t_night(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugSky,
+				tr::lng_settings_teagram_icon_mug_sky(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TPaper,
+				tr::lng_settings_teagram_icon_t_paper(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugCrimson,
+				tr::lng_settings_teagram_icon_mug_crimson(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TCrimson,
+				tr::lng_settings_teagram_icon_t_crimson(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::MugBrown,
+				tr::lng_settings_teagram_icon_mug_brown(tr::now),
+			},
+			std::pair{
+				Core::TeagramIconChoice::TBrown,
+				tr::lng_settings_teagram_icon_t_brown(tr::now),
+			},
+		};
 		const auto selected = Core::ReadTeagramIconChoice(
 			Core::App().settings());
+		auto selectedIndex = 0;
+		for (auto index = 0; index != Core::kTeagramIconChoiceCount; ++index) {
+			if (choices[index].first == selected) {
+				selectedIndex = index;
+				break;
+			}
+		}
 		const auto group = std::make_shared<Ui::RadiobuttonGroup>(
-			(selected == Core::TeagramIconChoice::T) ? 1 : 0);
+			selectedIndex);
 		auto wrap = object_ptr<Ui::VerticalLayout>(ctx.container.get());
 		const auto inner = wrap.data();
 		inner->add(
@@ -914,35 +999,66 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 				tr::lng_settings_teagram_icon(tr::now),
 				st::teagramAppIconTitle),
 			st::teagramAppIconTitlePadding);
-		const auto addChoice = [&](
-				int value,
-				const QString &title,
-				const QString &path) {
-			inner->add(
-				object_ptr<TeagramIconPreview>(inner, path, title),
-				st::settingsSendTypePadding);
-			inner->add(
-				object_ptr<Ui::Radiobutton>(
-					inner,
-					group,
-					value,
-					title,
-					st::settingsSendType),
-				st::settingsSendTypePadding);
-		};
-		addChoice(
-			0,
-			tr::lng_settings_teagram_icon_mug(tr::now),
-			u":/gui/art/teagram-icon-1024.png"_q);
-		addChoice(
-			1,
-			tr::lng_settings_teagram_icon_t(tr::now),
-			u":/gui/art/teagram-app-icon-t.png"_q);
+		auto holder = object_ptr<Ui::RpWidget>(inner);
+		holder->setFixedHeight(st::teagramAppIconScrollHeight);
+		const auto holderRaw = inner->add(
+			std::move(holder),
+			st::settingsSendTypePadding);
+		const auto scrollRaw = new Ui::ScrollArea(
+			holderRaw,
+			st::teagramAppIconScroll);
+		holderRaw->widthValue() | rpl::on_next([=](int width) {
+			scrollRaw->resize(width, st::teagramAppIconScrollHeight);
+		}, holderRaw->lifetime());
+		auto row = object_ptr<QWidget>(scrollRaw);
+		const auto rowRaw = row.data();
+		auto rowLayout = new QHBoxLayout(rowRaw);
+		rowLayout->setContentsMargins(0, 0, 0, 0);
+		rowLayout->setSpacing(st::teagramAppIconChoiceSkip);
+		auto previews = std::array<
+			TeagramIconPreview*,
+			Core::kTeagramIconChoiceCount>{};
+		for (auto index = 0; index != Core::kTeagramIconChoiceCount; ++index) {
+			const auto &[choice, title] = choices[index];
+			const auto resource = Core::TeagramIconSvgResource(choice);
+			const auto path = QString::fromLatin1(
+				resource.data(),
+				static_cast<qsizetype>(resource.size()));
+			auto column = new QWidget(rowRaw);
+			auto columnLayout = new QVBoxLayout(column);
+			columnLayout->setContentsMargins(0, 0, 0, 0);
+			columnLayout->setSpacing(st::teagramAppIconChoiceInnerSkip);
+			auto preview = new TeagramIconPreview(column, path, title);
+			preview->setSelected(index == selectedIndex);
+			previews[index] = preview;
+			columnLayout->addWidget(preview, 0, Qt::AlignHCenter);
+			auto radio = new Ui::Radiobutton(
+				column,
+				group,
+				index,
+				title,
+				st::settingsSendType);
+			radio->resizeToWidth(st::teagramAppIconChoiceWidth);
+			radio->setFixedHeight(radio->height());
+			column->setFixedWidth(std::max(
+				st::teagramAppIconChoiceWidth,
+				radio->width()));
+			columnLayout->addWidget(radio, 0, Qt::AlignHCenter);
+			rowLayout->addWidget(column);
+		}
+		rowRaw->adjustSize();
+		rowRaw->setFixedSize(rowLayout->sizeHint());
+		scrollRaw->setOwnedWidget(std::move(row));
 		group->setChangedCallback([=](int value) {
+			if (value < 0 || value >= Core::kTeagramIconChoiceCount) {
+				return;
+			}
+			for (auto index = 0; index != Core::kTeagramIconChoiceCount; ++index) {
+				previews[index]->setSelected(index == value);
+			}
 			Core::WriteTeagramIconChoice(
 				Core::App().settings(),
-				value ? Core::TeagramIconChoice::T
-					: Core::TeagramIconChoice::Mug);
+				choices[value].first);
 			Core::App().refreshApplicationIcon();
 		});
 		return SectionBuilder::WidgetToAdd{ .widget = std::move(wrap) };
@@ -950,7 +1066,22 @@ void BuildTeagramIconSection(SectionBuilder &builder) {
 		return SearchEntry{
 			.id = u"chat/teagram-app-icon"_q,
 			.title = tr::lng_settings_teagram_icon(tr::now),
-			.keywords = { u"teagram"_q, u"icon"_q, u"mug"_q },
+			.keywords = {
+				u"teagram"_q,
+				u"icon"_q,
+				u"mug"_q,
+				u"tea"_q,
+				u"green"_q,
+				u"sky"_q,
+				u"navy"_q,
+				u"night"_q,
+				u"paper"_q,
+				u"primary"_q,
+				u"crimson"_q,
+				u"brown"_q,
+				u"багряний"_q,
+				u"брунатний"_q,
+			},
 		};
 	});
 }
