@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/mac_protected_path_runtime.h"
 
+#include "core/mac_protected_path_access.h"
 #include "settings.h"
 
 #include <QtCore/QDir>
