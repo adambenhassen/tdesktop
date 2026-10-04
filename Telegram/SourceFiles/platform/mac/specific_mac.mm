@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/mac/specific_mac.h"
+#include "platform/mac/webview_file_input_bridge.h"
 
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
@@ -112,6 +113,7 @@ namespace Platform {
 
 void start() {
 	objc_start();
+	Mac::InstallWebViewFileInputBridge();
 }
 
 void finish() {
@@ -229,7 +231,13 @@ void OpenSystemSettingsForPermission(PermissionType type) {
 bool OpenSystemSettings(SystemSettingsType type) {
 	switch (type) {
 	case SystemSettingsType::Audio:
-		[[NSWorkspace sharedWorkspace] openFile:@"/System/Library/PreferencePanes/Sound.prefPane"];
+		if (Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Open,
+				u"/System/Library/PreferencePanes/Sound.prefPane"_q,
+				Q_FUNC_INFO)) {
+			[[NSWorkspace sharedWorkspace]
+				openFile:@"/System/Library/PreferencePanes/Sound.prefPane"];
+		}
 		break;
 	}
 	return true;

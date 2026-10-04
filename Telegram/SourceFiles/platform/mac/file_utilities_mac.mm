@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/mac/file_utilities_mac.h"
 
 #include "base/platform/mac/base_utilities_mac.h"
+#include "core/mac_protected_path_access.h"
 #include "lang/lang_keys.h"
 #include "styles/style_window.h"
 
@@ -85,9 +86,17 @@ QString strNeedToRefresh2() {
 }
 
 - (void) fillAppByUrl:(NSURL*)url bundle:(NSString**)bundle name:(NSString**)name version:(NSString**)version icon:(NSImage**)icon {
+	NSString *path = [url path];
+	if (!path
+		|| !Core::MacProtectedPath::CheckExternalPathForUse(
+			Core::MacProtectedPath::Operation::Read, NS2QString(path),
+			"mac.open-with.application-info")) {
+		*bundle = *name = *version = nil;
+		*icon = nil;
+		return;
+	}
 	NSBundle *b = [NSBundle bundleWithURL:url];
 	if (b) {
-		NSString *path = [url path];
 		*name = [[NSFileManager defaultManager] displayNameAtPath: path];
 		if (!*name) *name = (NSString*)[b objectForInfoDictionaryKey:@"CFBundleDisplayName"];
 		if (!*name) *name = (NSString*)[b objectForInfoDictionaryKey:@"CFBundleName"];
@@ -108,6 +117,11 @@ QString strNeedToRefresh2() {
 - (id) init:(NSString*)file {
 	toOpen = [file retain];
 	if (self = [super init]) {
+		if (!Core::MacProtectedPath::CheckExternalPathForUse(
+				Core::MacProtectedPath::Operation::Open, NS2QString(file),
+				"mac.open-with.lookup-source")) {
+			return self;
+		}
 		NSURL *url = [NSURL fileURLWithPath:file];
 		defUrl = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:url];
 		if (defUrl) {
@@ -214,7 +228,17 @@ QString strNeedToRefresh2() {
 		}
 	}
 	if (url) {
-		[[NSWorkspace sharedWorkspace] openFile:toOpen withApplication:[url path]];
+		const auto sourcePath = NS2QString(toOpen);
+		const auto applicationPath = NS2QString([url path]);
+		if (Core::MacProtectedPath::CheckExternalPathForUse(
+				Core::MacProtectedPath::Operation::Read, sourcePath,
+				"mac.open-with.dispatch-source")
+			&& Core::MacProtectedPath::CheckExternalPathForUse(
+				Core::MacProtectedPath::Operation::Read, applicationPath,
+				"mac.open-with.dispatch-app")) {
+			[[NSWorkspace sharedWorkspace] openFile:toOpen
+									withApplication:[url path]];
+		}
 	} else if (!Platform::File::UnsafeShowOpenWith(NS2QString(toOpen))) {
 		Platform::File::UnsafeLaunch(NS2QString(toOpen));
 	}
@@ -299,6 +323,13 @@ QString strNeedToRefresh2() {
 }
 
 - (BOOL) panel:(id)sender shouldEnableURL:(NSURL *)url {
+	NSString *path = [url path];
+	if (!path
+		|| !Core::MacProtectedPath::CheckExternalPathForUse(
+			Core::MacProtectedPath::Operation::Read, NS2QString(path),
+			"mac.open-with.panel-candidate")) {
+		return NO;
+	}
 	NSNumber *isDirectory;
 	if ([url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil] && isDirectory != nil && [isDirectory boolValue]) {
 		if (onlyRecommended) {
@@ -408,6 +439,11 @@ bool UnsafeShowOpenWithDropdown(const QString &filepath) {
 }
 
 bool UnsafeShowOpenWith(const QString &filepath) {
+	if (!Core::MacProtectedPath::CheckExternalPathForUse(
+			Core::MacProtectedPath::Operation::Open, filepath,
+			"mac.open-with.panel-source")) {
+		return true;
+	}
 	@autoreleasepool {
 
 	NSString *file = Q2NSString(filepath);
@@ -519,20 +555,36 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 				if ([[openPanel URLs] count] > 0) {
 					NSURL *app = [[openPanel URLs] objectAtIndex:0];
 					NSString *path = [app path];
-					if ([button state] == NSOnState) {
-						NSArray *UTIs = (NSArray *)UTTypeCreateAllIdentifiersForTag(kUTTagClassFilenameExtension,
-																					(CFStringRef)ext,
-																					nil);
-						for (NSString *UTI in UTIs) {
-							OSStatus result = LSSetDefaultRoleHandlerForContentType((CFStringRef)UTI,
-																					kLSRolesAll,
-																					(CFStringRef)[[NSBundle bundleWithPath:path] bundleIdentifier]);
-							DEBUG_LOG(("App Info: set default handler for '%1' UTI result: %2").arg(NS2QString(UTI)).arg(result));
-						}
+					if (path
+						&& Core::MacProtectedPath::CheckExternalPathForUse(
+							Core::MacProtectedPath::Operation::Read,
+							NS2QString(file), "mac.open-with.panel-source")
+						&& Core::MacProtectedPath::CheckExternalPathForUse(
+							Core::MacProtectedPath::Operation::Read,
+							NS2QString(path), "mac.open-with.panel-app")) {
+						if ([button state] == NSOnState) {
+							NSArray *UTIs
+								= (NSArray *)UTTypeCreateAllIdentifiersForTag(
+									kUTTagClassFilenameExtension,
+									(CFStringRef)ext, nil);
+							for (NSString *UTI in UTIs) {
+								OSStatus result
+									= LSSetDefaultRoleHandlerForContentType(
+										(CFStringRef)UTI, kLSRolesAll,
+										(CFStringRef)[[NSBundle
+											bundleWithPath:
+												path] bundleIdentifier]);
+								DEBUG_LOG(("App Info: set default handler for "
+										   "'%1' UTI result: %2")
+											  .arg(NS2QString(UTI))
+											  .arg(result));
+							}
 
-						[UTIs release];
+							[UTIs release];
+						}
+						[[NSWorkspace sharedWorkspace] openFile:file
+												withApplication:[app path]];
 					}
-					[[NSWorkspace sharedWorkspace] openFile:file withApplication:[app path]];
 				}
 			}
 			[selector release];
@@ -546,7 +598,11 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 		}];
 	}
 	@catch (NSException *exception) {
-		[[NSWorkspace sharedWorkspace] openFile:file];
+		if (Core::MacProtectedPath::CheckExternalPathForUse(
+				Core::MacProtectedPath::Operation::Read, NS2QString(file),
+				"mac.open-with.exception-fallback")) {
+			[[NSWorkspace sharedWorkspace] openFile:file];
+		}
 	}
 	@finally {
 	}

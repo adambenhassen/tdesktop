@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_cloud_manager.h"
 #include "lang/lang_instance.h"
 #include "core/application.h"
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_runtime.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -276,14 +277,16 @@ auto GenerateCodes() {
 	codes.emplace(u"customicon"_q, [](SessionController *window) {
 		const auto iconFilters = u"Icon files (*.icns *.png);;"_q + FileDialog::AllFilesFilter();
 		const auto change = [](const QString &path) {
-			const auto allowed = path.isEmpty()
-								 || Core::MacProtectedPath::CheckExternalPath(
-									 Core::MacProtectedPath::Operation::Read,
-									 path, "settings.custom-icon");
-			const auto success
-				= allowed
-				  && (path.isEmpty() ? base::ClearCustomAppIcon()
-									 : base::SetCustomAppIcon(path));
+			auto success = false;
+			const auto dispatched
+				= Core::MacProtectedPath::DispatchCustomAppIconIfAllowed(
+					path, "settings.custom-icon", [&] {
+						success
+							= path.isEmpty()
+								  ? base::ClearCustomAppIcon()
+								  : base::SetCustomAppIcon(path).has_value();
+					});
+			success = dispatched && success;
 			Ui::Toast::Show(success
 				? (path.isEmpty()
 					? "Icon cleared. Restarting the Dock."

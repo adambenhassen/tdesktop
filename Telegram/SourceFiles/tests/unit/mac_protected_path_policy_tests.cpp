@@ -1411,3 +1411,240 @@ TEST_CASE(DestructiveOperationsRefuseProtectedAncestors) {
 		{},
 		u"unit.ancestor.second"_q).allowed());
 }
+
+TEST_CASE(LocalFileUrlsExposeDecodedPathsForHandoffChecks) {
+	const auto local = LocalFilePathFromUrl(
+		u"file:///Users/alice/Library/Application%20Support/Telegram%20Desktop/tdata/x"_q);
+	CHECK(local.has_value());
+	if (local) {
+		CHECK_EQ(
+			*local,
+			u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q);
+	}
+	CHECK(!LocalFilePathFromUrl(u"https://example.com/file"_q));
+}
+
+TEST_CASE(ExternalPathHandoffRefusesBeforeDispatchAndAllowsDownloads) {
+	auto checked = std::vector<QString>();
+	const auto checker = [&](Operation, const QString &path, const char *) {
+		checked.push_back(path);
+		return path == u"/Users/alice/Downloads/x"_q;
+	};
+	auto dispatches = 0;
+	{
+		ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(!DispatchExternalPathIfAllowed(
+			Operation::Open,
+			u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q,
+			"unit.os-handoff", [&] { ++dispatches; }));
+		CHECK_EQ(dispatches, 0);
+		CHECK(DispatchExternalPathIfAllowed(
+			Operation::Open, u"/Users/alice/Downloads/x"_q, "unit.os-handoff",
+			[&] { ++dispatches; }));
+	}
+	CHECK_EQ(dispatches, 1);
+	CHECK_EQ(int(checked.size()), 2);
+}
+
+TEST_CASE(CustomIconSymlinkIntoProtectedPathNeverReachesHelper) {
+	auto fs = FakeFileSystem();
+	auto policy = TestPolicy(fs);
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	const auto source = QByteArray("/Users/alice/Downloads/icon.icns");
+	fs.entries.emplace(source, LstatResult{.type = FileType::Symlink,
+										   .error = FileError::None});
+	fs.links.emplace(
+		source,
+		ReadlinkResult{
+			.target
+			= "../Library/Application Support/Telegram Desktop/tdata/icon.icns",
+			.error = FileError::None});
+	const auto checker = CheckerFor(policy);
+	auto helpers = 0;
+	{
+		ScopedExternalPathCheckerForTesting scope(checker);
+		CHECK(!DispatchCustomAppIconIfAllowed(QString::fromUtf8(source),
+											  "unit.custom-icon.source",
+											  [&] { ++helpers; }));
+	}
+	CHECK_EQ(helpers, 0);
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+}
+
+TEST_CASE(CustomIconProtectedDestinationAndTemporaryDirectoryStopHelper) {
+	for (const auto denyTemporaryDirectory : {false, true}) {
+		auto denied = false;
+		const auto checker
+			= [&](Operation operation, const QString &path, const char *) {
+				  if (denyTemporaryDirectory && path == QDir::tempPath()
+					  && operation == Operation::Write) {
+					  denied = true;
+					  return false;
+				  }
+				  if (!denyTemporaryDirectory && path.endsWith(u"/Icon\r"_q)
+					  && operation == Operation::Write) {
+					  denied = true;
+					  return false;
+				  }
+				  return true;
+			  };
+		auto helpers = 0;
+		{
+			ScopedExternalPathCheckerForTesting scope(checker);
+			CHECK(!DispatchCustomAppIconIfAllowed(
+				QString(), "unit.custom-icon.destination", [&] { ++helpers; }));
+		}
+		CHECK(denied);
+		CHECK_EQ(helpers, 0);
+	}
+}
+
+TEST_CASE(WebViewFileInputRejectsProtectedSelectionsBeforeCompletion) {
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	auto policy = TestPolicy(fs);
+	const auto paths = QStringList{
+		u"/Users/alice/Library/Application Support/Telegram Desktop/tdata/x"_q,
+		u"/Users/alice/Downloads/allowed.png"_q,
+	};
+	auto checked = QStringList();
+	auto completed = 0;
+	auto uploaded = QStringList();
+	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
+		paths,
+		[&](const QString &path) {
+			checked.push_back(path);
+			return policy
+				.Resolve(Operation::Read, QFile::encodeName(path), {},
+						 u"unit.webview.file-input"_q)
+				.allowed();
+		},
+		[&](const QStringList &selection) {
+			++completed;
+			uploaded = selection;
+		});
+	CHECK(!allowed);
+	CHECK(checked == paths);
+	CHECK_EQ(completed, 0);
+	CHECK(uploaded.isEmpty());
+}
+
+TEST_CASE(WebViewFileInputRejectsSymlinksIntoProtectedPaths) {
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	const auto source = QByteArray("/Users/alice/Downloads/selected.png");
+	fs.entries.emplace(source, LstatResult{
+								   .type = FileType::Symlink,
+								   .error = FileError::None,
+							   });
+	fs.links.emplace(
+		source,
+		ReadlinkResult{
+			.target = "../Library/Application Support/Telegram Desktop/tdata/x",
+			.error = FileError::None,
+		});
+	auto policy = TestPolicy(fs);
+	const auto paths = QStringList{QString::fromUtf8(source)};
+	const auto checker = CheckerFor(policy);
+	const auto checkPath = [&checker](const QString &path) {
+		return checker(Operation::Read, path, "unit.webview.file-input");
+	};
+	auto completed = false;
+	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
+		paths, checkPath, [&](const QStringList &) { completed = true; });
+	CHECK(!allowed);
+	CHECK(!completed);
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+}
+
+TEST_CASE(WebViewFileInputAllowsDownloadsForUpload) {
+	auto fs = FakeFileSystem();
+	AddDirectoryHierarchy(fs, "/Users/alice/Downloads");
+	auto policy = TestPolicy(fs);
+	const auto paths = QStringList{
+		u"/Users/alice/Downloads/first.png"_q,
+		u"/Users/alice/Downloads/second.png"_q,
+	};
+	const auto checker = CheckerFor(policy);
+	const auto checkPath = [&checker](const QString &path) {
+		return checker(Operation::Read, path, "unit.webview.file-input");
+	};
+	auto uploaded = QStringList();
+	const auto allowed = CompleteWebViewFileInputSelectionIfAllowed(
+		paths, checkPath,
+		[&](const QStringList &selection) { uploaded = selection; });
+	CHECK(allowed);
+	CHECK(uploaded == paths);
+}
+
+TEST_CASE(ProfileTempSymlinkIntoProtectedPathStopsBeforePreparation) {
+	auto fs = FakeFileSystem();
+	const auto tdataPath = QByteArray(
+		"/Users/alice/Library/Application Support/Telegramd/tdata");
+	AddDirectoryHierarchy(fs, tdataPath);
+	const auto temporaryPath = tdataPath + "/temp";
+	fs.entries.emplace(temporaryPath, LstatResult{
+										  .type = FileType::Symlink,
+										  .error = FileError::None,
+									  });
+	fs.links.emplace(
+		temporaryPath,
+		ReadlinkResult{
+			.target
+			= "/Users/alice/Library/Application Support/Telegram Desktop/tdata",
+			.error = FileError::None,
+		});
+	auto policy = TestPolicy(fs);
+	ClearCalls(fs);
+	auto operations = std::vector<Operation>();
+	auto mkdirAllowed = false;
+	auto openDirRefused = false;
+	auto refusalClass = ProtectedClass::None;
+	auto preparations = 0;
+	const auto prepared = PrepareExternalDirectoryIfAllowed(
+		QString::fromUtf8(temporaryPath), "unit.profile.helper-temp",
+		[&](Operation operation, const QString &path, const char *callsite) {
+			operations.push_back(operation);
+			const auto result
+				= policy.Resolve(operation, QFile::encodeName(path), {},
+								 QString::fromUtf8(callsite));
+			if (operation == Operation::Mkdir) {
+				mkdirAllowed = result.allowed();
+			} else if (operation == Operation::OpenDir) {
+				openDirRefused = !result.allowed();
+				refusalClass = result.refusal.protectedClass;
+			}
+			return result.allowed();
+		},
+		[&] {
+			++preparations;
+			return true;
+		});
+	CHECK(!prepared);
+	CHECK(mkdirAllowed);
+	CHECK(openDirRefused);
+	CHECK(refusalClass == ProtectedClass::ApplicationSupport);
+	CHECK_EQ(preparations, 0);
+	CHECK_EQ(int(operations.size()), 2);
+	CHECK(operations[0] == Operation::Mkdir);
+	CHECK(operations[1] == Operation::OpenDir);
+	CHECK_EQ(int(fs.readlinkCalls.size()), 1);
+	CHECK_EQ(fs.readlinkCalls.front(), temporaryPath);
+	CHECK(fs.openCalls.empty());
+	for (const auto &call : fs.lstatCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+	for (const auto &call : fs.readlinkCalls) {
+		CHECK(policy.Classify(call) == ProtectedClass::None);
+	}
+}

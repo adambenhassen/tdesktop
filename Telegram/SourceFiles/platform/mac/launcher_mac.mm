@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/mac/launcher_mac.h"
 
 #include "core/crash_reports.h"
+#include "core/mac_protected_path_runtime.h"
 #include "core/update_checker.h"
 #include "base/base_file_utilities.h"
 #include "base/platform/base_platform_file_utilities.h"
@@ -31,6 +32,12 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cExeName().isEmpty()) {
 		return false;
 	}
+	const auto applicationPath = cExeDir() + cExeName();
+	if (!Core::MacProtectedPath::CheckExternalPath(
+			Core::MacProtectedPath::Operation::Read, applicationPath,
+			"launcher.relaunch-app")) {
+		return false;
+	}
 	@autoreleasepool {
 
 #ifdef OS_MAC_STORE
@@ -38,7 +45,13 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	// We just relaunch our app.
 	if (action == UpdaterLaunch::JustRelaunch) {
 		NSDictionary *conf = [NSDictionary dictionaryWithObject:[NSArray array] forKey:NSWorkspaceLaunchConfigurationArguments];
-		[[NSWorkspace sharedWorkspace] launchApplicationAtURL:[NSURL fileURLWithPath:Q2NSString(cExeDir() + cExeName())] options:NSWorkspaceLaunchAsync | NSWorkspaceLaunchNewInstance configuration:conf error:0];
+		[[NSWorkspace sharedWorkspace]
+			launchApplicationAtURL:[NSURL fileURLWithPath:Q2NSString(
+															  applicationPath)]
+						   options:NSWorkspaceLaunchAsync
+								   | NSWorkspaceLaunchNewInstance
+					 configuration:conf
+							 error:0];
 		return true;
 	}
 #endif // OS_MAC_STORE
@@ -51,6 +64,18 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 			return false;
 		}
 		path = [path stringByAppendingString:@"/Contents/Frameworks/Updater"];
+		const auto updaterPath = NS2QString(path);
+		if (!Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Read, updaterPath,
+				"launcher.updater-path")
+			|| !Core::MacProtectedPath::CheckExternalPath(
+				Core::MacProtectedPath::Operation::Write, updaterPath,
+				"launcher.updater-path")
+			|| !Core::MacProtectedPath::CheckPath(
+				Core::MacProtectedPath::Operation::OpenDir, cWorkingDir(),
+				"launcher.updater-workdir")) {
+			return false;
+		}
 		base::Platform::RemoveQuarantine(QFile::decodeName([path fileSystemRepresentation]));
 
 		NSMutableArray *args = [[NSMutableArray alloc] initWithObjects:@"-workpath", Q2NSString(cWorkingDir()), @"-procid", nil];

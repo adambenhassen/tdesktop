@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/file_utilities.h"
 
+#include "core/mac_protected_path_access.h"
 #include "core/mac_protected_path_runtime.h"
 #include "core/version.h"
 #include "storage/localstorage.h"
@@ -198,7 +199,10 @@ void Launch(const QString &filepath) {
 void ShowInFolder(const QString &filepath) {
 	crl::on_main([=] {
 		Ui::PreventDelayedActivation();
-		base::Platform::ShowInFolder(filepath);
+		(void)Core::MacProtectedPath::DispatchExternalPathIfAllowed(
+			Core::MacProtectedPath::Operation::Open, filepath,
+			"file.reveal-in-folder",
+			[&] { base::Platform::ShowInFolder(filepath); });
 	});
 }
 

@@ -369,7 +369,16 @@ void StartCatching() {
 	SetSignalHandlers = false;
 #else // MAC_USE_BREAKPAD
 	crashpad::CrashpadClient crashpad_client;
-	std::string handler = (cExeDir() + cExeName() + u"/Contents/Helpers/crashpad_handler"_q).toUtf8().constData();
+	const auto handlerPath
+		= cExeDir() + cExeName() + u"/Contents/Helpers/crashpad_handler"_q;
+	if (!Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::Read, handlerPath, Q_FUNC_INFO)
+		|| !Core::MacProtectedPath::CheckPath(
+			Core::MacProtectedPath::Operation::OpenDir, dumpspath,
+			Q_FUNC_INFO)) {
+		return;
+	}
+	const auto handler = QFile::encodeName(handlerPath).toStdString();
 	std::string database = QFile::encodeName(dumpspath).constData();
 	if (crashpad_client.StartHandler(
 			base::FilePath(handler),

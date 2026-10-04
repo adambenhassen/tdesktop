@@ -1693,6 +1693,8 @@ PRIVATE
     platform/mac/overlay_widget_mac.mm
     platform/mac/specific_mac.mm
     platform/mac/specific_mac.h
+    platform/mac/webview_file_input_bridge.mm
+    platform/mac/webview_file_input_bridge.h
     platform/mac/specific_mac_p.mm
     platform/mac/specific_mac_p.h
     platform/mac/translate_provider_mac.h

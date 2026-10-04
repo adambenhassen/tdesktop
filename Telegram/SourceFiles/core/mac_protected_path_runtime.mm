@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/mac_protected_path_runtime.h"
 
+#include "core/mac_protected_path_access.h"
 #include "settings.h"
 
 #include <QtCore/QDir>
@@ -271,8 +272,32 @@ bool InitializeProfile() {
 		ReportRefusal(create.refusal);
 		return false;
 	}
-	if (!QDir().mkpath(profilePath)) {
-		ReportInvalidInitialization(u"profile.mkdir"_q);
+	const auto temporaryPath = profilePath + u"/tdata/temp"_q;
+	const auto temporaryPrepared = PrepareExternalDirectoryIfAllowed(
+		temporaryPath, "profile.helper-temp",
+		[&](Operation operation, const QString &path, const char *callsite) {
+			const auto result = policy.Resolve(
+				operation, QFile::encodeName(path), homes.accountDatabase,
+				QString::fromUtf8(callsite));
+			if (!result.allowed()) {
+				ReportRefusal(result.refusal);
+			}
+			return result.allowed();
+		},
+		[&] {
+			if (!QDir().mkpath(profilePath) || !QDir().mkpath(temporaryPath)) {
+				ReportInvalidInitialization(u"profile.mkdir"_q);
+				return false;
+			}
+			if (!qputenv("TMPDIR", QFile::encodeName(temporaryPath))
+				|| QDir::cleanPath(QDir::tempPath())
+					   != QDir::cleanPath(temporaryPath)) {
+				ReportInvalidInitialization(u"profile.helper-temp"_q);
+				return false;
+			}
+			return true;
+		});
+	if (!temporaryPrepared) {
 		return false;
 	}
 
